@@ -1,0 +1,27 @@
+# CurseForge / Wago / BigWigsMods packager configuration.
+package-as: PvPAssist
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+# Shipped: the TOC and its Lua files, README.md, CHANGELOG.md, LICENSE (when
+# present) and the two viewers in tools/ (the in-game Census and Fishing pages
+# tell players to run them). Everything below stays out.
+ignore:
+  # Developer files
+  - tests
+  - docs
+  - dist
+  - .pkgmeta
+  - tools/cache
+  - tools/__pycache__
+  - tools/build_release.py
+  - tools/version.py
+  - version.json
+  - tools/gen_enhancements.py
+  - tools/gen_professions.py
+  - tools/gen_fishing.py
+  # Viewer output (other players' names)
+  - census
+  - fishing

@@ -1,0 +1,24 @@
+# Release builds: tools/build_release.py output. Ship the zip via GitHub Releases instead.
+dist/
+
+# Census viewer output and map images: other players' names, kept local.
+census/
+
+# Fishing viewer output: names of players who attacked you, kept local.
+fishing/
+
+# Generator download cache (tools/gen_enhancements.py)
+tools/cache/
+
+# Python (tests/run.py, tools/build_release.py)
+__pycache__/
+*.pyc
+.venv/
+
+# Editor / OS clutter
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
