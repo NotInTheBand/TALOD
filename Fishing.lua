@@ -197,7 +197,7 @@ end
 -- label; what a cast really had is its skill modifier (lure and gear).
 -- 265 = +75 (Bright Baubles) was measured in game 2026-10-04: 20 casts with
 -- it averaged a +75 modifier with a plain pole. 266 and 2603 are not seen
--- yet ([VERIFY] in docs/PLAN.md).
+-- yet (not verified in game).
 local LURE_BONUS = { [263] = 25, [264] = 50, [265] = 75, [266] = 100, [2603] = 75 }
 Fishing.LURE_BONUS = LURE_BONUS
 

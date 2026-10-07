@@ -1391,8 +1391,8 @@ scenarios.crafting_log = function()
     check(log[#log].n == 1 and #log == 3, "new batch after another recipe")
 end
 
--- Newer engine with C_SkillInfo: the full skill list as tables (as
--- RXPGuides reads it), with or without header lines.
+-- Newer engine with C_SkillInfo: the full skill list as tables, with or
+-- without header lines.
 scenarios.skills_c_skillinfo = function()
     GetNumSkillLines, GetSkillLineInfo = nil, nil
     local lines = {

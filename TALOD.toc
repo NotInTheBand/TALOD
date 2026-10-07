@@ -1,8 +1,8 @@
 ## Interface: 16001, 11509
 ## Title: |cffff7f3fTALOD|r
 ## Notes: World PvP awareness: enemy-spotted alerts, an enemies-nearby panel with distances, nameplate badges, PvP-flag safety for Hardcore, a journal of who you met, a player census for heat maps, a gear ledger, a fishing log, guild recruiting / roster tools and a members' gold and activity audit. WoW Forever and Classic Era.
-## Author: Lichdom
-## Version: 0.11.1
+## Author: NotInTheBand
+## Version: 0.11.2
 ## Category: PvP
 ## SavedVariables: TALODDB
 ## IconTexture: Interface\Icons\Ability_DualWield

@@ -5,7 +5,7 @@
 --
 -- Both auction APIs: the legacy list (AUCTION_ITEM_LIST_UPDATE +
 -- GetAuctionItemInfo, Classic Era) and C_AuctionHouse (browse, commodity
--- and item results; WoW Forever loads the modern one, as Auctionator does).
+-- and item results; WoW Forever loads the modern one).
 -- When we have not seen an item ourselves, Auctionator's price (its scans)
 -- is asked, if it is installed. Prices.Get returns the newer of the two.
 --

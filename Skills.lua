@@ -8,8 +8,8 @@
 -- their skills keep their last known values until you expand them.
 -- The newer engine (WoW Forever) has no GetSkillLineInfo global; the same
 -- list is C_SkillInfo.GetNumSkillLines / GetSkillLineInfo(i), which returns
--- a table (name, rank, maxRank, ...; as RXPGuides reads it). Only if neither
--- exists: professions (GetProfessions / GetProfessionInfo, as Questie does)
+-- a table (name, rank, maxRank, ...). Only if neither
+-- exists: professions (GetProfessions / GetProfessionInfo)
 -- plus defense and the skill of the weapons you hold from the character
 -- stats (UnitDefense, UnitAttackBothHands, UnitRangedAttack), plus what the
 -- profession window says when you open it (Skills.FromWindow).

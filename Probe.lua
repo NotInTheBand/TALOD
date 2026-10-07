@@ -1,5 +1,5 @@
 -- TALOD - /talod probe: Phase 0 of the plan. Reports what this client lets
--- the addon read about enemy players, so each 🟡 feature in docs/PLAN.md can
+-- the addon read about enemy players, so each feature that depends on it can
 -- be built, cut or simplified on evidence. Output goes to a copyable window
 -- and to TALODDB.lastProbe (saved on /reload or logout). Never touches a
 -- secret beyond type checks.

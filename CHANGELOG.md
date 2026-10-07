@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.11.2 — 2026-10-07
+
+### Changed
+
+- The game's AddOn list now shows NotInTheBand as the author.
+- `/talod audit` is the only word for the Audit page; the old short alias is gone.
+
 ## 0.11.1 — 2026-10-07
 
 ### Changed

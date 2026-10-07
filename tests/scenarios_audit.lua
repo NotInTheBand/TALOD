@@ -288,6 +288,7 @@ scenarios.audit_slash = function()
     T.slash("audit me")
     check(ns.AuditUI.IsShown(), "window opened")
     T.slash("audit flags")
-    T.slash("irs")
+    T.slash("audit")
     check(not ns.AuditUI.IsShown(), "toggled closed")
+    check(ns.Cmd.Resolve("irs") == nil, "no irs alias")
 end
