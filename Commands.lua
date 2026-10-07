@@ -102,7 +102,7 @@ Cmd.LIST = {
         { "pace [reset]", "whisper limit learned from the game's throttle (reset forgets it)" },
         { "check", "your invites of the last hour: confirmed by the game, answered, unconfirmed" },
     } },
-    { id = "audit", words = { "audit", "irs" }, help = {
+    { id = "audit", words = { "audit" }, help = {
         { "[me|target|flags|members|status]", "statistics ledger: members' gold and activity, flags" } } },
 
     { id = "credits", words = { "credits", "discord", "donate" }, help = { { "", "credits, the Discord invite, how to send gold" } } },

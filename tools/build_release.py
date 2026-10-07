@@ -28,11 +28,33 @@ OPTIONAL_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt"]
 FORBIDDEN = re.compile(r"(^|/)(\.[^/]+|tests|docs|dist|census|fishing|concept\.md|cache|__pycache__)(/|$)")
 
 
+# Names that must never appear in a package: assistants and their tools, their instruction files, and the
+# local planning notes. Assembled from pieces so this file does not contain them itself.
+_J = "".join
+LEAK = re.compile("|".join([
+    _J(["cla", "ude"]), _J(["anthr", "opic"]), _J(["gem", "ini"]), _J(["chat", "gpt"]), _J(["open", "ai"]),
+    _J(["cop", "ilot"]), _J(["ser", "ena"]), _J(["wind", "surf"]), _J(["co", "dex"]), _J([r"\b", "ai", "der"]),
+    _J(["AGE", r"NTS?\.md"]), _J(["AGENT", "_Map"]), _J(["PL", r"AN\.md"]), _J(["con", r"cept\.md"]),
+    _J([r"(?-i:\b", "A", "I", r"\b)"]), r"\bLLMs?\b", "large language model",
+]), re.I)
+SKIP_SUFFIXES = {".png", ".jpg", ".tga", ".blp", ".ogg", ".mp3"}
+
+
+def leaks_in(name, data):
+    """Mentions of assistants or developer notes in a file's name or text."""
+    found = [name + " (file name)"] if LEAK.search(name) else []
+    for n, line in enumerate(data.splitlines(), 1):
+        m = LEAK.search(line)
+        if m:
+            found.append(f"{name}:{n}: {m.group(0)}")
+    return found
+
+
 def local_only(path):
     """True when path matches a pattern in .git/info/exclude (files kept on this machine only)."""
     exclude = ROOT / ".git" / "info" / "exclude"
     if not exclude.exists():
-        return False
+        return False  # a fresh clone has none; the content scan below still covers the package
     for line in exclude.read_text(encoding="utf-8").splitlines():
         pat = line.strip().rstrip("/")
         if not pat or pat.startswith("#"):
@@ -69,6 +91,16 @@ def main():
     if blocked:
         sys.exit("refusing to package developer files: " + ", ".join(blocked))
 
+    # Scan what is about to ship, by name and by content, whatever the exclude file says.
+    leaks = []
+    for f in files + extras + [PACKAGE + ".toc"]:
+        src = ROOT / (toc_path.name if f == PACKAGE + ".toc" else f)
+        if src.suffix.lower() in SKIP_SUFFIXES:
+            continue
+        leaks += leaks_in(f, src.read_text(encoding="utf-8", errors="replace"))
+    if leaks:
+        sys.exit("refusing to package, these mention assistants or developer notes:\n  " + "\n  ".join(leaks[:40]))
+
     (stage / (PACKAGE + ".toc")).write_text(toc, encoding="utf-8")
     for f in files + extras:
         target = stage / f
@@ -80,6 +112,17 @@ def main():
         for path in sorted(stage.rglob("*")):
             if path.is_file():
                 z.write(path, path.relative_to(dist).as_posix())
+
+    # Last look at the finished archive itself.
+    with zipfile.ZipFile(archive) as z:
+        bad = []
+        for info in z.infolist():
+            if info.is_dir() or pathlib.PurePosixPath(info.filename).suffix.lower() in SKIP_SUFFIXES:
+                continue
+            bad += leaks_in(info.filename, z.read(info).decode("utf-8", errors="replace"))
+    if bad:
+        archive.unlink()
+        sys.exit("archive removed, it mentions assistants or developer notes:\n  " + "\n  ".join(bad[:40]))
 
     print(f"built {archive.relative_to(ROOT)}  ({len(files)} addon files, version {version})")
     for name in sorted(zipfile.ZipFile(archive).namelist()):
