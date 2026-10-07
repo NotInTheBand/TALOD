@@ -1,5 +1,5 @@
 # CurseForge / Wago / BigWigsMods packager configuration.
-package-as: PvPAssist
+package-as: TALOD
 
 manual-changelog:
   filename: CHANGELOG.md

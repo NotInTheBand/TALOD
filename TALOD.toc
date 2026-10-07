@@ -4,7 +4,7 @@
 ## Author: Lichdom
 ## Version: 0.11.1
 ## Category: PvP
-## SavedVariables: TALODDB, PvPAssistDB
+## SavedVariables: TALODDB
 ## IconTexture: Interface\Icons\Ability_DualWield
 ## AddonCompartmentFunc: TALOD_OnAddonCompartmentClick
 

@@ -6,6 +6,9 @@
 
 ### Changed
 
+- The addon folder is now `TALOD` (`TALOD.toc`), and its saved data is `TALOD.lua`. New file names: restart the
+  game (a /reload is not enough).
+- `/talod` is the only slash command; the older short aliases are gone.
 - Credits page: the "Built on" card is now "Data sources": where the game data comes from.
 - Audit: the money-text reader, the statistics request and the activity assessment are rewritten. Activity now
   reads six areas (questing, fighting, dungeons, crafting, fishing, trading) with new thresholds.
@@ -14,11 +17,8 @@
 
 ### Changed
 
-- **The addon is now called TALOD** ("That's A Lot Of Data", say "tah-lod"). The slash command is `/talod`; `/pva` and
-  `/pvpassist` still work. Your saved data (`PvPAssistDB`) is adopted once on the first login, nothing is lost.
-  Frame names changed (a `/click PvPAssistAHNextButton` macro is now `/click TALODAHNextButton`) and so did the
-  guild-sharing message prefix, so sharing only works between members on this version. The addon folder is still
-  `PvPAssist` for now; adding the new SavedVariables name needs a game restart.
+- **The addon is called TALOD** ("That's A Lot Of Data", say "tah-lod"). The slash command is `/talod`.
+  The AH helper macro is `/click TALODAHNextButton`. Guild sharing works between members on this version or later.
 
 ## 0.10.0 — 2026-10-07
 
@@ -194,8 +194,8 @@
 
 - **Saved data check.** At every login the addon checks its saved file. An entry it cannot read (from a
   hand edit or a damaged file) is set aside instead of breaking a window, and you are told once.
-  `/pva data` (or Settings → Advanced → Saved data) lists what is kept, for the whole account and for
-  each character, and shows anything set aside (`/pva data clear` deletes those).
+  `/talod data` (or Settings → Advanced → Saved data) lists what is kept, for the whole account and for
+  each character, and shows anything set aside (`/talod data clear` deletes those).
 - **Every log now records which of your characters gathered it**: sightings, census points, auction
   prices and ladders, fishing casts and attacks, the guild roster log, recruit conversations, guild chat
   activity and Audit looks. Fishing casts from before this are matched to their fishing session; other
@@ -224,7 +224,7 @@ New file: restart the game (a /reload is not enough).
   Members are *active* (said something in the window), *quiet* (online with you but silent) or
   *not seen* (neither, so unknown, never counted as quiet). Window of 3 / 7 / 14 / 30 days,
   filters, Shift-click Clear. Only chat seen while you are online counts; nothing is sent anywhere.
-  `/pva guild activity` opens it. New file: restart the game (a /reload is not enough).
+  `/talod guild activity` opens it. New file: restart the game (a /reload is not enough).
 
 ## 0.2.2 — 2026-10-06
 
@@ -255,7 +255,7 @@ New files: restart World of Warcraft (not just `/reload`) after updating.
 
 - Fishing: the weapon swap button now equips both weapons when you dual wield two copies of the same weapon
   (two identical daggers). It used to equip only the main hand: the game's `/equipslot` cannot tell two copies
-  apart. The second copy now comes from its own bag slot (helper `/click PvPAssistFishingOffHandButton` inside
+  apart. The second copy now comes from its own bag slot (helper `/click TALODFishingOffHandButton` inside
   the swap macro; still one click, one swap).
 
 ### Added
@@ -273,9 +273,9 @@ New files: restart World of Warcraft (not just `/reload`) after updating.
   Main menu) now share one size, so switching pages no longer changes the window's size. Drag the three
   lines in the bottom-right corner to make it bigger or smaller; the page fills the new size (the fishing
   heat map grows with it). Double-click the corner to get the default size back. A settings reset does too.
-- Item tooltips: PvPAssist's lines now sit under one PvPAssist header as "Auction" and "Sells" rows, with
-  the details lined up on the right, instead of "PvPAssist AH" and "PvPAssist sells" each on their own.
-- Every PvPAssist tooltip (panel, minimap button, settings, windows, charts) now uses the same line styles and
+- Item tooltips: TALOD's lines now sit under one TALOD header as "Auction" and "Sells" rows, with
+  the details lined up on the right, instead of "TALOD AH" and "TALOD sells" each on their own.
+- Every TALOD tooltip (panel, minimap button, settings, windows, charts) now uses the same line styles and
   colors. Warnings in the enemy tooltip ("Targeting YOU", "PvP flagged", "PvP: ?") follow the colorblind
   setting.
 
@@ -287,14 +287,14 @@ New files: restart World of Warcraft (not just `/reload`) after updating.
 ### Under the hood: the addon's name in one place
 
 - The name (shown text, window and button names, popups, slash commands, saved data, guild-sharing prefix)
-  now comes from one file, `Brand.lua`, ready for a future rename. Nothing changes for you: same name, same
-  `/pva`, same macros (`/click PvPAssistAHNextButton` ...), same saved data.
-- Every slash command, its aliases and its help line are now one list (`Commands.lua`). `/pva help` is built
+  now comes from one file, `Brand.lua`, ready for a future rename. Nothing changes for you: same commands, same
+  macros, same saved data.
+- Every slash command, its aliases and its help line are now one list (`Commands.lua`). `/talod help` is built
   from it, so it now lists every command (fishing, guild, audit ...) in one order. A mistyped command shows help.
 
 ### Credits page
 
-- A new Credits page (Main menu, the page list, or `/pva credits`): who made PvPAssist, the Discord invite
+- A new Credits page (Main menu, the page list, or `/talod credits`): who made TALOD, the Discord invite
   (https://discord.gg/2FYCFyRczN) and, if you want to support it, the character to mail gold to: Send Coin
   (Alliance, PvP realm). Copy buttons put the link or name in a box ready for Ctrl+C.
 - Every copy button (Credits, the guild Replies tab's Copy username) now uses the same copy box.
@@ -309,8 +309,8 @@ New files: restart World of Warcraft (not just `/reload`) after updating.
 - The game's "You have invited X to join your guild" now confirms each invite. If it never comes within a
   minute, the Invited tab shows the player as **unconfirmed** (gold, counted in the title): the invite may not
   have reached them, and a click invites them again. Replies shows "confirmed" next to the status.
-- `/pva guild check`: your invites of the last hour (sent, confirmed, answered, joined, unconfirmed by name),
-  and any game line right after a send that PvPAssist did not recognize, to report.
+- `/talod guild check`: your invites of the last hour (sent, confirmed, answered, joined, unconfirmed by name),
+  and any game line right after a send that TALOD did not recognize, to report.
 
 ### Recruiting: your message first, then click again to invite
 
@@ -320,7 +320,7 @@ New files: restart World of Warcraft (not just `/reload`) after updating.
   invite. Players you have not clicked yet have a **gray** bar. With it off, one click sends the message and
   the invite together. Without a message (setting off, or Invite again in Replies) the invite goes at once.
 - Fixed: the invite that was meant to follow 10 seconds later on its own never went out. The game only allows
-  a guild invite from your own click, so it was blocked (BugGrabber showed "PvPAssist tried to call the
+  a guild invite from your own click, so it was blocked (BugGrabber showed "TALOD tried to call the
   protected function"), and the player was still marked invited.
 - Inviting a run of players no longer drops your message: whispers past the game's pace (about one a second)
   wait in a queue and go out in the order you clicked. The Invited tab shows "message queued", "invite in N s"
@@ -328,7 +328,7 @@ New files: restart World of Warcraft (not just `/reload`) after updating.
   your messages, they wait for the pause to end.
 - A waiting message is not sent if you forget or skip that player meanwhile. If the game refuses the invite,
   or you `/reload` before the message went, the row shows "not invited": one click invites (without whispering
-  again). `/pva pace` shows how many messages are waiting.
+  again). `/talod pace` shows how many messages are waiting.
 ### Auction gold from the mailbox is always named
 
 - Taking gold from several letters quickly (Open All, or clicking one letter after another) no longer
@@ -344,7 +344,7 @@ New files: restart World of Warcraft (not just `/reload`) after updating.
 - With a window open, a new price or a sale no longer freezes it while the big lists are redone: it
   shows the previous numbers for a moment and updates when they are ready.
 - Clicking a recruit (invite or never offer again) no longer freezes the game for a frame: only the
-  guild windows are redrawn, once, instead of every PvPAssist window twice. The same goes for /who,
+  guild windows are redrawn, once, instead of every TALOD window twice. The same goes for /who,
   forgetting a recruit and the game's reply to an invite.
 
 ### One outbox for whispers and invites
@@ -355,14 +355,14 @@ New file (Outbox): restart the game, not just `/reload`.
   game's message limit with guild recruiting instead of tripping it separately. When the game says it is limiting
   your messages, all whispers pause together.
 - A double click while the game lags no longer sends the same guild or party invite twice.
-- `/pva pace [reset]` shows (or forgets) the learned whisper limit; `/pva guild pace` still works. The limit you
+- `/talod pace [reset]` shows (or forgets) the learned whisper limit; `/talod guild pace` still works. The limit you
   already learned is kept.
 
 ### Audit: members' gold and activity
 
 New files (Audit, AuditUI): restart the game, not just `/reload`.
 
-- A new **Audit** page (main menu, page list, `/pva audit`): the game's own statistics for you, players
+- A new **Audit** page (main menu, page list, `/talod audit`): the game's own statistics for you, players
   you inspect and guild members who share theirs: total gold acquired, most gold ever owned, gold
   from loot / quests / vendors / auctions, auction counts, quests, kills, dungeons, deaths, profession
   ranks. The last 20 looks of each character are kept, with what changed between them.
@@ -398,13 +398,13 @@ New file (Data): restart the game, not just `/reload`.
 
 New file (Navigation): restart the game, not just `/reload`.
 
-- Main menu: a page for every PvPAssist window (character, economy, market, auction desk, fishing,
+- Main menu: a page for every TALOD window (character, economy, market, auction desk, fishing,
   guild, settings) and an Enemies nearby panel switch. Left-click on the minimap button, the addon
-  compartment entry, or `/pva menu`.
+  compartment entry, or `/talod menu`.
 - Every main window has the same page list on its left: one click switches to another window.
 - Only one main window is open at a time; the next one opens where the last one stood (drag it by
   its title bar or the page list). Side windows (Auction House helper, report, mini recruit window,
-  HUD) stay open beside it. `/pva reset` puts the windows back in the middle.
+  HUD) stay open beside it. `/talod reset` puts the windows back in the middle.
 - Minimap left-click now opens the main menu instead of the character window; the Shift / Alt /
   Ctrl / right-click shortcuts are unchanged.
 
@@ -415,7 +415,7 @@ New file (Navigation): restart the game, not just `/reload`.
   the Auction House still open left the scan waiting for good. An error while reading the answer
   left it on "Reading..." for good too. Now the check runs in the background, a read that errors or
   stops for 30 seconds ends as "Full scan failed" with the reason, and every scan shows in
-  `/pva ah log`.
+  `/talod ah log`.
 
 ### Guild
 
@@ -424,7 +424,7 @@ New files (Guild, GuildUI): restart the game, not just `/reload`.
 - When the game says "The number of messages that can be sent is limited", whispers pause (15 s, longer
   if it happens again soon) and invites go without the message meanwhile. Players whose message was
   dropped or held show "no message" in the Invited tab: click the row to send it (one whisper). Your
-  whisper limit is lowered to stay under the game's from then on (`/pva guild pace`, `reset` to undo).
+  whisper limit is lowered to stay under the game's from then on (`/talod guild pace`, `reset` to undo).
 - Replies tab: Invite to party, Add Battle.net (the game's friend request; for guild members and the
   player you target) and Copy username buttons under Delete / Invite again.
 - Fixed the opening whisper showing twice in a conversation. The game sends about one whisper a
@@ -447,7 +447,7 @@ New files (Guild, GuildUI): restart the game, not just `/reload`.
   when Forever raises its cap) and only splits it into smaller ranges when the answer is full; at most one search
   every 5 seconds (the button counts down).
 - Mini recruit window: the Recruit list (same filters and clicks, plus /who) in a small movable window
-  that stays on screen. Off by default; Recruit tab button, settings, `/pva guild mini`.
+  that stays on screen. Off by default; Recruit tab button, settings, `/talod guild mini`.
 - Replies fixes: the same short reply sent twice ("ok", "yes") shows twice (only the game's echo of your
   opening whisper is skipped); whispers whose name comes without the realm (or in another form) still
   reach the conversation; a long conversation redraws on every new line at once; a line the game hides
@@ -471,7 +471,7 @@ New files (Guild, GuildUI): restart the game, not just `/reload`.
   other characters, level and professions, play time); nothing is sent before a Yes, only to the asking
   officer, and a No removes it from the officers' addons. Members tab for officers, Sharing tab for
   everyone. Officers' promotion rules reach members, who see their own progress.
-- `/pva guild`, Guild settings page, minimap Shift + right-click.
+- `/talod guild`, Guild settings page, minimap Shift + right-click.
 
 ### Fishing: swap back from the HUD
 
@@ -483,9 +483,9 @@ New files (Guild, GuildUI): restart the game, not just `/reload`.
 
 ### Fishing sound
 
-- Sound stuck after the loud splash? `/pva fish sound` checks each setting it changes (effects, music,
-  ambience, background sound) and says what it goes back to; `/pva fish sound reset` puts back your
-  usual sound (or the game's default when PvPAssist never saw your usual); `/pva fish sound default`
+- Sound stuck after the loud splash? `/talod fish sound` checks each setting it changes (effects, music,
+  ambience, background sound) and says what it goes back to; `/talod fish sound reset` puts back your
+  usual sound (or the game's default when TALOD never saw your usual); `/talod fish sound default`
   sets the game's defaults. Also buttons on the Fishing settings page. The master sound switch is
   only reported, never changed (Ctrl+S).
 
@@ -513,8 +513,8 @@ New files (AuctionDesk, AuctionDeskUI, PriceChart): restart the game, not just `
   when you opened the mailbox): time to sell, and sell rates and graphs dated right. Auctions closed
   before this keep the mailbox time.
 
-- `/pva ah` now opens the **Auction desk** instead of the scan panel. The scan panel still opens by
-  itself beside the Auction House, and with `/pva ah scan`.
+- `/talod ah` now opens the **Auction desk** instead of the scan panel. The scan panel still opens by
+  itself beside the Auction House, and with `/talod ah scan`.
 - Overview: your listings, the best resets, deals and crafts at a glance, with the full-scan timer.
 - Listings: each of your auctions against the market: lowest, or undercut (units under yours, the
   lowest price, the price to repost at). Read from the Auction House's own list when it shows it,
@@ -525,7 +525,7 @@ New files (AuctionDesk, AuctionDeskUI, PriceChart): restart the game, not just `
 - Control: what owning an item's market costs, and "resets" (buy up to a price, relist 1c under the
   next seller) with units, cost, deposit, revenue after the cut and your sell rate, and profit.
   Shows who holds the supply when the auction house names the sellers, and the whole price ladder.
-- `/pva ah <item>` prints an item's buyout cost and best reset, and opens it in the Control tab.
+- `/talod ah <item>` prints an item's buyout cost and best reset, and opens it in the Control tab.
 - Prices now keeps each item's whole price ladder when a look shows every auction of it (full
   scan, an exact search on one page, commodity / item results). A partial look gives "at least"
   costs; an old look says to search again.
@@ -535,7 +535,7 @@ New files (AuctionDesk, AuctionDeskUI, PriceChart): restart the game, not just `
 - Enemies nearby: a button in the panel's title bar mutes enemy alerts (center text, sound,
   chat, the vanished-stealther alert and the fishing enemy sound) and turns them back on; the
   panel keeps listing enemies. The same switch is on the settings page (General > Panel) and
-  `/pva alerts on|off`.
+  `/talod alerts on|off`.
 
 ### Fishing (2026-10-04)
 
@@ -544,7 +544,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
 - Safety: a loud warning (with your alert sound) when an enemy player comes into view while your
   fishing pole is in your hands; the HUD's Weapon row turns red.
 - Swap button under the fishing HUD: one click puts back the weapon (and off hand) you held last.
-  Usable in combat once shown; bind it with `/click PvPAssistFishingSwapButton`.
+  Usable in combat once shown; bind it with `/click TALODFishingSwapButton`.
 - Warning when an enemy player targets you while you fish. A target the game hides never alerts.
 - The HUD shows the nearest player's range ("1 in view · 20–25 yd"); a hidden range is "? yd".
 - "Got away" now means only the game's "Your fish got away!". Clicks with nothing hooked and early
@@ -554,9 +554,9 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
 - Each cast records the server time and the lure used: spots and the fishing viewer show catch rate
   and gold per hour by lure; the viewer shows catches by server hour.
 - New Spots sort "Skill-ups per hour" (most catches per hour at your skill).
-- New Goals tab (`/pva fish goals`): Nat Pagle's four fish, the Stranglethorn Fishing Extravaganza
+- New Goals tab (`/talod fish goals`): Nat Pagle's four fish, the Stranglethorn Fishing Extravaganza
   fish and other notable catches: how many, where, at which skill, where to look, which quest.
-- Zone fishing level: "Zone: needs ~X (you Y)" on the HUD, in spot details and `/pva fish zone`,
+- Zone fishing level: "Zone: needs ~X (you Y)" on the HUD, in spot details and `/talod fish zone`,
   with your hook chance when you are below it.
 - Day/night and seasonal fish (Nightfin Snapper, Sunscale Salmon, Winter Squid, Summer Bass) show on
   the server clock whether they bite now.
@@ -564,7 +564,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   not run it), optional chat reminder.
 - Best fishing pole, hat and boots you own, with a HUD warning when something better is in your bags.
 - Lures in your bags on the HUD, and an "Apply lure" button: one click puts one lure on your pole
-  (`/click PvPAssistFishingLureButton`). Hidden in combat.
+  (`/click TALODFishingLureButton`). Hidden in combat.
 - Click the HUD's Lure line to put the same lure on your pole again (the one you used last, from
   the button or your bags; one click, one lure). Out of combat only. Setting: Fishing > Gear.
   It reads the lure's bonus from your skill bonus (less your gear), so with Bright Baubles on it no
@@ -573,7 +573,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   the Spots view and the fishing viewer were wrong for it.
 - Fish your profession plan needs are tagged in catch lists ("needed: 8 for your Cooking plan").
 - Pool casts are guessed from the pool's tooltip (English clients); spots show the pool catch rate.
-- Settings: Fishing > Safety, Goals, Gear. `/pva fish safety`, `goals`, `zone`, `gear`.
+- Settings: Fishing > Safety, Goals, Gear. `/talod fish safety`, `goals`, `zone`, `gear`.
 - Data: zone fishing levels and goal fish from the CMaNGOS Classic DB and wago.tools, fishing gear
   and lures from Wowhead Classic, all read 2026-10-04.
 
@@ -591,8 +591,8 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   shows a minus sign, not only red.
 - Gear: comparing with, or measuring "since first" from, a snapshot taken while your stats were
   hidden no longer shows invented gains or losses; it shows `?` or uses the first readable one.
-- `/pva reset` keeps every kind of logged data, including stores added later, and moves the
-  fishing HUD back too. Typed names are matched like the game writes them (`/pva kos SHADOWFANG`).
+- `/talod reset` keeps every kind of logged data, including stores added later, and moves the
+  fishing HUD back too. Typed names are matched like the game writes them (`/talod kos SHADOWFANG`).
 - Data refreshed from the cache (no new download), checked 2026-10-04:
   - transmutes and Wizard / Mana Oils make 1 (they made 0, which hid them from the planner and
     the crafting profits); explosives count their average yield;
@@ -607,7 +607,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   (holes, inf / nan, cut-off files), find the file in other game folders (or `WOW_DIR`), and
   escape every name in the page.
 
-- Fishing (`/pva fish`, settings: Fishing). New files `Fishing.lua`, `FishingUI.lua`.
+- Fishing (`/talod fish`, settings: Fishing). New files `Fishing.lua`, `FishingUI.lua`.
   - Every cast is logged: where, your skill (with lure and gear), lure on or off, and the
     result: caught (with what), got away, no bite clicked, or interrupted by combat.
   - Spots (by subzone): catch rate, value per catch and gold per hour of fishing **at your
@@ -626,12 +626,12 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
     free bag slots, enemies in view, danger here.
   - Warnings: your lure ran out, bags almost full, skill at its maximum. Optional sound for
     every enemy player spotted while you fish (never for hidden hostility).
-  - Auto loot while fishing (button on the window, settings, `/pva fish autoloot`): turns the
+  - Auto loot while fishing (button on the window, settings, `/talod fish autoloot`): turns the
     game's Auto Loot option on at your first cast if it is off, and back off the moment you unequip
     your fishing pole, and at logout. The old value is saved, so a `/reload` or logout mid-fishing still
     puts it back. If you change the option yourself meanwhile, your choice stays.
   - Log tab (casts and encounters) and Sessions tab (a session ends after 5 minutes without a cast).
-  - Loud splash while fishing (on by default; window button, settings, `/pva fish splash`): addons get
+  - Loud splash while fishing (on by default; window button, settings, `/talod fish splash`): addons get
     no event when a fish bites, so the splash is made hard to miss instead. Sound effects go to full,
     music and ambience off, and sound keeps playing while the game is in the background. A muted game
     stays muted. Put back the moment you unequip your fishing pole, and at logout (so the game never
@@ -643,13 +643,13 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
     its name) instead of doing nothing.
   - Full scan: the wait shows seconds, clicking it again cancels (the next scan can go at once), and the
     data is read even if the scan's event never arrives.
-  - `/pva probe` prints an "auction house:" line with what this client offers.
+  - `/talod probe` prints an "auction house:" line with what this client offers.
   - Every full scan reports its outcome in chat: done (in N s: auctions, items, how many prices were new and
     how many changed: numbers only a real answer gives) or failed and why (no answer, blocked, refused, window
-    closed, cancelled). `/pva ah log` lists the last scans; the panel shows the last result; item tooltips say
+    closed, cancelled). `/talod ah log` lists the last scans; the panel shows the last result; item tooltips say
     "in the full scan 5 min ago" for prices a scan brought.
   - Fixed: the panel kept showing "Reading..." / "Waiting..." after a scan had ended.
-- Fixed: `/pva reset` erased your logged Auction House prices; they are kept now (data, not settings).
+- Fixed: `/talod reset` erased your logged Auction House prices; they are kept now (data, not settings).
 - Lists everywhere: a scrollbar on every list that does not fit (drag the thumb or click the track; the
   wheel still works). The long lists also get a search box (any text in a row, colors ignored) and a time
   range (All time / Last hour / Today / Last 7 days / Last 30 days, with a dropdown), with "N of M shown":
@@ -671,7 +671,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   a dropdown list (current one marked, scrolls when long). Clicking the rest of the button still cycles.
 - Fishing settings after a crash: logout puts sound and auto loot back, but a crash skips logout. Your
   usual settings are now kept from your last clean session; if you log in with the fishing settings
-  still on and nothing to put back, PvPAssist asks whether to restore your usual ones (it never
+  still on and nothing to put back, TALOD asks whether to restore your usual ones (it never
   changes them without asking, in case you chose those values yourself).
 - What sells and what doesn't (one rule for the Market window, the profession planner and fishing):
   - Your own auctions (every character, closed by the auction letters) give each item a sell rate:
@@ -686,14 +686,14 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   - Market window: new **Sell-through** tab (every item you posted, worst sellers first, unsold count and
     deposits lost); the Sell tab marks "hard to sell" and totals use the sell rate; item detail shows
     your sell rate.
-- Auction House helper: a panel next to the Auction House window (or `/pva ah`).
+- Auction House helper: a panel next to the Auction House window (or `/talod ah`).
   1. Full scan: one click asks for every auction at once and logs the lowest price, the auctions
      and the units of every item (the server allows one every 15 minutes; the button counts down).
   2. Search list: the items you need prices for (your profession plan's materials, what you make
      on the way and the products; your bags; your crafting products and materials; prices over a
      day old: pick with the chips). Each click searches the next one and shows the result; items
      seen in the last 30 minutes are skipped. Bind it to a key with a macro:
-     `/click PvPAssistAHNextButton`, then press that key at the Auction House.
+     `/click TALODAHNextButton`, then press that key at the Auction House.
 - Auction House prices first everywhere:
   - The planner uses your AH price for a material a vendor sells when the AH is cheaper.
   - Item tooltips: your AH price, how old, the auctions and units listed and the usual price.
@@ -710,7 +710,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   - Shopping list: how many were listed at your last look ("212 listed", red when fewer than you
     need), and materials never seen on the AH in their own group ("look them up").
   - Steps: what each product sells for; "Make" lines say what buying it instead would cost.
-- Market window (`/pva price`, or Alt + click the minimap button):
+- Market window (`/talod price`, or Alt + click the minimap button):
   - Prices: every item you have seen on the Auction House, searchable and sortable (newest look,
     name, price, most under its usual price, supply). Per item: the lowest price now and how old
     it is, the auctions and units listed, its usual price (the average of your looks) with the
@@ -723,7 +723,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
     product sells for, best profit first (all you can make, or only recipes you know).
   - Deals: items listed at 80% or less of their usual price (3+ looks), with the gain per unit if
     resold at the usual price.
-  `/pva price linen` opens it searching for Linen and lists the matches in chat.
+  `/talod price linen` opens it searching for Linen and lists the matches in chat.
 - Auction prices: everything the Auction House shows you (searches, browsing, an item's
   listings) is logged with the lowest buyout per unit and when you saw it, per realm and faction.
   The profession planner, its shopping list and the crafting log use these instead of estimates:
@@ -732,13 +732,13 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   Wowhead's average (grey). Hover a material for the price, its source and its age.
   Each look also records the auctions and units listed. Setting: Character > Skills
   > Auction prices.
-- Minimap button (the PvPAssist icon on the minimap's edge): left-click the character window,
+- Minimap button (the TALOD icon on the minimap's edge): left-click the character window,
   Shift + left-click the economy window, Ctrl + left-click shows / hides the Enemies nearby panel,
   right-click the settings; drag it around the minimap. Works with round and square minimaps, and
   minimap button bars (EllesmereUI) pick it up. Settings: General > Panel > Minimap button, or
-  `/pva minimap`.
+  `/talod minimap`.
 
-- Economy window (`/pva economy`, or the coin button on the Enemies nearby panel): money for your
+- Economy window (`/talod economy`, or the coin button on the Enemies nearby panel): money for your
   whole account, or one character (button top right), over today / 7 / 30 days / all.
   - Overview: gold now (all characters; hover for each), today, the range, this session with gold
     per hour, best income and biggest cost; gold over time (hover a day); by source and per day.
@@ -754,7 +754,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   - Fixed: posting an auction right after using the mailbox was recorded as "mail" (the mailbox was
     still seen as open). Only one NPC window counts at a time now, the newest wins, and the newer
     engine's interaction events are used too. Settings: Character > Economy.
-- Character > Professions (`/pva plan`, or `/pva plan tailoring 225`): a leveling plan for any
+- Character > Professions (`/talod plan`, or `/talod plan tailoring 225`): a leveling plan for any
   crafting profession, First Aid or Cooking, from your skill to the target you pick. Steps in order:
   which recipe to make from skill A to B and about how many (the game's skill-up chances: yellow
   and green recipes need more crafts), what to make first (bolts, bars), and when and where to
@@ -766,7 +766,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   Data: Wowhead Classic, generated by `tools/gen_professions.py` (re-run it to pull updates).
   The plan starts at your current rank (green "from 60"; red when the game has not told us your
   rank yet). If it is out of date, set the start with - / + (click it to go back to your rank), or
-  `/pva plan tailoring 60-150`. Your trained maximum decides where the training steps go.
+  `/talod plan tailoring 60-150`. Your trained maximum decides where the training steps go.
   Each step is a to-do list in order: "Get 7 x Light Hide" (what to buy or gather, with the cost),
   a check mark for what you already have (in your bags, or made by an earlier step), "Make 27 x
   Light Leather" for anything you have to make first (with its own materials above it), then the
@@ -774,7 +774,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   Click a step (or a Make line) to craft it: with your profession window open, it starts
   that many, as the window's Create button would (fewer if you lack materials). Enchants that go on
   an item are one per click.
-- Character > Crafting (`/pva crafts`): a log of everything you craft, from any window: "39 x Light
+- Character > Crafting (`/talod crafts`): a log of everything you craft, from any window: "39 x Light
   Armor Kit · Leatherworking 12 -> 45 +33", with when, where, your level, the materials used and
   their estimated value (hover). Repeats of one recipe are one entry. Left: totals per profession
   and recipe (crafts, skill gained) for all time, the last 7 days or today; click a recipe to see
@@ -786,7 +786,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   and secondary skills, as on Classic Era. If a client has no skill list at all, it falls back to
   your professions plus defense and the skill of the weapons you hold (from the character stats).
   Opening a profession window also updates that profession's rank.
-- Character > Enhance (`/pva enhance`, or click a slot on the Gear tab): what you can put on each
+- Character > Enhance (`/talod enhance`, or click a slot on the Gear tab): what you can put on each
   piece of gear: enchants, armor kits, shield spikes, counterweights, spurs and scopes (temporary
   stones and oils on request). For each: the effect, the profession and skill it takes (green: you
   can; yellow: your skill is too low), where the recipe is learned and its cost, the tool, every
@@ -803,7 +803,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   differ ("Different conditions: Talents 3/0/0 vs 2/0/0, Buffs differ"). Talent changes and new
   passive spells get their own ledger entries with what changed and the measured stat difference;
   gear changes say when talents, form, weapon enchants, buffs or level changed at the same time.
-  `/pva probe` reports which talent APIs this client has and lists anything it calls "legacy".
+  `/talod probe` reports which talent APIs this client has and lists anything it calls "legacy".
 - Fixed: a level-up from a kill (or any gear or talent change in combat) saved a snapshot with almost
   no stats, because WoW Forever hides your own stats from addons in combat, and the "before" state
   was overwritten with those hidden values. Changes made in combat are now queued and measured as
@@ -819,24 +819,24 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   level), with a second line for the part that comes from gear; markers under each point (G gear,
   L level, T talents, M manual); hover anywhere for a crosshair on the nearest snapshot and what
   changed there. The character and settings windows are fully opaque.
-- The probe and error-log window (`/pva probe`, `/pva errors`) uses the same style.
-- Settings have their own window in the same style (`/pva`, the panel's settings button, or
-  Options > AddOns > PvPAssist, which now opens it): sections on the left, sub-tabs on top, flat
+- The probe and error-log window (`/talod probe`, `/talod errors`) uses the same style.
+- Settings have their own window in the same style (`/talod`, the panel's settings button, or
+  Options > AddOns > TALOD, which now opens it): sections on the left, sub-tabs on top, flat
   checkboxes, sliders and buttons. It also opens in combat. All settings are unchanged.
 - One look across the addon: the Enemies nearby panel, the PvP flag indicator and the character
   window share flat panels, buttons, tabs and list rows. The panel gets striped rows, framed class
   icons, a colored edge for kill-on-sight / avoid / vanished / hidden-hostility rows, a footer line,
   and title-bar buttons for settings, the character window and the lock (unlocked = orange border).
-- Character window (`/pva char`): the gear window grew into one window for your character, with a
+- Character window (`/talod char`): the gear window grew into one window for your character, with a
   Skills tab next to Gear, Ledger, Progress and Sources. Settings: one "Character" tab with Gear and
   Skills pages.
-- Skills tracking (`/pva skills`): professions, secondary skills, weapon skills and defense. Each
+- Skills tracking (`/talod skills`): professions, secondary skills, weapon skills and defense. Each
   skill-up is logged with date, zone and your level (merged while you keep raising one skill in one
   zone), plus training, new skills and dropped ones. Shows rank bars, points gained in the last 7
   days and each skill's history. Collapsed categories in your Skills tab are not read (expand them to
   track those skills).
 
-- Gear ledger (`/pva gear`, new Gear tab): snapshots of everything you wear and your character stats,
+- Gear ledger (`/talod gear`, new Gear tab): snapshots of everything you wear and your character stats,
   taken when your gear changes, on level-up and when you ask (with a name like "PvP set"). The ledger
   shows each change with what it did: your stats measured right before and after, and the items'
   tooltip stats; a buff that changed during the swap is flagged. Level-ups get their own entries,
@@ -850,7 +850,7 @@ New files (FishingData, FishingSafety, FishingGoals, FishingGear): restart the g
   range) plus their distance bracket, class, race, level, guild and the time; party members are
   logged at their own position. Recent points are capped (30 000 by default, about 2–3 MB) and a
   compact all-time summary is kept forever. Allies in capital cities are only counted. Settings:
-  the new Census tab (includes a button for friendly nameplates, needed to see allies); `/pva census`.
+  the new Census tab (includes a button for friendly nameplates, needed to see allies); `/talod census`.
 - `tools/census_viewer.py` turns your saved data into an HTML page of heat maps with filters for
   faction, enemies or allies, class, level, time of day and date. Data is saved on logout or `/reload`.
 - Enemies nearby panel: a second line under each enemy in view with health in hit points, a power
@@ -879,4 +879,4 @@ New addon: restart World of Warcraft (not just `/reload`) the first time you ins
 - Hardcore safety: PvP flag indicator, "this would flag you" target warnings, contested-zone banner.
 - Journal: sightings, kill-on-sight and avoid lists, notes, outcomes.
 - Optional vanished-stealther alert.
-- `/pva probe` reports what your client lets addons read about enemy players.
+- `/talod probe` reports what your client lets addons read about enemy players.

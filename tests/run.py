@@ -20,7 +20,6 @@ TOC = next(ROOT.glob("*.toc"))
 
 SCENARIOS = [
     "era_boot",
-    "rename_adopts_old_data",
     "spotted_alert_and_panel",
     "alert_rules",
     "target_readout_and_flag_safety",

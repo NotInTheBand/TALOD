@@ -1,6 +1,6 @@
 -- TALOD - startup, event routing, the update tick and slash commands.
 --
--- The slash command is /talod (or /pvpassist), never /pvp: /pvp is the game's
+-- The slash command is /talod, never /pvp: /pvp is the game's
 -- own command that toggles your PvP flag, and a Hardcore player must never
 -- flag by mistyping an addon command.
 
@@ -255,12 +255,6 @@ local function MaybePrintHints()
 end
 
 local function Initialize()
-    -- After a rename the .toc lists the old SavedVariables name too: adopt it once.
-    if ns.DB() == nil then
-        for _, old in ipairs(ns.FORMER_DB_NAMES) do
-            if type(_G[old]) == "table" then ns.SetDB(_G[old]) _G[old] = nil break end
-        end
-    end
     ns.SetDB(ns.DB() or {})
     ns.CopyDefaults(ns.DB(), ns.defaults)
 

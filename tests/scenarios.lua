@@ -56,21 +56,12 @@ end
 
 local scenarios = {}
 
-scenarios.rename_adopts_old_data = function()
-    -- The addon was PvPAssist before TALOD: its saved data is adopted once, not lost.
-    PvPAssistDB = { alertsEnabled = false, marker = "kept" }
-    local ns = boot(11509)
-    check(ns.DB() == TALODDB and TALODDB.marker == "kept", "old data adopted")
-    check(TALODDB.alertsEnabled == false, "old settings kept")
-    check(PvPAssistDB == nil, "old global cleared")
-end
-
 scenarios.era_boot = function()
     local ns = boot(11509)
     check(ns.FLAVOR == "era", "flavor era")
     check(type(TALODDB) == "table" and TALODDB.alertsEnabled == true, "defaults merged")
     check(#MOCK.settingsCategories == 1, "settings category registered")
-    check(SLASH_TALOD1 == "/talod" and SLASH_TALOD2 == "/pva" and SLASH_TALOD3 == "/pvpassist", "slash commands")
+    check(SLASH_TALOD1 == "/talod" and SLASH_TALOD2 == nil, "slash commands")
     -- /pvp is the game's flag toggle: TALOD must never claim it.
     for k, v in pairs(_G) do
         if type(k) == "string" and k:find("^SLASH_") then check(v ~= "/pvp", "never registers /pvp (" .. k .. ")") end

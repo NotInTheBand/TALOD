@@ -20,7 +20,7 @@ local Cmd = {}
 ns.Cmd = Cmd
 
 Cmd.PREFIX = "/talod"
-Cmd.ALIASES = { "/pva", "/pvpassist" }   -- the names before the rename keep working
+Cmd.ALIASES = {}
 
 Cmd.LIST = {
     -- Core (Main.lua)
@@ -120,7 +120,7 @@ for _, c in ipairs(Cmd.LIST) do
     for _, w in ipairs(c.words) do byWord[w:lower()] = c.id end
 end
 
--- Every slash word the game should register ("/talod", "/pva", "/pvpassist").
+-- Every slash word the game should register (the prefix, then the aliases).
 function Cmd.Slashes()
     local out = { Cmd.PREFIX }
     for _, a in ipairs(Cmd.ALIASES) do out[#out + 1] = a end
