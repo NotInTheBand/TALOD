@@ -110,7 +110,7 @@ def fetch(url, name, refresh, binary=False):
     if path.exists() and not refresh:
         return path.read_bytes() if binary else path.read_text(encoding="utf-8")
     print("fetch", url)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (PvPAssist data generator)"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (TALOD data generator)"})
     with urllib.request.urlopen(req, timeout=120) as r:
         data = r.read()
     CACHE.mkdir(parents=True, exist_ok=True)

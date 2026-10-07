@@ -1,8 +1,8 @@
-"""PvPAssist census viewer: turns the census in PvPAssist's SavedVariables into
+"""TALOD census viewer: turns the census in TALOD's SavedVariables into
 one HTML page of heat maps (where players travel, by faction, class, level and
 time of day). Nothing is sent anywhere; the page is a local file.
 
-    python tools/census_viewer.py                    # finds WTF/Account/*/SavedVariables/PvPAssist.lua
+    python tools/census_viewer.py                    # finds WTF/Account/*/SavedVariables/TALOD.lua
     python tools/census_viewer.py PATH [PATH ...]    # one or more SavedVariables files (merged)
     python tools/census_viewer.py -o out.html --open
 
@@ -284,7 +284,7 @@ def saved_variables_roots():
     roots = []
     if os.environ.get("WOW_DIR"):
         roots.append(pathlib.Path(os.environ["WOW_DIR"]))
-    flavor = ADDON.parent.parent.parent      # <flavor>/Interface/AddOns/PvPAssist
+    flavor = ADDON.parent.parent.parent      # <flavor>/Interface/AddOns/TALOD
     return roots + [flavor, flavor.parent]
 
 

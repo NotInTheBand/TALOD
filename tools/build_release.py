@@ -1,6 +1,6 @@
-"""Builds a clean release zip: dist/PvPAssist-<version>.zip.
+"""Builds a clean release zip: dist/TALOD-<version>.zip.
 
-The zip holds one folder, PvPAssist/, with only what the game loads (the
+The zip holds one folder, TALOD/, with only what the game loads (the
 files listed in the TOC) plus README.md, CHANGELOG.md, LICENSE (when present)
 and the two SavedVariables viewers (tools/census_viewer.py,
 tools/fishing_viewer.py: the in-game pages tell players to run them). Tests,

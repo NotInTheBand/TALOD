@@ -1,9 +1,9 @@
-"""PvPAssist fishing viewer: turns the fishing log in PvPAssist's SavedVariables
+"""TALOD fishing viewer: turns the fishing log in TALOD's SavedVariables
 into one HTML page: a heat map per map (casts, catches, one fish, attacks,
 enemy players seen), every spot with its catch rate, value per hour and danger,
 and the encounters while fishing. Nothing is sent anywhere; the page is a local file.
 
-    python tools/fishing_viewer.py                    # finds WTF/Account/*/SavedVariables/PvPAssist.lua
+    python tools/fishing_viewer.py                    # finds WTF/Account/*/SavedVariables/TALOD.lua
     python tools/fishing_viewer.py PATH [PATH ...]    # one or more SavedVariables files (merged)
     python tools/fishing_viewer.py -o out.html --open
 

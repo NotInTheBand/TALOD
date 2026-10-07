@@ -1,6 +1,6 @@
-# PvPAssist
+# TALOD
 
-**One addon for the whole game.**
+**That's A Lot Of Data** (say *tah-lod*). One addon for the whole game.
 A quality-of-life suite for **WoW Forever** and **Classic Era**, built with Hardcore players in
 mind. It started as world PvP awareness and grew into everything around it: your gear, your
 professions, your gold, the Auction House, fishing and your guild.
@@ -20,7 +20,7 @@ happens: the addon never targets, casts, moves, buys or posts on its own. Every 
 click by you.
 
 > ### 🛡️ Unknown is never shown as safe
-> The game sometimes hides information from addons, especially in combat. PvPAssist never fills
+> The game sometimes hides information from addons, especially in combat. TALOD never fills
 > those gaps with a reassuring guess. A hidden PvP flag reads **`PvP: ?`**, never "off". A
 > distance the game won't give reads **`? yd`**. A player whose level is hidden counts as an
 > equal-level threat. If you see a `?`, it means *nobody knows*, not *you're fine*.
@@ -47,7 +47,7 @@ click by you.
 - Optional: a warning when a nearby rogue or druid's nameplate suddenly disappears (probably
   stealth).
 - **Mute them in one click** with the Battle Shout button in the panel's title bar (or the
-  *Enemy alerts* switch in settings, or `/pva alerts off`). The panel keeps listing every enemy,
+  *Enemy alerts* switch in settings, or `/talod alerts off`). The panel keeps listing every enemy,
   just silently.
 
 **Nameplates**
@@ -70,13 +70,13 @@ click by you.
 ## 📖 Memory
 
 - **Journal**: who you've met, where and when. Keep kill-on-sight and avoid lists, write notes
-  on players, and look anyone up with `/pva who Name`. Outcomes record only what you could see
+  on players, and look anyone up with `/talod who Name`. Outcomes record only what you could see
   ("they died while targeted"), never a guess at who killed whom.
 - **Census**: a log of the players you see, of both factions, for heat maps of where each class,
   level and faction travels, and at what time of day. Run the included
   `tools/census_viewer.py` (Python 3) to turn it into a web page.
 
-## 🧑 Your character (`/pva char`)
+## 🧑 Your character (`/talod char`)
 
 - **Gear ledger**: snapshots of your gear and stats, and what every upgrade actually changed on
   your character sheet. Talents, forms and buffs are recorded so that comparisons stay fair.
@@ -93,17 +93,17 @@ click by you.
 
 ## 💰 Gold and the Auction House
 
-- **Economy** (`/pva economy`): every gold change, labeled with what you were doing at the time:
+- **Economy** (`/talod economy`): every gold change, labeled with what you were doing at the time:
   vendor, repairs, loot, quests, trades, mail, auctions, training or flights. It covers one
   character or all of them. Gold moved between your own characters doesn't count as income.
   Auctions are followed from posting to sold, expired or cancelled, with the profit.
-- **Market** (`/pva price`):
+- **Market** (`/talod price`):
   - every auction price you've seen, with its usual price and trend
   - what to sell where (auction house or vendor)
   - which crafts make a profit
   - deals listed well under the usual price
   - your own sell-through rate, and your AH price on every item tooltip
-- **Auction desk** (`/pva ah`): the trading view.
+- **Auction desk** (`/talod ah`): the trading view.
   - your listings against the market: which are still the lowest, which are undercut (how many
     units sit under yours) and the price to repost at
   - deals, with how many units are listed at the deal price and what buying them all gains
@@ -119,11 +119,11 @@ click by you.
 
   The desk works from your own looks: a full scan or an exact search keeps every auction of an
   item. It never buys or posts anything.
-- **Scan panel** (opens beside the Auction House, or `/pva ah scan`): a full scan (every 15
+- **Scan panel** (opens beside the Auction House, or `/talod ah scan`): a full scan (every 15
   minutes, as the server allows) and a "search next" list. Each click runs exactly one search,
   so nothing is automated.
 
-## 🎣 Fishing (`/pva fish`)
+## 🎣 Fishing (`/talod fish`)
 
 - Every cast is logged: where, your skill and lure, and what you caught.
 - For each spot: catch rate and gold per hour **at your skill**, and how often NPCs or enemy
@@ -145,7 +145,7 @@ click by you.
   and music off, and keeps sound on when the game is in the background. Your settings come back
   as soon as you unequip the pole.
 
-## 🛡️ Guild (`/pva guild`)
+## 🛡️ Guild (`/talod guild`)
 
 - **Recruit:** players of your faction without a guild show up in a list: from their nameplates,
   your target and mouseover, and from `/who` searches (one per click, at most one every 5 seconds). A search covers your whole
@@ -153,7 +153,7 @@ click by you.
   level ranges to reach the rest. Levels go up to the top level the game reports (read live, so they follow when Forever raises its cap).
   One click whispers your message and sends the guild invite. Right-click: never offer them again.
   Filter by name, level range and class. A **mini recruit window** with the same list can stay on
-  your screen while you play (off by default: turn it on from the Recruit tab or `/pva guild mini`).
+  your screen while you play (off by default: turn it on from the Recruit tab or `/talod guild mini`).
 - Write your own whisper messages, or use the default. `{name}`, `{guild}`, `{class}`, `{level}`,
   `{zone}` and `{me}` are filled in.
 - **Invited:** who you invited and what happened: joined, declined, offline, already in a guild,
@@ -180,7 +180,7 @@ click by you.
 
 ---
 
-## 🔎 Audit (`/pva audit`, WoW Forever)
+## 🔎 Audit (`/talod audit`, WoW Forever)
 
 - The game's statistics for you, players you inspect and guild members who share theirs: total gold
   acquired, most gold ever owned, gold from loot, quests, vendors and auctions, auction counts,
@@ -201,60 +201,59 @@ click by you.
 
 ## 🚀 Getting started
 
-1. Install with the CurseForge app, or copy the `PvPAssist` folder into
+1. Install with the CurseForge app, or copy the `TALOD` folder into
    `World of Warcraft\<your game folder>\Interface\AddOns\`.
 2. **Restart the game** completely. A `/reload` isn't enough the first time.
-3. Type **`/pva`** for settings, or click the minimap button:
-   - **Left-click**: main menu (every PvPAssist window)
+3. Type **`/talod`** for settings, or click the minimap button:
+   - **Left-click**: main menu (every TALOD window)
    - **Shift-click**: economy
    - **Ctrl-click**: Enemies nearby panel
    - **Right-click**: settings
    - **Shift + right-click**: guild
 4. Enemies are spotted by their nameplates. For the earliest warning, type
-   **`/pva distance max`** to raise the nameplate range to the maximum (41 yards).
+   **`/talod distance max`** to raise the nameplate range to the maximum (41 yards).
 
 Everything is on by default, except the stealth heuristic, auto loot and session summaries.
 Every option is in the settings window; slash commands are a shortcut.
 
 ## ⌨️ Commands
 
-`/pva` and `/pvpassist` do the same thing. PvPAssist deliberately does **not** use `/pvp`: that
-is the game's own command for turning your PvP flag on, and a typo should never flag a Hardcore
+`/talod` is the command. TALOD deliberately does **not** use `/pvp`: that is the game's own command for turning your PvP flag on, and a typo should never flag a Hardcore
 character.
 
 | Command | What it does |
 |---|---|
-| `/pva` | Open the settings |
-| `/pva help` | List every command |
-| `/pva panel on\|off\|lock\|unlock\|reset` | Enemies nearby panel |
-| `/pva alerts on\|off\|test` | Enemy spotted alerts (`test` shows a sample) |
-| `/pva badges on\|off` | Nameplate badges |
-| `/pva flag on\|off\|reset` | PvP flag indicator |
-| `/pva kos <name>` · `/pva avoid <name>` | Add a player to a list (`target` works as a name) |
-| `/pva unlist <name>` · `/pva note <name> <text>` | Remove from lists · write a note |
-| `/pva who <name>` | Everything the journal knows about a player |
-| `/pva journal` | Journal and lists |
-| `/pva distance [max]` | Show the nameplate distance, or set it to the maximum |
-| `/pva census [on\|off\|clear]` | Player census (`allies on\|off`, `friendly`) |
-| `/pva char` · `/pva gear snap [name]` | Character window · take a named gear snapshot |
-| `/pva enhance` · `/pva skills` · `/pva crafts` | Enhance, Skills and Crafting tabs |
-| `/pva plan [profession] [skill]` | Leveling plan, e.g. `/pva plan tailoring 150` or `60-150` |
-| `/pva economy` | Economy window |
-| `/pva price [item]` | Market window, optionally searching for an item |
-| `/pva ah [item]` | Auction desk, optionally on one item's market (its buyout cost in chat) |
-| `/pva ah scan` · `/pva ah log` | Scan panel · history of full scans |
-| `/pva fish [spots\|map\|log\|sessions\|stats]` | Fishing window, or this session in chat |
-| `/pva fish hud` · `autoloot` · `splash` · `end` | Fishing HUD, auto loot, loud splash, end the session |
-| `/pva fish goals` · `zone` · `gear` · `safety [on\|off]` | Goals tab, zone fishing level, your gear and lures, fishing safety |
-| `/pva guild [recruit\|invited\|replies\|roster\|recruiters\|promote\|log\|members\|sharing]` | Guild window |
-| `/pva guild mini` | Show / hide the mini recruit window |
-| `/pva guild who` · `/pva guild invite [name]` | One /who search for players without a guild · whisper + invite one player (or your target) |
-| `/pva audit [me\|target\|members\|flags\|characters\|history\|status]` | Audit window · read yourself or your target |
-| `/pva menu` | Main menu: every PvPAssist window |
-| `/pva minimap` | Show or hide the minimap button |
-| `/pva clear` | Empty the nearby list |
-| `/pva reset` | Reset settings and positions (all your logged data is kept) |
-| `/pva errors` · `/pva probe` | Error list · client capability report, for bug reports |
+| `/talod` | Open the settings |
+| `/talod help` | List every command |
+| `/talod panel on\|off\|lock\|unlock\|reset` | Enemies nearby panel |
+| `/talod alerts on\|off\|test` | Enemy spotted alerts (`test` shows a sample) |
+| `/talod badges on\|off` | Nameplate badges |
+| `/talod flag on\|off\|reset` | PvP flag indicator |
+| `/talod kos <name>` · `/talod avoid <name>` | Add a player to a list (`target` works as a name) |
+| `/talod unlist <name>` · `/talod note <name> <text>` | Remove from lists · write a note |
+| `/talod who <name>` | Everything the journal knows about a player |
+| `/talod journal` | Journal and lists |
+| `/talod distance [max]` | Show the nameplate distance, or set it to the maximum |
+| `/talod census [on\|off\|clear]` | Player census (`allies on\|off`, `friendly`) |
+| `/talod char` · `/talod gear snap [name]` | Character window · take a named gear snapshot |
+| `/talod enhance` · `/talod skills` · `/talod crafts` | Enhance, Skills and Crafting tabs |
+| `/talod plan [profession] [skill]` | Leveling plan, e.g. `/talod plan tailoring 150` or `60-150` |
+| `/talod economy` | Economy window |
+| `/talod price [item]` | Market window, optionally searching for an item |
+| `/talod ah [item]` | Auction desk, optionally on one item's market (its buyout cost in chat) |
+| `/talod ah scan` · `/talod ah log` | Scan panel · history of full scans |
+| `/talod fish [spots\|map\|log\|sessions\|stats]` | Fishing window, or this session in chat |
+| `/talod fish hud` · `autoloot` · `splash` · `end` | Fishing HUD, auto loot, loud splash, end the session |
+| `/talod fish goals` · `zone` · `gear` · `safety [on\|off]` | Goals tab, zone fishing level, your gear and lures, fishing safety |
+| `/talod guild [recruit\|invited\|replies\|roster\|recruiters\|promote\|log\|members\|sharing]` | Guild window |
+| `/talod guild mini` | Show / hide the mini recruit window |
+| `/talod guild who` · `/talod guild invite [name]` | One /who search for players without a guild · whisper + invite one player (or your target) |
+| `/talod audit [me\|target\|members\|flags\|characters\|history\|status]` | Audit window · read yourself or your target |
+| `/talod menu` | Main menu: every TALOD window |
+| `/talod minimap` | Show or hide the minimap button |
+| `/talod clear` | Empty the nearby list |
+| `/talod reset` | Reset settings and positions (all your logged data is kept) |
+| `/talod errors` · `/talod probe` | Error list · client capability report, for bug reports |
 
 ## ❓ What it can't do, and why
 
@@ -283,13 +282,13 @@ or the viewer pages made from them.
 
 ## 🐞 Found a bug?
 
-Type `/pva errors` and copy the list into your report. If something was read wrong (a distance,
-a flag, a level), also run `/pva probe` near an enemy player and include that. Reports go to
-[GitHub issues](https://github.com/NotInTheBand/PvPAssist/issues).
+Type `/talod errors` and copy the list into your report. If something was read wrong (a distance,
+a flag, a level), also run `/talod probe` near an enemy player and include that. Reports go to
+[GitHub issues](https://github.com/NotInTheBand/TALOD/issues).
 
 ## 🛠️ For developers
 
 The source, tests and data generators are in the
-[GitHub repository](https://github.com/NotInTheBand/PvPAssist). The offline tests need
+[GitHub repository](https://github.com/NotInTheBand/TALOD). The offline tests need
 `pip install lupa`, then `python tests/run.py`. Release builds come from
 `python tools/build_release.py --check`.

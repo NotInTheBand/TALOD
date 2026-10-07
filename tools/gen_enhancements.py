@@ -88,7 +88,7 @@ def fetch(url, cache_name, refresh):
     path = CACHE / cache_name
     if path.exists() and not refresh:
         return path.read_text(encoding="utf-8")
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (PvPAssist data generator)"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (TALOD data generator)"})
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
