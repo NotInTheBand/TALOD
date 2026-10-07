@@ -1,0 +1,34 @@
+-- The addon's name, in one place. Loads first: every other file builds its
+-- shown name, frame names, popup keys, slash commands, saved-data global and
+-- addon-message prefix from these values.
+--
+-- Renaming the addon: change NAME below (slash commands are in Commands.lua), then the
+-- few things Lua cannot reach:
+--   * the addon folder and the .toc file name (the game loads by folder name),
+--   * in the .toc: "## Title", "## SavedVariables" (= DB_NAME) and
+--     "## AddonCompartmentFunc" (= NAME .. "_OnAddonCompartmentClick"),
+--   * tools/build_release.py / .pkgmeta read the folder; the viewers read this file.
+-- Players keep their data across a rename only if the .toc also lists the old
+-- SavedVariables name and that name is in FORMER_DB_NAMES (adopted once, see Main.lua).
+-- Frame names change too, so players' "/click <old>AHNextButton" macros stop working,
+-- and the addon-message prefix changes, so guild sharing with older versions stops.
+
+local ADDON_NAME, ns = ...
+
+-- Letters and digits only: it becomes part of global names and the message prefix.
+ns.NAME = "TALOD"
+ns.COLOR = "ff7f3f"
+
+ns.TITLE = "|cff" .. ns.COLOR .. ns.NAME .. "|r"                -- colored, for chat and window titles
+ns.FRAME = ns.NAME                                              -- prefix of every global frame name
+ns.DB_NAME = ns.NAME .. "DB"                                    -- SavedVariables global (TOC must match)
+ns.FORMER_DB_NAMES = { "PvPAssistDB" }                              -- old SavedVariables names to adopt after a rename
+ns.SLASH_KEY = ns.NAME:upper()                                  -- SlashCmdList key, SLASH_<KEY>n globals
+ns.POPUP = ns.NAME:upper() .. "_"                               -- StaticPopupDialogs key prefix
+ns.COMPARTMENT_FUNC = ns.NAME .. "_OnAddonCompartmentClick"     -- TOC AddonCompartmentFunc must match
+ns.COMM_PREFIX = (ns.NAME .. "G"):sub(1, 16)                    -- guild sharing; the game allows 16 bytes
+ns.PROBE_PREFIX = ns.NAME:sub(1, 16)                            -- /pva probe's registration test
+
+-- The saved data. Every module reads it through this, never by its global name.
+function ns.DB() return _G[ns.DB_NAME] end
+function ns.SetDB(t) _G[ns.DB_NAME] = t return t end

@@ -1,0 +1,65 @@
+## Interface: 16001, 11509
+## Title: |cffff7f3fTALOD|r
+## Notes: World PvP awareness: enemy-spotted alerts, an enemies-nearby panel with distances, nameplate badges, PvP-flag safety for Hardcore, a journal of who you met, a player census for heat maps, a gear ledger, a fishing log, guild recruiting / roster tools and a members' gold and activity audit. WoW Forever and Classic Era.
+## Author: Lichdom
+## Version: 0.11.1
+## Category: PvP
+## SavedVariables: TALODDB, PvPAssistDB
+## IconTexture: Interface\Icons\Ability_DualWield
+## AddonCompartmentFunc: TALOD_OnAddonCompartmentClick
+
+Brand.lua
+Commands.lua
+Compat.lua
+Core.lua
+Store.lua
+Style.lua
+Utils.lua
+Tooltip.lua
+Data.lua
+Navigation.lua
+Outbox.lua
+Spotter.lua
+Alerts.lua
+Journal.lua
+Plates.lua
+Panel.lua
+Safety.lua
+Options.lua
+Census.lua
+Conditions.lua
+Gear.lua
+GearUI.lua
+Skills.lua
+EnhanceData.lua
+Enhance.lua
+Prices.lua
+ProfessionData.lua
+Professions.lua
+ProfessionsUI.lua
+Market.lua
+PriceChart.lua
+MarketUI.lua
+CraftTrack.lua
+CraftTrackUI.lua
+AHHelper.lua
+AuctionDesk.lua
+AuctionDeskUI.lua
+Economy.lua
+EconomyUI.lua
+Fishing.lua
+FishingUI.lua
+FishingData.lua
+FishingSafety.lua
+FishingGoals.lua
+FishingGear.lua
+Guild.lua
+GuildSync.lua
+GuildActivity.lua
+GuildUI.lua
+Audit.lua
+AuditUI.lua
+Minimap.lua
+Credits.lua
+Probe.lua
+Main.lua

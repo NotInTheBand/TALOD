@@ -1,0 +1,29 @@
+# Data that goes stale
+
+Some data is copied from the game's databases and can go out of date (content patches, Forever
+changes, a wrong value reported in game). **To update the data (all of it or one
+entry), check each entry below**, refresh it from its source, run `python tests/run.py`, and note
+the date in the CHANGELOG.
+
+| Data | Where | Source online | How to refresh |
+|---|---|---|---|
+| Gear enhancements: enchants, armor kits, shield spikes, counterweights, spurs, scopes, stones, oils; their recipes (skill, reagents, tools, where learned) and how each reagent is made | `EnhanceData.lua` (generated, never edit by hand) | Wowhead Classic profession lists `https://www.wowhead.com/classic/spells/professions/<enchanting\|leatherworking\|blacksmithing\|engineering\|mining\|tailoring>` and tooltips `https://nether.wowhead.com/classic/tooltip/spell/<id>` / `.../item/<id>` | `python tools/gen_enhancements.py --refresh` (plain run reuses `tools/cache/`). Check the "skip" lines it prints. |
+| Profession recipes for the leveling planner: difficulty colors, skill-ups, reagents, trainer cost, patterns (item, source, vendor price), tools; item vendor prices and auction averages | `ProfessionData.lua` (generated, never edit by hand) | Wowhead Classic `https://www.wowhead.com/classic/spells/professions/<name>` (`secondary-skills/cooking`, `secondary-skills/first-aid`), `.../items/recipes/<name>`, spell tooltips | `python tools/gen_professions.py --refresh` (plain run reuses `tools/cache/`). Auction averages move daily; refresh before a release. |
+| Training ranks (character level per rank, secondary-skill books and quests), specialization recipes, cooldown recipes (transmutes, Mooncloth), recipes learned at 1 that Wowhead lists at their yellow skill | `RANK_LEVEL`, `RANK_NOTES`, `SPEC_RULES`, `COOLDOWN`, `FROM_START` in `tools/gen_professions.py` (hand lists); yields come from `makes_of` (Wowhead's `[id, min, max]` averaged, never below 1) | Wowhead Classic trainer / quest pages | Edit the lists, re-run the generator. |
+| Vendor-sold reagents and how raw materials are gathered | `VENDOR_ITEMS`, `GATHER_PATTERNS` in `tools/gen_enhancements.py` (hand lists). **`VENDOR_ITEMS` is the only source of a vendor price**: Wowhead's `buyprice` is set on herbs, leathers and raid materials no NPC sells. A recipe pattern gets a price only when Wowhead lists a vendor as its source. | Item pages `https://www.wowhead.com/classic/item=<id>` ("Sold by" / "Gathered from") | Edit the lists, re-run the generator. |
+| New kinds of gear improvement (e.g. a new "Scope"-like item, arcanums, shoulder enchants from reputation) | `ITEM_PATTERNS` in `tools/gen_enhancements.py`; reputation / quest enchants are not covered yet | Wowhead Classic | Add a pattern (and slot rule in `slots_for_item`), re-run. |
+| Notable enemy auras (big cooldowns, crowd control) by spell ID | `NOTABLE` in `Core.lua` | `https://www.wowhead.com/classic/spell=<id>` | Check IDs still exist / names match; add new ones. |
+| Class key spells (range readout) | `CLASS_KEY_SPELLS` in `Core.lua` | `https://www.wowhead.com/classic/spell=<id>` (range) | Check IDs and ranges. |
+| Range-probe items, duel interact range by race | `ns.ITEM_PROBES`, `INTERACT_DUEL_RANGE` in `Core.lua` | Wowhead Classic item pages (range in the tooltip) | Check each ID and its range. |
+| Capital city map IDs (census: allies only counted there) | `CAPITALS` in `Census.lua` | UiMap IDs: `https://wago.tools/db2/UiMap` (Classic Era build) | Check the six IDs. |
+| Auction mail subjects (English: "Outbid", "Auction expired", "Auction cancelled", "Auction successful") | `Economy.DescribeMail` in `Economy.lua` | The game's GlobalStrings (`AUCTION_OUTBID_MAIL_SUBJECT`, `AUCTION_EXPIRED_MAIL_SUBJECT`, ...): `https://www.townlong-yak.com/framexml/live/GlobalStrings.lua` | Prefer the GlobalStrings when present; check the English text. |
+| Zone fishing levels, where each goal fish is caught, goal item / quest IDs, Classic UiMap → area; day/night and seasonal fish, Extravaganza schedule | `FishingData.lua` (generated, never edit by hand) | CMaNGOS Classic DB `https://github.com/cmangos/classic-db` (`skill_fishing_base_level`, fishing / reference loot, items, quests, `game_event`); wago.tools Classic Era `AreaTable`, `UiMapAssignment`; warcraft.wiki.gg fish pages | `python tools/gen_fishing.py --refresh`; the hand lists in the generator carry their sources. Forever may differ (get-away rule, event schedule). |
+| Fishing gear (pole / hat / boots bonus, required skill and level) and lures (bonus, minutes, skill) | `GEAR`, `LURES` in `FishingGear.lua` | `https://nether.wowhead.com/classic/tooltip/item/<id>` | Check each ID's fishing bonus and requirements; add new items. |
+| Lure enchant ID → bonus | `Fishing.LURE_BONUS` in `Fishing.lua` | `https://wago.tools/db2/SpellItemEnchantment` (Classic Era) | Check 263 / 264 / 265 / 266 / 2603. |
+| Fishing pool names (English) | `POOL_NAMES`, `POOL_PATTERNS` in `FishingGear.lua` | `https://www.wowhead.com/classic/objects/fishing-pools` | Compare names; other languages get no pool tag. |
+| Statistic IDs for the Audit page (gold acquired, peak, sources, activity, professions) | `Audit.FIELDS` in `Audit.lua` | `https://wago.tools/db2/Achievement` (Forever build; checked on 1.60.1.70124) | Check each ID's name still matches; update `Audit.DATA_BUILD`. |
+| Alert sounds (SoundKit fallbacks) | `ns.ALERT_SOUNDS` in `Alerts.lua` | `https://wago.tools/db2/SoundKit` | Check the fallback IDs. |
+
+Wowhead Classic is the Classic Era database. WoW Forever is vanilla content on a newer engine and
+may differ (and Wowhead Classic also lists Season of Discovery spells: the generator drops spell IDs
+≥ 40000). When Forever-specific data turns up, prefer it and note where it came from here.

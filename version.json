@@ -1,0 +1,138 @@
+{
+  "version": "0.11.1",
+  "date": "2026-10-07",
+  "history": [
+    {
+      "version": "0.11.1",
+      "date": "2026-10-07",
+      "from": "0.11.0",
+      "note": "Packaging cleanup, credits trimmed"
+    },
+    {
+      "version": "0.11.0",
+      "date": "2026-10-07",
+      "from": "0.10.0",
+      "note": "Renamed to TALOD (code only; folder unchanged)"
+    },
+    {
+      "version": "0.10.0",
+      "date": "2026-10-07",
+      "from": "0.9.5",
+      "note": "Market Bids tab: auctions to bid on under the price"
+    },
+    {
+      "version": "0.9.5",
+      "date": "2026-10-07",
+      "from": "0.9.4",
+      "note": "Listing deposits from the posting log; PostItem quantity = N auctions"
+    },
+    {
+      "version": "0.9.4",
+      "date": "2026-10-07",
+      "from": "0.9.3",
+      "note": "Owned auction buyout is the unit price; old lists dropped"
+    },
+    {
+      "version": "0.9.3",
+      "date": "2026-10-07",
+      "from": "0.9.2",
+      "note": "Owned commodity listings priced per unit"
+    },
+    {
+      "version": "0.9.2",
+      "date": "2026-10-07",
+      "from": "0.9.1",
+      "note": "Craft tracker: recipes learned since the window was read"
+    },
+    {
+      "version": "0.9.1",
+      "date": "2026-10-07",
+      "from": "0.9.0",
+      "note": "Remove sort buttons replaced by column titles"
+    },
+    {
+      "version": "0.9.0",
+      "date": "2026-10-07",
+      "from": "0.8.2",
+      "note": "Market click searches the item on the open Auction House"
+    },
+    {
+      "version": "0.8.2",
+      "date": "2026-10-07",
+      "from": "0.8.1",
+      "note": "Reagent bag counted (bag utils)"
+    },
+    {
+      "version": "0.8.1",
+      "date": "2026-10-07",
+      "from": "0.8.0",
+      "note": "Craft tracker opens on double-click"
+    },
+    {
+      "version": "0.8.0",
+      "date": "2026-10-07",
+      "from": "0.7.0",
+      "note": "Column titles over list columns, click to sort"
+    },
+    {
+      "version": "0.7.0",
+      "date": "2026-10-07",
+      "from": "0.6.0",
+      "note": "Craft tracker window"
+    },
+    {
+      "version": "0.6.0",
+      "date": "2026-10-07",
+      "from": "0.5.0",
+      "note": "Expanded Market Crafting tab"
+    },
+    {
+      "version": "0.5.0",
+      "date": "2026-10-07",
+      "from": "0.4.2",
+      "note": "Craft price on the Market Prices tab"
+    },
+    {
+      "version": "0.4.2",
+      "date": "2026-10-07",
+      "from": "0.4.1",
+      "note": "Replies show outgoing whispers before the echo"
+    },
+    {
+      "version": "0.4.1",
+      "date": "2026-10-06",
+      "from": "0.4.0",
+      "note": "Market: median usual price, overpriced looks marked and left out"
+    },
+    {
+      "version": "0.4.0",
+      "date": "2026-10-06",
+      "from": "0.3.0",
+      "note": "Store.lua: save-file handler, character tags, tamper seal, received-data checks"
+    },
+    {
+      "version": "0.3.0",
+      "date": "2026-10-06",
+      "from": "0.2.2",
+      "note": "Guild Activity tab: guild chat activity for officers"
+    },
+    {
+      "version": "0.2.2",
+      "date": "2026-10-06",
+      "from": "0.2.1",
+      "note": "Frame cost: sliced scans, shared tick reads, player-only unit events"
+    },
+    {
+      "version": "0.2.1",
+      "date": "2026-10-06",
+      "from": "0.2.0",
+      "note": "Recruit click redraw: guild read once, not per player"
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-10-06",
+      "from": "0.1.0",
+      "note": "Everything since the first build: guild, audit, fishing, market, shared tooltips, version tracking"
+    }
+  ]
+}
