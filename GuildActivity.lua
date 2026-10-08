@@ -281,10 +281,9 @@ function Activity.Members(filter, window)
             end
         end
     end
-    table.sort(out, function(a, b)
-        if a.chat.status ~= b.chat.status then return ORDER[a.chat.status] < ORDER[b.chat.status] end
-        if (a.m.rank or 99) ~= (b.m.rank or 99) then return (a.m.rank or 99) < (b.m.rank or 99) end
-        return a.full < b.full
+    -- Status, rank, then name (a text key: one C sort for hundreds of members).
+    ns.Utils.SortBy(out, function(x)
+        return string.format("%03d%03d", ORDER[x.chat.status] or 99, x.m.rank or 99) .. x.full
     end)
     return out, counts
 end

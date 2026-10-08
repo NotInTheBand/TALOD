@@ -46,11 +46,18 @@ local MAX_TIERS = 30         -- price tiers kept per ladder (a full scan writes 
 
 local function db() return ns.DB() end
 
+-- Kept once both parts are read: a character's realm and faction do not
+-- change in a session, and every price lookup (tens of thousands in a
+-- profession plan or the Deals list) asks for it.
+local realmKey
 function Prices.RealmKey()
+    if realmKey then return realmKey end
     local realm = S.Call(GetRealmName)
     local faction = S.Call(UnitFactionGroup, "player")
     if type(realm) ~= "string" then return nil end
-    return realm .. "-" .. (type(faction) == "string" and faction or "?")
+    if type(faction) ~= "string" then return realm .. "-?" end
+    realmKey = realm .. "-" .. faction
+    return realmKey
 end
 
 local function Realm(create)
@@ -97,6 +104,63 @@ end
 -- Bump and the windows are told once (Data.Notify) when the batch is in.
 local function Bumped() ns.Data.Bump("prices") end
 
+-- Earlier looks (`h`): one string, oldest first, "t:p:n:a:c:b" per look
+-- joined by ",", empty for nil. A full scan writes thousands of items with
+-- up to MAX_HISTORY looks each; as tables (one per look) they were most of
+-- the price data's memory. Saved tables from before (Store v3 packs them)
+-- are still read.
+local function Field(x) return x == nil and "" or tostring(x) end
+local function LookText(t, p, n, a, c, b)
+    return Field(t) .. ":" .. Field(p) .. ":" .. Field(n) .. ":" .. Field(a) .. ":" .. Field(c) .. ":" .. Field(b)
+end
+
+local function LookOf(text)
+    local t, p, n, a, c, b = text:match("^([^:]*):([^:]*):([^:]*):([^:]*):([^:]*):([^:]*)$")
+    if not t then return nil end
+    return { t = tonumber(t), p = tonumber(p), n = tonumber(n), a = tonumber(a), c = tonumber(c), b = tonumber(b) }
+end
+
+-- { { t, p, n, a, c, b } } of an entry's earlier looks, oldest first (new tables: the caller may keep them).
+function Prices.Looks(e)
+    local h, out = e and e.h, {}
+    if type(h) == "string" then
+        for text in h:gmatch("[^,]+") do
+            local look = LookOf(text)
+            if look and look.t and look.p then out[#out + 1] = look end
+        end
+    elseif type(h) == "table" then
+        for _, x in ipairs(h) do
+            if type(x) == "table" then out[#out + 1] = { t = x[1], p = x[2], n = x[3], a = x[4], c = x[5], b = x[6] } end
+        end
+    end
+    return out
+end
+
+-- The string form of a list of looks (nil when empty).
+function Prices.PackLooks(looks)
+    local parts = {}
+    for i, x in ipairs(looks) do parts[i] = LookText(x.t, x.p, x.n, x.a, x.c, x.b) end
+    return #parts > 0 and table.concat(parts, ",") or nil
+end
+
+-- Every old table history of a `prices` store packed (Store migration v3).
+function Prices.PackStore(d)
+    for _, realm in pairs(type(d) == "table" and d or {}) do
+        for _, e in pairs(type(realm) == "table" and realm or {}) do
+            if type(e) == "table" and type(e.h) == "table" then e.h = Prices.PackLooks(Prices.Looks(e)) end
+        end
+    end
+end
+
+local function AddLook(h, e)
+    if type(h) == "table" then h = Prices.PackLooks(Prices.Looks({ h = h })) end
+    local text = LookText(e.t, e.p, e.n, e.a, e.c, e.b)
+    h = (h and h ~= "") and (h .. "," .. text) or text
+    local _, commas = h:gsub(",", ",")
+    for _ = 1, commas + 1 - MAX_HISTORY do h = h:gsub("^[^,]*,", "", 1) end
+    return h
+end
+
 -- One sighting: `unit` copper each, `qty` units in `auctions` auctions.
 -- rough: the price comes from a browse row (not checked per unit).
 function Prices.Record(id, unit, qty, now, auctions, name, rough)
@@ -118,14 +182,13 @@ function Prices.Record(id, unit, qty, now, auctions, name, rough)
         if not rough then e.b = nil end
         return e
     end
-    local h = e and e.h or {}
+    local h = e and e.h
     local d = e and e.d
     if e then
-        h[#h + 1] = { e.t, e.p, e.n, e.a, e.c, e.b }
-        while #h > MAX_HISTORY do table.remove(h, 1) end
+        h = AddLook(h, e)
         d = FoldDay(d, e.t, e.p, e.n)
     end
-    e = { p = unit, t = now, n = qty or 0, a = auctions, name = name, h = #h > 0 and h or nil, d = d, c = ns.Store.Me(),
+    e = { p = unit, t = now, n = qty or 0, a = auctions, name = name, h = h, d = d, c = ns.Store.Me(),
         b = rough and 1 or nil }
     realm[id] = e
     return e
@@ -167,14 +230,40 @@ end
 -- An item's price over time, oldest first. mode "looks": every look kept
 -- ({ t, p, n, a, c = the character that looked, b = browse only }); "days": one point per day ({ t (noon), day, p = lowest,
 -- hi = highest, n = most units listed }) from the daily summary and the looks.
+-- Looks the cleanup moved to the archive (Archive.lua), when it is loaded:
+-- trimmed history, and whole entries of items not seen for months.
+local function ArchivedLooks(id, into)
+    local A = ns.Archive
+    local realm = Prices.RealmKey()
+    if not (A and realm and A.Loaded()) then return nil end
+    local key = realm .. "/" .. tostring(id)
+    local days
+    for _, v in ipairs(A.Lookup("priceHistory", key)) do
+        for _, x in ipairs(Prices.Looks({ h = v })) do into[#into + 1] = x end
+    end
+    for _, v in ipairs(A.Lookup("priceUnseen", key)) do
+        local f = ns.Store.SplitList(v, ";")
+        local U = ns.Store.UnpackValue
+        for _, x in ipairs(Prices.Looks({ h = U(f[7] or "") })) do into[#into + 1] = x end
+        local p, t = U(f[1] or ""), U(f[2] or "")
+        if type(p) == "number" and type(t) == "number" then into[#into + 1] = { t = t, p = p, n = U(f[3] or ""), a = U(f[4] or ""), c = U(f[6] or "") } end
+        days = U(f[8] or "") or days
+    end
+    return days
+end
+
 function Prices.History(id, mode)
     local e = Prices.Entry(id)
-    if not e then return {} end
+    local old = {}
+    local oldDays = ArchivedLooks(id, old)
+    if not e and #old == 0 then return {} end
     local looks = {}
-    for _, h in ipairs(e.h or {}) do looks[#looks + 1] = { t = h[1], p = h[2], n = h[3], a = h[4], c = h[5], b = h[6] and true or nil } end
-    looks[#looks + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, c = e.c, b = e.b and true or nil }
+    for _, x in ipairs(old) do looks[#looks + 1] = { t = x.t, p = x.p, n = x.n, a = x.a, c = x.c, b = x.b and true or nil } end
+    for _, x in ipairs(e and Prices.Looks(e) or {}) do looks[#looks + 1] = { t = x.t, p = x.p, n = x.n, a = x.a, c = x.c, b = x.b and true or nil } end
+    if e then looks[#looks + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, c = e.c, b = e.b and true or nil } end
+    if #old > 0 then table.sort(looks, function(a, b) return a.t < b.t end) end
     if mode ~= "days" then return looks end
-    local days = ParseDays(e.d)
+    local days = ParseDays(e and e.d or oldDays)
     for _, pt in ipairs(looks) do
         local day = math.floor(pt.t / 86400)
         local x = days[day]
@@ -847,6 +936,68 @@ local function Slash(command, rest)
     if ns.MarketUI then ns.MarketUI.Show("prices", rest) end
     return true
 end
+
+---------------------------------------------------------------------------
+-- Cleanup rules
+---------------------------------------------------------------------------
+-- Earlier looks older than the cutoff (`h` is in time order). The daily
+-- summary `d` keeps the graph's long view.
+-- keep (archive): key "Realm-Faction/itemID", value the removed looks (same string form as `h`).
+local function TrimHistory(cutoff, apply, keep)
+    local n = 0
+    for rkey, realm in pairs(db().prices or {}) do
+        for id, e in pairs(realm) do
+            if type(e) == "table" and e.h then
+                local looks, kept, gone = Prices.Looks(e), {}, {}
+                for _, x in ipairs(looks) do
+                    if x.t < cutoff then n = n + 1 gone[#gone + 1] = x else kept[#kept + 1] = x end
+                end
+                if apply and #kept < #looks then
+                    if keep then keep(rkey .. "/" .. tostring(id), Prices.PackLooks(gone)) end
+                    e.h = Prices.PackLooks(kept)
+                end
+            end
+        end
+    end
+    return n
+end
+
+-- An item last seen before the cutoff: its price, ladder and bids go
+-- together (a newer ladder or bid look keeps its own entry).
+-- keep (archive): the price entry only (ladders and bids are the newest
+-- look, not history): key "Realm-Faction/itemID", value "p;t;n;a;name;c;h;d".
+local function DropUnseen(cutoff, apply, keep)
+    local n = 0
+    for _, key in ipairs({ "prices", "ladders", "ahBids" }) do
+        for rkey, realm in pairs(db()[key] or {}) do
+            local gone
+            for id, e in pairs(realm) do
+                if type(e) == "table" and (tonumber(e.t) or 0) < cutoff then
+                    if key == "prices" then n = n + 1 end
+                    if apply then
+                        gone = gone or {}
+                        gone[#gone + 1] = id
+                        if keep and key == "prices" then
+                            local h = type(e.h) == "string" and e.h or Prices.PackLooks(Prices.Looks(e))
+                            keep(rkey .. "/" .. tostring(id), ns.Store.PackList({ e.p, e.t, e.n, e.a, e.name, e.c, h,
+                                type(e.d) == "string" and e.d or nil }, 8, ";"))
+                        end
+                    end
+                end
+            end
+            for _, id in ipairs(gone or {}) do realm[id] = nil end
+        end
+    end
+    return n
+end
+
+ns.Cleanup.Add({ id = "priceHistory", label = "Price history", source = "prices",
+    desc = "Each earlier Auction House look at an item (price, units listed). The latest look and the daily summary "
+        .. "behind the price graph are kept.",
+    days = 60, min = 15, max = 360, step = 15, archive = true, run = TrimHistory })
+ns.Cleanup.Add({ id = "priceUnseen", label = "Items not seen on the Auction House", source = "prices",
+    desc = "Every price, price ladder and bid of an item you have not seen listed for this long.",
+    days = 180, min = 30, max = 720, step = 30, archive = true, run = DropUnseen })
 
 ns.RegisterModule("Prices", {
     defaults = { auctionPrices = true, prices = {}, ladders = {}, ahOwned = {}, ahBids = {} },

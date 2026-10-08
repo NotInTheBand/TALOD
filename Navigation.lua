@@ -48,28 +48,108 @@ end
 
 -- module: the ns field whose Show opens the page; a page whose module did not
 -- load is left out of the rail and the menu.
+-- desc: two lines at most on a menu tile at the smallest window size (~110
+-- characters). tabs: { tab, what it shows } for the tooltip, in tab order.
 local PAGES = {
     { key = "home", label = "Main menu", icon = "Interface\\Icons\\Ability_DualWield",
+        desc = "Every page at a glance, and the Enemies nearby panel switch.",
         open = function() Nav.ShowMenu() end },
     { key = "character", label = "Character", module = "GearUI", icon = "Interface\\Icons\\INV_Chest_Chain",
-        desc = "Gear compare, ledger, skills, professions and crafting." },
+        desc = "What you wore and what each change did to your stats, plus skills, professions and what to craft next.",
+        tabs = {
+            { "Gear", "your gear now beside an earlier set" },
+            { "Ledger", "every change with its measured effect" },
+            { "Progress", "your stats level by level" },
+            { "Sources", "where each item came from" },
+            { "Skills", "skill-ups, training and ranks" },
+            { "Enhance", "enchants that fit each item, and their reagents" },
+            { "Professions", "cheapest path to the next skill points" },
+            { "Crafting", "everything you made, and when" },
+        } },
     { key = "economy", label = "Economy", module = "EconomyUI", icon = "Interface\\Icons\\INV_Misc_Coin_01",
-        desc = "Money in and out: vendors, repairs, loot, mail, trades, per character." },
+        desc = "Where your gold comes from and where it goes: vendors, repairs, loot, quests, mail, trades and auctions.",
+        tabs = {
+            { "Overview", "totals by source and by day" },
+            { "Transactions", "every money change and the window it came from" },
+            { "Auctions", "what you listed, what sold, what came back" },
+            { "Trades", "trades with other players" },
+        } },
     { key = "market", label = "Market", module = "MarketUI", icon = "Interface\\Icons\\INV_Misc_Coin_02",
-        desc = "Auction prices you have seen, what to sell, crafting profit, deals." },
+        desc = "Auction prices you've seen and how they move: what to sell or vendor, which crafts pay, what's cheap now.",
+        tabs = {
+            { "Prices", "an item's price, supply and graph" },
+            { "Sell", "your bags: Auction House or vendor" },
+            { "Crafting", "material cost against selling price" },
+            { "Deals", "listings under the usual price" },
+            { "Bids", "bids under the buyout, time left" },
+            { "Sell-through", "how fast items really sell" },
+        } },
     { key = "desk", label = "Auction desk", module = "AuctionDeskUI", icon = "Interface\\Icons\\INV_Scroll_03",
-        desc = "Your listings and undercuts, margins, who holds the supply." },
+        desc = "Your listings against the market: who undercut you, where the margins are, what buying out a price costs.",
+        tabs = {
+            { "Overview", "your listings, best resets, deals" },
+            { "Listings", "each listing: lowest or undercut" },
+            { "Deals", "cheap buys and the supply behind them" },
+            { "Margins", "crafts and resale after the cut" },
+            { "Control", "cost to own an item's supply and relist" },
+        } },
     { key = "fishing", label = "Fishing", module = "FishingUI", icon = "Interface\\Icons\\Trade_Fishing",
-        desc = "Fishing log, spots, heat map, goals and sessions." },
+        desc = "Every cast logged: the best spots for your skill, gold per hour, rare fish still to catch, and the HUD.",
+        tabs = {
+            { "Now", "this session and this spot" },
+            { "Spots", "spots ranked by gold, catch rate or safety" },
+            { "Map", "heat map of where you fished" },
+            { "Log", "every cast and what it gave" },
+            { "Sessions", "each trip: casts, value, attacks" },
+            { "Goals", "rare and quest fish, timed catches" },
+        } },
     { key = "guild", label = "Guild", module = "GuildUI", icon = "Interface\\Icons\\INV_Banner_02",
-        desc = "Recruiting, replies, roster, promotions and the guild log." },
+        desc = "Find unguilded players, invite them in one click, follow replies, and keep track of members and promotions.",
+        tabs = {
+            { "Recruit", "players without a guild you have seen" },
+            { "Invited", "who joined, declined or didn't answer" },
+            { "Replies", "whisper conversations with recruits" },
+            { "Roster", "members, last online, inactivity" },
+            { "Activity", "who talks and who is online (officers)" },
+            { "Recruiters", "who brought whom, and who stayed" },
+            { "Promotions", "members your rules say are due" },
+            { "Log", "joins, leaves, kicks and rank changes" },
+            { "Members", "what members chose to share" },
+            { "Sharing", "what you share with officers" },
+        } },
     { key = "audit", label = "Audit", module = "AuditUI", icon = "Interface\\Icons\\INV_Misc_Spyglass_02",
-        desc = "Members' gold and activity statistics; flags worth a look for bought gold." },
+        desc = "Gold and activity from the game's statistics, for you and members who share: flags gold that looks bought.",
+        tabs = {
+            { "Members", "your roster and what is known of each" },
+            { "Flags", "records worth a look" },
+            { "Characters", "every record you hold" },
+            { "Ledger", "income, spending and activity of one" },
+            { "History", "every look, with the change since the last" },
+        } },
+    { key = "groups", label = "Groups", module = "GroupsUI", icon = "Interface\\Icons\\Ability_Warrior_BattleShout",
+        desc = "Every party and raid you were in: who was there, where, for how long, deaths, the group's chat and loot.",
+        tabs = {
+            { "Now", "the group you are in, live" },
+            { "Parties", "past parties" },
+            { "Raids", "past raids" },
+            { "Group", "one group in full" },
+        } },
     { key = "settings", label = "Settings", module = "Options", icon = "Interface\\Icons\\INV_Misc_Gear_01",
-        desc = "Alerts, safety, panel, journal, census and every other option.",
+        desc = "The Enemies nearby panel, nameplates, alerts, PvP safety, stealth, the enemy journal, and every page's options.",
+        tabs = {
+            { "General", "panel and nameplate badges" },
+            { "Alerts", "when an enemy alert fires, and how" },
+            { "Safety", "PvP flag, flagging warnings, contested zones" },
+            { "Stealth", "alert when a stealther vanishes nearby" },
+            { "Journal", "enemies seen, kill-on-sight and avoid lists" },
+            { "Census", "the player census and heat maps" },
+            { "Data", "cleanup, archive and memory" },
+            { "Advanced", "probe, error log and saved data" },
+            { "And more", "one tab per page: Character, Fishing, Guild..." },
+        },
         open = function() ns.Options.Open() end },
     { key = "credits", label = "Credits", module = "Credits", icon = "Interface\\Icons\\INV_Misc_Note_01",
-        desc = "Who made " .. ns.NAME .. ", the Discord invite and how to send gold." },
+        desc = "Who made " .. ns.NAME .. ", the Discord for questions, bug reports and ideas, and how to send gold." },
 }
 Nav.PAGES = PAGES
 
@@ -140,6 +220,18 @@ end
 ---------------------------------------------------------------------------
 -- The rail
 ---------------------------------------------------------------------------
+-- The page's description, then what each of its tabs shows.
+function Nav.PageTip(owner, page, anchor)
+    local t = ns.Tooltip.Open(owner, anchor)
+    t:Title(page.label)
+    t:Line(page.desc)
+    if page.tabs then
+        t:Blank()
+        for _, tab in ipairs(page.tabs) do t:Pair(tab[1], tab[2], "muted") end
+    end
+    return t:Show()
+end
+
 local function RailButton(rail, page, index)
     local b = CreateFrame("Button", nil, rail)
     b:SetSize(RAIL_WIDTH - 12, ROW_HEIGHT)
@@ -163,7 +255,7 @@ local function RailButton(rail, page, index)
     hl:SetAllPoints()
     b:SetScript("OnClick", function() Nav.Open(page.key) end)
     if page.desc then
-        b:SetScript("OnEnter", function(self) ns.Tooltip.Text(self, { page.label, page.desc }) end)
+        b:SetScript("OnEnter", function(self) Nav.PageTip(self, page, "ANCHOR_RIGHT") end)
         b:SetScript("OnLeave", function() ns.Tooltip.Hide() end)
     end
     b.key = page.key
@@ -267,10 +359,14 @@ local function Tile(parent, page, width)
     t.desc:SetText(page.desc or "")
     local hl = Style.Texture(t, "HIGHLIGHT", { 1, 1, 1, 0.04 })
     hl:SetAllPoints()
-    t:SetScript("OnEnter", function(self) self:SetBorderColor(COLORS.accent[1], COLORS.accent[2], COLORS.accent[3], 0.9) end)
+    t:SetScript("OnEnter", function(self)
+        self:SetBorderColor(COLORS.accent[1], COLORS.accent[2], COLORS.accent[3], 0.9)
+        if page.tabs then Nav.PageTip(self, page, "ANCHOR_RIGHT") end
+    end)
     t:SetScript("OnLeave", function(self)
         local c = COLORS.cardBorder
         self:SetBorderColor(c[1], c[2], c[3], c[4])
+        ns.Tooltip.HideFor(self)
     end)
     t:SetScript("OnClick", function() Nav.Open(page.key) end)
     t.key = page.key

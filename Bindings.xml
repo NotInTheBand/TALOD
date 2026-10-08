@@ -1,0 +1,10 @@
+<!-- The game reads this file from the addon folder by itself (no TOC entry);
+     a new or renamed binding needs a full game restart. Names follow Brand.lua:
+     the binding is ns.BINDING_STEP, the header ns.NAME:upper(), the frame
+     ns.FRAME .. "RecruitStep" (Guild.lua). A key press runs it, so the game
+     takes the guild invite and /who it may send: one step per press. -->
+<Bindings>
+    <Binding name="TALOD_RECRUIT_STEP" header="TALOD" category="ADDONS">
+        if TALODRecruitStep then TALODRecruitStep:Click() end
+    </Binding>
+</Bindings>

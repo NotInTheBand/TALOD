@@ -95,9 +95,37 @@ local TINT_NEW = { 0.55, 0.55, 0.55, 0.14 }
 local TINT_READY = { 0.85, 0.18, 0.18, 0.38 }
 UI.TINT_NEW, UI.TINT_READY = TINT_NEW, TINT_READY
 
+-- Why an invite waits in the queue (Guild.InviteWhy), in words for tooltips.
+local WHY = {
+    delay = "Delayed invite: your message went out, and the invite waits 10 s so they can read it first.",
+    inclick = "The invite did not go in the click that sent your message, so it waits here until the message is out.",
+    failed = "The game did not accept the invite when you clicked, so it waits here for your next click or key press.",
+    blocked = "The game blocked this invite from %s: it takes an invite only from a real click or key press, and "
+        .. "it did not count that one. It waits here for your click, the Next invite button or your key binding.",
+    nowhisper = "Your message could not go out (the game refused it), so the invite does not wait for it.",
+    reload = "Left from before your last reload: your message went out, the invite never did.",
+    message = "Waits for your message to go out first (the game sends about one whisper a second).",
+}
+function UI.WhyText(why, full)
+    local text = WHY[why] or "Waits for your click."
+    if why == "blocked" then text = text:format(Guild.SourceName(Guild.HandsFreeBlockedFor(full) or "mouse")) end
+    return text
+end
+
+-- Where the recruit key binding is: its key, or how to bind it.
+function UI.StepKeyText()
+    local key = Guild.StepKey()
+    if key then
+        return "Your recruit key (" .. HEX.white .. key .. "|r) does one step too: the next invite, else /who, else a whisper. "
+            .. "Right-click Next invite to change it."
+    end
+    return "No recruit key yet: right-click Next invite (or " .. ns.Cmd.Text("guild", "key") .. ") and press a key or mouse "
+        .. "button. One press = the next invite, else /who, else a whisper."
+end
+
 -- What a left-click on a recruit row does, for its tooltip.
-local function ClickText(ready)
-    if ready then return HEX.white .. "Left-click|r: send the guild invite (your message went out)." end
+local function ClickText(ready, full)
+    if ready then return HEX.white .. "Left-click|r: send the guild invite now (your message went out)." end
     if not db().guildWhisper or not Guild.CurrentMessage() then return HEX.white .. "Left-click|r: send the guild invite." end
     if db().guildDelayedInvite ~= false then
         return HEX.white .. "Left-click|r: whisper your message. They come back here in red once they had time to read it: "
@@ -111,7 +139,14 @@ end
 -- list from Guild.Candidates when the redraw already has it.
 function UI.CandidateRows(compact, cands)
     local rows, now = {}, GetTime()
-    for _, cand in ipairs(cands or Guild.Candidates()) do
+    cands = cands or Guild.Candidates()
+    local queued, place = 0, 0
+    for _, cand in ipairs(cands) do if cand.ready then queued = queued + 1 end end
+    for _, cand in ipairs(cands) do
+        if cand.ready then
+            place = place + 1
+            cand.place, cand.queued = place, queued
+        end
         local cc = cand
         local src = cand.src == "who" and "/who" or cand.src
         local seen = cand.here and (HEX.good .. "here|r") or (HEX.muted .. ns.FormatAge(now - cand.last) .. (compact and "" or " ago") .. "|r")
@@ -126,11 +161,24 @@ function UI.CandidateRows(compact, cands)
             accent = cand.here and COLORS.accent or nil,
             search = Guild.Short(cand.full) .. " " .. (cand.classFile and ns.ClassName(cand.classFile) or "") .. " " .. (cand.zone or ""),
             tooltip = function(owner)
-                ns.Tooltip.Text(owner, { Guild.Short(cc.full) .. (cc.level and ("  level " .. cc.level) or ""),
-                    (cc.race and (cc.race .. " ") or "") .. (cc.classFile and ns.ClassName(cc.classFile) or ""),
-                    "Seen: " .. (cc.src == "who" and "/who" or tostring(cc.src)) .. (cc.zone and (", " .. cc.zone) or ""),
-                    ClickText(cc.ready),
-                    HEX.white .. "Right-click|r: never offer this player again." })
+                local t = ns.Tooltip.Open(owner)
+                t:Title(Guild.Short(cc.full) .. (cc.level and ("  level " .. cc.level) or ""))
+                t:Line((cc.race and (cc.race .. " ") or "") .. (cc.classFile and ns.ClassName(cc.classFile) or ""), "muted")
+                t:Pair("Seen", (cc.src == "who" and "/who" or tostring(cc.src)) .. (cc.zone and (", " .. cc.zone) or ""))
+                if cc.ready then
+                    local why, since = Guild.InviteWhy(cc.full)
+                    t:Blank()
+                    t:Pair("Invite queue", cc.place and (cc.place .. " of " .. cc.queued .. " ready") or "ready")
+                    if since and since > 0 and why ~= "reload" then t:Pair("Waiting", ns.FormatAge(since)) end
+                    t:Line(UI.WhyText(why or cc.why, cc.full), why == "blocked" and "bad" or nil)
+                    t:Note("Invites go one per click or key press, oldest first: this row, the Next invite button or your key binding.")
+                elseif db().guildHandsFree then
+                    t:Note("Hands Free: your next world click or move key whispers the next player on this list.")
+                end
+                t:Blank()
+                t:Line(ClickText(cc.ready, cc.full))
+                t:Line(HEX.white .. "Right-click|r: never offer this player again.")
+                t:Show()
             end,
         }
     end
@@ -146,6 +194,77 @@ local DELAYED_TIP = "On: the first click whispers your message and takes the pla
     .. "10 s after it went out they come back in red, and the second click sends the guild invite "
     .. "(the game takes an invite only from a click). Off: message and invite in one click."
 
+-- The Hands Free toggle (Recruit tab and the mini window).
+local function ToggleHandsFree()
+    Guild.SetHandsFree(not db().guildHandsFree)
+end
+local function HandsFreeTip()
+    local lines = {
+        "On: a left- or right-click on the open world (not on a window, a player or an NPC)"
+            .. (db().guildHandsFreeKeys ~= false and ", or a press of a key bound to moving or jumping (WASD, Space)," or "")
+            .. " counts as a click here: the next queued invite, else a /who once the /who button's wait is over, "
+            .. "else a whisper to the next player. One action per click, never on its own. Paused in combat.",
+    }
+    if db().guildHandsFree then
+        local why = Guild.HandsFreeBlocked()
+        lines[#lines + 1] = why and (HEX.gold .. "Paused now: " .. why .. ".|r") or (HEX.good .. "On.|r")
+        local left = {}
+        for key in pairs(Guild.LeftAlone()) do
+            local source, kind = key:match("^(%w+):(%w+)$")
+            left[#left + 1] = (kind == "who" and "/who" or "invites") .. " from " .. Guild.SourceName(source)
+        end
+        table.sort(left)
+        if #left > 0 then
+            lines[#lines + 1] = HEX.gold .. "The game does not take " .. table.concat(left, ", ")
+                .. " on this client, so those wait for a real click (until you reload).|r"
+        end
+        local presses = Guild.HandsFreePresses()
+        local last = presses[#presses]
+        if last then lines[#lines + 1] = "Last: " .. tostring(last.result) .. ", " .. ns.FormatAge(GetTime() - last.t) .. " ago." end
+    end
+    lines[#lines + 1] = UI.StepKeyText()
+    lines[#lines + 1] = HEX.muted .. "What each click did: " .. ns.Cmd.Text("guild", "handsfree why") .. "|r"
+    return lines
+end
+local HANDS_FREE_TIP = HandsFreeTip
+
+-- The Next invite button: sends the oldest ready invite in the queue.
+-- Left-click: the next invite. Right-click: set the recruit key.
+local function NextInvite(_, button)
+    if button == "RightButton" then Guild.CatchStepKey() return end
+    if not Guild.InviteNext() then UI.Refresh() end
+end
+local function NextLabel(short, n)
+    if n == 0 then return short and "Next" or "Next invite" end
+    return (short and "Next " or "Next invite ") .. "(" .. n .. ")"
+end
+local function NextTip()
+    local q = Guild.InviteQueue()
+    local lines = {}
+    local list = Guild.Candidates()
+    local first
+    for _, c in ipairs(list) do
+        if c.ready then first = c break end
+    end
+    if q.ready > 0 and first then
+        lines[#lines + 1] = "Sends the oldest ready invite: " .. HEX.white .. Guild.Short(first.full) .. "|r."
+    else
+        lines[#lines + 1] = "No invite is ready right now."
+    end
+    lines[#lines + 1] = string.format("Ready: %d%s.", q.ready,
+        q.blocked > 0 and string.format(" (%d blocked from Hands Free, waiting for a real click)", q.blocked) or "")
+    for i, s in ipairs(q.soon) do
+        if i > 3 then lines[#lines + 1] = string.format("  +%d more soon", #q.soon - 3) break end
+        lines[#lines + 1] = string.format("  %s: ready in %d s (delayed invite)", Guild.Short(s.full), math.ceil(s["in"]))
+    end
+    if q.message > 0 then lines[#lines + 1] = string.format("Waiting for their message to go out first: %d.", q.message) end
+    lines[#lines + 1] = HEX.muted .. "One invite per click, oldest first. The game takes a guild invite only from a click or "
+        .. "key press, so queued invites never go on their own.|r"
+    lines[#lines + 1] = UI.StepKeyText()
+    return lines
+end
+UI.NextTip = NextTip
+
 local function OnCandidateClick(item, button)
     if not item.full then return end
     -- Invite and Skip redraw the guild windows themselves when something changed.
@@ -160,12 +279,11 @@ local function BuildRecruit(parent)
     v.card:SetPoint("BOTTOMLEFT")
     v.card:SetWidth(540)
     v.card.sub:SetText("Left-click: whisper (then click the red row: invite).  Right-click: never offer again.")
-    v.miniToggle = Style.Button(v.card, "", 120, function()
+    v.miniToggle = Style.Button(v.card.content, "", 120, function()
         db().guildMiniShown = not db().guildMiniShown
         ns.Refresh()
     end, "A small window with this list that stays on your screen (drag it anywhere). Same clicks as here.",
         { title = "Mini recruit window", height = 20 })
-    v.miniToggle:SetPoint("TOPRIGHT", -8, -8)
 
     local bar = CreateFrame("Frame", nil, v.card.content)
     bar:SetPoint("TOPLEFT", 6, -4)
@@ -183,23 +301,29 @@ local function BuildRecruit(parent)
         db().guildWhoZone = not db().guildWhoZone
         UI.Refresh()
     end, "Search only the zone you are in, or every zone.", { title = "/who where" })
-    v.zone:SetPoint("LEFT", v.delayed, "RIGHT", 6, 0)
-    v.plates = Style.Button(bar, "Friendly nameplates", 130, function()
+    v.handsFree = Style.Button(bar, "", 110, ToggleHandsFree, HANDS_FREE_TIP, { title = "Hands Free" })
+    v.handsFree:SetPoint("LEFT", v.delayed, "RIGHT", 6, 0)
+    v.zone:SetPoint("LEFT", v.handsFree, "RIGHT", 6, 0)
+    v.plates = Style.Button(v.card.content, "Friendly nameplates", 130, function()
         if ns.Census then ns.Census.ShowFriendlyPlates() end
         UI.Refresh()
-    end, "Players of your faction are only seen through friendly nameplates (often off in cities), your target and your mouseover.")
-    v.plates:SetPoint("LEFT", v.zone, "RIGHT", 6, 0)
+    end, "Players of your faction are only seen through friendly nameplates (often off in cities), your target and your mouseover.", { height = 20 })
+    v.next = Style.Button(v.card.content, "", 110, NextInvite, NextTip, { title = "Next invite", height = 20 })
+    -- A second row under the toggles: in the card's header they covered its subtitle.
+    v.next:SetPoint("TOPLEFT", v.who, "BOTTOMLEFT", 0, -4)
+    v.miniToggle:SetPoint("LEFT", v.next, "RIGHT", 6, 0)
+    v.plates:SetPoint("LEFT", v.miniToggle, "RIGHT", 6, 0)
     v.status = Style.Text(v.card.content, "GameFontDisableSmall")
-    v.status:SetPoint("TOPLEFT", 8, -32)
+    v.status:SetPoint("TOPLEFT", 8, -56)
     v.status:SetPoint("RIGHT", -8, 0)
 
     -- Filters: level range (shared with /who and the settings page) and classes.
     local filters = CreateFrame("Frame", nil, v.card.content)
-    filters:SetPoint("TOPLEFT", 6, -50)
-    filters:SetPoint("TOPRIGHT", -6, -50)
+    filters:SetPoint("TOPLEFT", 6, -74)
+    filters:SetPoint("TOPRIGHT", -6, -74)
     filters:SetHeight(20)
     local function LevelButton(key, other, isMin)
-        return Style.Button(filters, "", 62, function(_, button)
+        return Style.Button(filters, "", 56, function(_, button)
             local d = db()
             local step = (IsShiftKeyDown and IsShiftKeyDown()) and 10 or 1
             local cap = Guild.MaxLevel()
@@ -222,7 +346,7 @@ local function BuildRecruit(parent)
     v.classChips = {}
     local prev = v.maxLevel
     for _, classFile in ipairs(Guild.Classes()) do
-        local chip = Style.Button(filters, SHORT[classFile], 44, function(_, button)
+        local chip = Style.Button(filters, SHORT[classFile], 40, function(_, button)
             local hidden = db().guildRecruitHideClass
             if button == "RightButton" then
                 -- Only this class; again on the same class: all of them.
@@ -243,7 +367,7 @@ local function BuildRecruit(parent)
     end
 
     local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -74)
+    holder:SetPoint("TOPLEFT", 0, -98)
     holder:SetPoint("BOTTOMRIGHT")
     v.list = Style.List(holder, { labelWidth = 26, colWidths = { 70, 64 }, search = true, hint = "Search names, classes, zones...",
         onClick = OnCandidateClick })
@@ -252,7 +376,7 @@ local function BuildRecruit(parent)
     -- Whisper message editor.
     v.msg = Style.Card(v, "Whisper message")
     v.msg:SetPoint("TOPLEFT", v.card, "TOPRIGHT", 10, 0)
-    v.msg:SetPoint("BOTTOMRIGHT")
+    v.msg:SetPoint("RIGHT")
     local c = v.msg.content
     v.toggle = Style.Button(c, "", 130, function()
         db().guildWhisper = not db().guildWhisper
@@ -290,7 +414,7 @@ local function BuildRecruit(parent)
     local area = CreateFrame("Frame", nil, c)
     area:SetPoint("TOPLEFT", 6, -62)
     area:SetPoint("RIGHT", -6, 0)
-    area:SetHeight(120)
+    area:SetHeight(96)
     local bg = Style.Texture(area, "BACKGROUND", COLORS.button)
     bg:SetAllPoints()
     Style.Border(area, COLORS.border)
@@ -325,6 +449,26 @@ local function BuildRecruit(parent)
     v.help:SetText("Fills in: {name} {first} {guild} {class} {level} {zone} {me}. At most 255 letters. "
         .. "Mass whispers get reported as spam: invite people you actually met.")
 
+    -- Name alphabets: hide players whose names use another writing system.
+    v.abc = Style.Card(v, "Name alphabets")
+    v.abc:SetPoint("BOTTOMLEFT", v.card, "BOTTOMRIGHT", 10, 0)
+    v.abc:SetPoint("BOTTOMRIGHT")
+    v.abc:SetHeight(128)
+    v.msg:SetPoint("BOTTOM", v.abc, "TOP", 0, 10)
+    v.scriptChips = {}
+    local COLS, CHIP_W = 4, 66
+    for i, s in ipairs(Guild.SCRIPTS) do
+        local chip = Style.Button(v.abc.content, s.short, CHIP_W, function()
+            local d = db()
+            if type(d.guildRecruitHideScript) ~= "table" then d.guildRecruitHideScript = {} end
+            d.guildRecruitHideScript[s.id] = not d.guildRecruitHideScript[s.id] or nil
+            ns.Refresh()
+        end, "Click: show or hide players whose names are written in it.", { title = s.label, height = 20 })
+        chip:SetPoint("TOPLEFT", 6 + ((i - 1) % COLS) * (CHIP_W + 4), -4 - math.floor((i - 1) / COLS) * 24)
+        chip.script = s.id
+        v.scriptChips[#v.scriptChips + 1] = chip
+    end
+
     function v:Preview()
         local text = Guild.CurrentMessage()
         self.count:SetText(HEX.muted .. #(text or "") .. " / 255|r")
@@ -347,6 +491,13 @@ local function BuildRecruit(parent)
         local delayed = db().guildDelayedInvite ~= false
         self.delayed:SetLabel(delayed and "Delayed: on" or "Delayed: off")
         Paint(self.delayed, delayed)
+        local handsFree = db().guildHandsFree == true
+        self.handsFree:SetLabel(handsFree and "Hands Free: on" or "Hands Free: off")
+        local ready = Guild.InviteQueue().ready
+        self.next:SetLabel(NextLabel(false, ready))
+        Paint(self.next, ready > 0)
+        self.next:SetShown(canInvite and true or false)
+        Paint(self.handsFree, handsFree)
         self.card.sub:SetText(delayed and "Left-click: whisper, then the red row again: invite.  Right-click: never offer again."
             or "Left-click: whisper + guild invite.  Right-click: never offer again.")
         local platesOn = not ns.Census or ns.Census.FriendlyPlatesOn()
@@ -358,6 +509,15 @@ local function BuildRecruit(parent)
         end
         if not platesOn then
             status = HEX.gold .. "Friendly nameplates are off: only your target and mouseover are seen.|r  " .. status
+        end
+        if handsFree then
+            local why = Guild.HandsFreeBlocked()
+            -- The last click: what it did, or why it did nothing.
+            local presses = Guild.HandsFreePresses()
+            local last = presses[#presses]
+            local did = last and ("last click " .. tostring(last.result) .. ", " .. ns.FormatAge(GetTime() - last.t) .. " ago")
+                or "waiting for a click on the world"
+            status = (why and (HEX.gold .. "Hands Free paused: " .. why .. ".|r  ") or (HEX.good .. "Hands Free:|r " .. did .. ".  ")) .. status
         end
         self.status:SetText(status)
 
@@ -386,9 +546,20 @@ local function BuildRecruit(parent)
         elseif not canInvite then
             self.note:SetText("Your guild rank cannot invite players.\nAn officer can give your rank the Invite permission.")
         end
-        local filtered = next(hidden) ~= nil or lo > 1 or hi < cap
+        local scripts = db().guildRecruitHideScript
+        local anyScript = false
+        for _, chip in ipairs(self.scriptChips) do
+            local off = type(scripts) == "table" and scripts[chip.script] == true
+            Paint(chip, not off)
+            if off then anyScript = true end
+        end
+        local nHidden = Guild.scriptHidden or 0
+        self.abc.sub:SetText(not anyScript and "Every alphabet shown."
+            or nHidden > 0 and (HEX.gold .. nHidden .. (nHidden == 1 and " player" or " players") .. " hidden by alphabet.|r")
+            or "Click an alphabet to hide or show it.")
+        local filtered = next(hidden) ~= nil or lo > 1 or hi < cap or (type(scripts) == "table" and next(scripts) ~= nil)
         if canInvite and #rows == 0 then
-            rows[1] = { text = HEX.muted .. (filtered and "Nobody matches the level / class filter."
+            rows[1] = { text = HEX.muted .. (filtered and "Nobody matches the level / class / name alphabet filter."
                 or ("No one without a guild in sight yet. Players of your faction show up from their "
                 .. "nameplates, your target and mouseover; /who finds more.")) .. "|r" }
         end
@@ -456,6 +627,28 @@ local function InvitedRow(x)
     }
 end
 
+-- The Invited tab's rows (every player ever invited: thousands), also built
+-- after login by the window's warm-up. list nil: just the data.
+local function InvitedList(list)
+    return ns.Data.List(list, {
+        -- maxAge: an invite turns "unconfirmed" by time alone.
+        name = "guild:invited", sources = { "guild" }, maxAge = 15, row = InvitedRow, empty = "Nobody invited yet.",
+        build = function(add)
+            local counts = {}
+            for _, x in ipairs(Guild.Recruits()) do
+                local r = x.r
+                local unconfirmed = Guild.InviteCheck(r) == "unconfirmed"
+                local key = unconfirmed and "unconfirmed" or r.status or "?"
+                counts[key] = (counts[key] or 0) + 1
+                add(x, { full = x.full, time = r.t, unsent = r.unsent and (r.status == "invited" or r.status == "inviting"),
+                    uninvited = r.status == "uninvited", unconfirmed = unconfirmed,
+                    ready = r.status == "inviting" and Guild.InviteReady(x.full) })
+            end
+            return { counts = counts }
+        end,
+    })
+end
+
 local function BuildInvited(parent)
     local v = CreateFrame("Frame", nil, parent)
     v:SetAllPoints()
@@ -494,23 +687,7 @@ local function BuildInvited(parent)
         self.note:SetShown(not canInvite)
         self.note:SetText(Guild.Mine() and "Your guild rank cannot invite players." or "You are not in a guild.")
         if not canInvite then return end
-        local data = ns.Data.List(self.list, {
-            -- maxAge: an invite turns "unconfirmed" by time alone.
-            name = "guild:invited", sources = { "guild" }, maxAge = 15, row = InvitedRow, empty = "Nobody invited yet.",
-            build = function(add)
-                local counts = {}
-                for _, x in ipairs(Guild.Recruits()) do
-                    local r = x.r
-                    local unconfirmed = Guild.InviteCheck(r) == "unconfirmed"
-                    local key = unconfirmed and "unconfirmed" or r.status or "?"
-                    counts[key] = (counts[key] or 0) + 1
-                    add(x, { full = x.full, time = r.t, unsent = r.unsent and (r.status == "invited" or r.status == "inviting"),
-                        uninvited = r.status == "uninvited", unconfirmed = unconfirmed,
-                        ready = r.status == "inviting" and Guild.InviteReady(x.full) })
-                end
-                return { counts = counts }
-            end,
-        })
+        local data = InvitedList(self.list)
         local counts = data.counts
         self.card.title:SetText("Invited  " .. HEX.muted .. (counts.invited or 0) .. " waiting  ·  |r" .. HEX.good .. (counts.joined or 0)
             .. " joined|r" .. HEX.muted .. "  ·  " .. (counts.declined or 0) .. " declined|r"
@@ -518,6 +695,60 @@ local function BuildInvited(parent)
     end
     return v
 end
+
+---------------------------------------------------------------------------
+-- Rank menu: right-click a member (Roster, Activity, Recruiters, Members,
+-- Promotions). Every rank in order; a pick is one game command for that one
+-- member (Guild.SetRank). Rights the new rank adds are a red warning; rights
+-- the game does not tell are a gold "?", never left out.
+---------------------------------------------------------------------------
+local function RankItems(full)
+    local m = Guild.Data().members[full]
+    local items = {}
+    for _, c in ipairs(Guild.RankChoices(full)) do
+        local up = c.rank < m.rank
+        local it = { label = c.name, selected = c.current, disabled = not c.current and not c.ok, why = c.why, notes = {} }
+        if c.current then
+            it.notes[1] = { "now", "muted" }
+            it.tooltip = { c.name, HEX.muted .. Guild.Short(full) .. "'s rank now.|r" }
+        else
+            it.tooltip = { (up and "Promote to " or "Demote to ") .. c.name }
+            if c.ok then
+                it.notes[1] = { up and "promote" or "demote", "muted" }
+                it.tooltip[2] = HEX.white .. "Click|r: " .. (up and "promote " or "demote ") .. Guild.Short(full) .. " (one game command)."
+                it.pick = function()
+                    Guild.SetRank(full, c.rank)
+                    UI.Refresh()
+                end
+            end
+            if c.gained == nil then
+                if up and c.ok then it.notes[#it.notes + 1] = { "rights ?", "gold" } end
+                it.tooltip[#it.tooltip + 1] = HEX.gold .. "The game does not tell this rank's rights here: check them before promoting.|r"
+            else
+                if #c.gained > 0 then
+                    it.notes[#it.notes + 1] = { "! gains " .. table.concat(c.gained, ", "), "bad" }
+                    it.tooltip[#it.tooltip + 1] = HEX.bad .. "Gains: " .. table.concat(c.gained, ", ") .. "|r"
+                end
+                if #c.lost > 0 then it.tooltip[#it.tooltip + 1] = HEX.muted .. "Loses: " .. table.concat(c.lost, ", ") .. "|r" end
+            end
+        end
+        items[#items + 1] = it
+    end
+    return items
+end
+
+-- The rank menu of one member (a Style.ContextMenu spec).
+function UI.RankMenu(full)
+    local g = Guild.Mine() and Guild.Data()
+    local m = g and full and g.members[full]
+    if not m then return { title = Guild.Short(full), items = { { label = "Not in the guild roster.", disabled = true } } } end
+    return { title = Guild.Short(full), sub = m.rankName or "?", items = RankItems(full) }
+end
+
+-- opts.menu of every list of members.
+local function MemberMenu(item) return item.full and UI.RankMenu(item.full) or nil end
+
+local RANK_HINT = "Right-click a member: change their rank."
 
 ---------------------------------------------------------------------------
 -- Roster
@@ -538,6 +769,7 @@ end
 local function RosterRow(x)
     local m = x.m
     return {
+        full = x.full,
         label = m.rankName or "?",
         text = NameText(x.full, m.classFile) .. HEX.muted .. "  " .. (m.level or "?") .. "  "
             .. (m.zone or "") .. ((m.note and m.note ~= "") and ("  ·  " .. m.note) or "") .. "|r",
@@ -581,12 +813,13 @@ local function BuildRoster(parent)
     local holder = CreateFrame("Frame", nil, v.card.content)
     holder:SetPoint("TOPLEFT", 0, -30)
     holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { labelWidth = 90, colWidths = { 70, 96 }, search = true, hint = "Search names, ranks, zones, notes..." })
+    v.list = Style.List(holder, { labelWidth = 90, colWidths = { 70, 96 }, search = true, hint = "Search names, ranks, zones, notes...",
+        menu = MemberMenu })
     v.note = Note(v.card.content)
 
     function v:Footer()
         return "Last online is what the game reports (a month counts as 30 days). Inactive: offline "
-            .. (db().guildInactiveDays or 30) .. " days or more. \"before\": in the guild before " .. ns.NAME .. " first read the roster."
+            .. (db().guildInactiveDays or 30) .. " days or more. \"before\": in the guild before " .. ns.NAME .. " first read the roster. " .. RANK_HINT
     end
 
     function v:Refresh()
@@ -697,12 +930,12 @@ local function BuildActivity(parent)
     local widths, columns = {}, { name = "Member", label = "Rank" }
     for i, sig in ipairs(Act.signals) do widths[i], columns[i] = sig.width or 70, sig.label end
     v.list = Style.List(holder, { labelWidth = 90, colWidths = widths, columns = columns, search = true,
-        hint = "Search names, ranks, active / quiet..." })
+        hint = "Search names, ranks, active / quiet...", menu = MemberMenu })
     v.note = Note(v.card.content)
 
     function v:Footer()
         return "Only guild chat seen while you are online counts. "
-            .. "Quiet: online with you, said nothing. Not seen: neither, so unknown."
+            .. "Quiet: online with you, said nothing. Not seen: neither, so unknown. " .. RANK_HINT
     end
 
     function v:Refresh()
@@ -757,6 +990,33 @@ local function ChatLine(full, r, c)
 end
 UI.ChatLine = ChatLine
 
+-- The Replies filters and each conversation's tag (Guild.ReplyGroup).
+local REPLY_GROUPS = {
+    { key = "all", label = "All" },
+    { key = "joined", label = "Joined", hex = HEX.good, tip = "They joined the guild." },
+    { key = "declined", label = "Declined", hex = HEX.bad, tip = "They declined the invite, or you marked that they said no." },
+    { key = "invited", label = "Invited", hex = HEX.compare, tip = "Invited, no answer yet (or offline, in a guild, invited elsewhere)." },
+    { key = "blocked", label = "Blocked", hex = HEX.gold, tip = "They have you on ignore: your whispers do not reach them." },
+}
+local REPLY_GROUP = {}
+for _, g in ipairs(REPLY_GROUPS) do REPLY_GROUP[g.key] = g end
+UI.REPLY_GROUPS = REPLY_GROUPS
+
+-- x.hit: the line a message search found (shown instead of the last one).
+local function ConversationRow(x)
+    local r = x.r
+    local line = x.hit or r.chat[#r.chat]
+    local preview = (line.me and "You: " or "") .. line.text
+    if #preview > 30 then preview = preview:sub(1, 28) .. ".." end
+    local g = REPLY_GROUP[x.group]
+    return {
+        text = NameText(x.full, r.classFile) .. (r.level and (HEX.muted .. " " .. r.level .. "|r") or "")
+            .. HEX.muted .. "  " .. preview .. "|r",
+        cols = { g and (g.hex .. g.label .. "|r") or "", (r.unread or 0) > 0 and (HEX.accent .. r.unread .. "|r") or "" },
+        accent = x.full == state.chat and COLORS.accent or nil,
+    }
+end
+
 local function BuildReplies(parent)
     local v = CreateFrame("Frame", nil, parent)
     v:SetAllPoints()
@@ -765,10 +1025,40 @@ local function BuildReplies(parent)
     v.left:SetPoint("BOTTOMLEFT")
     v.left:SetWidth(300)
     v.left.sub:SetText("Players you invited who whispered with you.")
-    v.list = Style.List(v.left.content, { colWidths = { 30 }, search = true, hint = "Search names...",
+    local lc = v.left.content
+    local bar = CreateFrame("Frame", nil, lc)
+    bar:SetPoint("TOPLEFT", 4, -3)
+    bar:SetPoint("TOPRIGHT", -4, -3)
+    bar:SetHeight(20)
+    v.groups = {}
+    local x = 0
+    for _, g in ipairs(REPLY_GROUPS) do
+        local b = Style.Button(bar, g.label, g.key == "all" and 36 or 56, function()
+            state.replyGroup = g.key
+            UI.Refresh()
+        end, g.tip, { height = 20 })
+        b:SetPoint("TOPLEFT", x, 0)
+        b.key = g.key
+        x = x + (g.key == "all" and 38 or 58)
+        v.groups[#v.groups + 1] = b
+    end
+    -- The second search: words said in the conversations (the list's own
+    -- box searches names).
+    v.words = Style.SearchBox(lc, function(text)
+        state.replyWords = text:lower():gsub("^%s+", ""):gsub("%s+$", "")
+        if v:IsShown() then v:Refresh() end
+    end, "Search messages...")
+    v.words:SetPoint("TOPLEFT", 4, -27)
+    v.words:SetPoint("TOPRIGHT", -4, -27)
+    local holder = CreateFrame("Frame", nil, lc)
+    holder:SetPoint("TOPLEFT", 0, -50)
+    holder:SetPoint("BOTTOMRIGHT")
+    v.list = Style.List(holder, { colWidths = { 56, 22 }, search = true, hint = "Search names...",
         onClick = function(item)
             if item.full then
                 state.chat = item.full
+                -- A click: may run one /who for this one player (they may have levelled).
+                Guild.LookUp(item.full)
                 UI.Refresh()
             end
         end })
@@ -884,7 +1174,21 @@ local function BuildReplies(parent)
     end
 
     function v:Refresh()
-        local convos = Guild.Mine() and Guild.Conversations() or {}
+        local all = Guild.Mine() and Guild.Conversations() or {}
+        local group, words = state.replyGroup or "all", state.replyWords or ""
+        for _, b in ipairs(self.groups) do Paint(b, b.key == group) end
+        -- Filtered and tagged; kept until a conversation or a filter changes.
+        local convos = ns.Data.Memo("guild:replies:filtered", ns.Data.Key("guild.replies") .. "|" .. tostring(all) .. "|" .. group .. "|" .. words, function()
+            local out = {}
+            for _, x in ipairs(all) do
+                local g = Guild.ReplyGroup(x.r)
+                local hit = words ~= "" and Guild.ChatFind(x.r, words) or nil
+                if (group == "all" or g == group) and (words == "" or hit) then
+                    out[#out + 1] = { full = x.full, r = x.r, group = g, hit = hit }
+                end
+            end
+            return out
+        end, 10)
         local valid = false
         for _, x in ipairs(convos) do if x.full == state.chat then valid = true end end
         if not valid then
@@ -894,23 +1198,16 @@ local function BuildReplies(parent)
             end
             state.chat = state.chat or (convos[1] and convos[1].full)
         end
-        local rows = {}
-        for _, x in ipairs(convos) do
-            local r = x.r
-            local last = r.chat[#r.chat]
-            local preview = (last.me and "You: " or "") .. last.text
-            if #preview > 38 then preview = preview:sub(1, 36) .. ".." end
-            rows[#rows + 1] = {
-                full = x.full,
-                text = NameText(x.full, r.classFile) .. HEX.muted .. "  " .. preview .. "|r",
-                cols = { (r.unread or 0) > 0 and (HEX.accent .. r.unread .. "|r") or "" },
-                accent = x.full == state.chat and COLORS.accent or nil,
-                search = Guild.Short(x.full),
-            }
-        end
-        if #rows == 0 then rows[1] = { text = HEX.muted .. "No replies yet.|r" } end
-        self.list:SetItems(rows)
-        self.left.title:SetText("Conversations  " .. HEX.muted .. #convos .. "|r")
+        -- Hundreds of conversations after a long recruiting run: formatted
+        -- when drawn, kept until a conversation or the selection changes.
+        ns.Data.List(self.list, {
+            name = "guild:replies", sources = { "guild.replies" }, key = { tostring(convos), state.chat },
+            row = ConversationRow, empty = #all > 0 and "No conversation matches." or "No replies yet.",
+            build = function(add)
+                for _, x in ipairs(convos) do add(x, { full = x.full, search = Guild.Short(x.full) }) end
+            end,
+        })
+        self.left.title:SetText("Conversations  " .. HEX.muted .. (#convos == #all and #all or (#convos .. " of " .. #all)) .. "|r")
 
         local full = state.chat
         local r = full and Guild.Recruit(full)
@@ -937,18 +1234,25 @@ local function BuildReplies(parent)
             .. (r.classFile and ns.ClassName(r.classFile) or "") .. "|r")
         local check = Guild.InviteCheck(r)
         self.status:SetText(st[2] .. st[1] .. "|r" .. HEX.muted .. (r.invited and ("  ·  invited " .. date("%b %d %H:%M", r.invited)) or "") .. "|r"
-            .. (check == "confirmed" and (HEX.good .. "  ·  confirmed|r") or check == "waiting" and (HEX.muted .. "  ·  not confirmed yet|r") or ""))
+            .. (check == "confirmed" and (HEX.good .. "  ·  confirmed|r") or check == "waiting" and (HEX.muted .. "  ·  not confirmed yet|r") or "")
+            .. (r.ignoring and (HEX.bad .. "  ·  has you on ignore since " .. date("%b %d %H:%M", r.ignoring) .. "|r") or ""))
         local out = Guild.Outgoing(full)
-        local key = full .. "/" .. #r.chat .. "/" .. (r.seq or 0) .. "/" .. (r.chat[#r.chat].t or 0)
+        local key = full .. "/" .. #r.chat .. "/" .. (r.seq or 0) .. "/" .. (r.chat[#r.chat].t or 0) .. "/" .. words
         for _, o in ipairs(out) do key = key .. "/" .. o.state .. o.text end
         if self.shown ~= key then
             self.shown = key
             self.msgs:Clear()
-            for _, line in ipairs(r.chat) do self.msgs:AddMessage(ChatLine(full, r, line)) end
+            for _, line in ipairs(r.chat) do
+                -- Lines with the searched words are marked.
+                local hit = words ~= "" and type(line.text) == "string" and line.text:lower():find(words, 1, true)
+                self.msgs:AddMessage((hit and (HEX.gold .. "> |r") or "") .. ChatLine(full, r, line))
+            end
             -- Not in the conversation until the game echoes it back.
             for _, o in ipairs(out) do
                 local note = o.state == "queued" and (HEX.muted .. "  (waiting for the game's message pace)|r")
                     or o.state == "lost" and (HEX.bad .. "  (the game dropped it: not delivered)|r")
+                    or o.state == "ignoring" and (HEX.bad .. "  (not delivered: they have you on ignore)|r")
+                    or o.state == "notfound" and (HEX.bad .. "  (not delivered: they are offline)|r")
                     or (HEX.muted .. "  (sending...)|r")
                 self.msgs:AddMessage(HEX.muted .. "            You: " .. o.text .. "|r" .. note)
             end
@@ -976,12 +1280,12 @@ local function BuildRecruiters(parent)
     v.card = Style.Card(v, "Recruiters")
     v.card:SetAllPoints()
     v.list = Style.List(v.card.content, { colWidths = { 70, 70, 80 }, search = true, hint = "Search names...",
-        columns = { name = "Recruiter", "Still here", "Kept", "Average stay" } })
+        columns = { name = "Recruiter", "Still here", "Kept", "Average stay" }, menu = MemberMenu })
     v.note = Note(v.card.content)
 
     function v:Footer()
         return "Kept: of those who joined, still in the guild. Average stay: days in the guild. Red: left within "
-            .. Guild.QUICK_QUIT_DAYS .. " days. Gold: joined more than once."
+            .. Guild.QUICK_QUIT_DAYS .. " days. Gold: joined more than once. " .. RANK_HINT
     end
 
     function v:Refresh()
@@ -995,6 +1299,7 @@ local function BuildRecruiters(parent)
             local member = g.members[st.by]
             local kept = st.joined > 0 and math.floor(st.here / st.joined * 100 + 0.5) or nil
             rows[#rows + 1] = {
+                full = st.by,
                 text = NameText(st.by, member and member.classFile) .. HEX.muted .. "  invited " .. st.invitedCount
                     .. "  ·  joined " .. st.joined .. "  ·  left " .. st.left .. "|r"
                     .. (st.quick > 0 and (HEX.bad .. "  " .. st.quick .. " within " .. Guild.QUICK_QUIT_DAYS .. " d|r") or "")
@@ -1087,8 +1392,9 @@ local function BuildPromotions(parent)
     v.card = Style.Card(v, "Ready for promotion")
     v.card:SetPoint("TOPLEFT", v.rules, "BOTTOMLEFT", 0, -8)
     v.card:SetPoint("BOTTOMRIGHT")
-    v.card.sub:SetText("Click: promote one rank. One click per member.")
+    v.card.sub:SetText("Click: promote one rank. One click per member. Right-click: any rank.")
     v.list = Style.List(v.card.content, { labelWidth = 90, colWidths = { 80, 90 }, search = true,
+        menu = MemberMenu,
         onClick = function(item)
             if item.full then Guild.Promote(item.full) UI.Refresh() end
         end })
@@ -1178,7 +1484,8 @@ local function BuildPromotions(parent)
                 cols = { HEX.muted .. (lower and ">" or "") .. math.floor(daysIn) .. " d in|r", LastOnlineText(Guild.DaysOffline(m)) },
                 tooltip = function(owner)
                     ns.Tooltip.Text(owner, { Guild.Short(x.full), "Promote from " .. (m.rankName or "?") .. " to " .. Guild.RankName(x.target),
-                        HEX.white .. "Click|r: promote one rank (the game's own promote)." })
+                        HEX.white .. "Click|r: promote one rank (the game's own promote).",
+                        HEX.white .. "Right-click|r: pick any rank." })
                 end,
             }
         end
@@ -1303,11 +1610,11 @@ local function BuildMembers(parent)
     holder:SetPoint("TOPLEFT", 0, -30)
     holder:SetPoint("BOTTOMRIGHT")
     v.list = Style.List(holder, { colWidths = { 70, 120, 70 }, search = true, hint = "Search names, professions...",
-        columns = { name = "Member", "Played (7 d)", "Recruiting (30 d)", "Answered" } })
+        columns = { name = "Member", "Played (7 d)", "Recruiting (30 d)", "Answered" }, menu = MemberMenu })
     v.note = Note(v.card.content)
 
     function v:Footer()
-        return "Played: hours in the last 7 days. Hover a member for everything."
+        return "Played: hours in the last 7 days. Hover a member for everything. " .. RANK_HINT
     end
 
     function v:Refresh()
@@ -1331,6 +1638,7 @@ local function BuildMembers(parent)
             local level = (m and m.level) or (d.prof and d.prof.level)
             local warn = TrustText(d, cats)
             rows[#rows + 1] = {
+                full = x.full,
                 text = NameText(x.full, m and m.classFile) .. HEX.muted .. "  " .. (level or "?")
                     .. (SkillsText(d.prof) and ("  ·  " .. SkillsText(d.prof)) or "")
                     .. (d.alts and #d.alts > 0 and ("  ·  " .. #d.alts .. " other characters") or "")
@@ -1517,7 +1825,7 @@ local function LayoutTabs(officer)
 end
 
 local function Build()
-    frame = Style.Window(ns.FRAME .. "GuildWindow", "Guild", nil, nil, { nav = "guild" })
+    frame = Style.Window(ns.FRAME .. "GuildWindow", "Guild", nil, nil, { nav = "guild", hidden = true })
     frame.who = Style.Text(frame, "GameFontHighlightSmall", "RIGHT")
     frame.who:SetPoint("TOPRIGHT", -40, -14)
     frame.who:SetWidth(460)
@@ -1594,7 +1902,7 @@ end
 
 local function BuildMini()
     mini = CreateFrame("Frame", ns.FRAME .. "GuildMini", UIParent)
-    mini:SetSize(250, 236)
+    mini:SetSize(340, 236)
     mini:SetFrameStrata("MEDIUM")
     mini:SetClampedToScreen(true)
     mini:SetMovable(true)
@@ -1609,7 +1917,7 @@ local function BuildMini()
     Style.Surface(mini, "hud")
     mini.title = Style.Text(mini, "GameFontNormalSmall")
     mini.title:SetPoint("TOPLEFT", 8, -8)
-    mini.title:SetPoint("RIGHT", -144, 0)
+    mini.title:SetPoint("RIGHT", -264, 0)
     mini.close = CreateFrame("Button", nil, mini)
     mini.close:SetSize(18, 18)
     mini.close:SetPoint("TOPRIGHT", -4, -4)
@@ -1633,6 +1941,10 @@ local function BuildMini()
     mini.who:SetPoint("RIGHT", mini.close, "LEFT", -4, 0)
     mini.delayed = Style.Button(mini, "", 56, ToggleDelayed, DELAYED_TIP, { title = "Delayed invite", height = 18 })
     mini.delayed:SetPoint("RIGHT", mini.who, "LEFT", -4, 0)
+    mini.handsFree = Style.Button(mini, "", 56, ToggleHandsFree, HANDS_FREE_TIP, { title = "Hands Free", height = 18 })
+    mini.handsFree:SetPoint("RIGHT", mini.delayed, "LEFT", -4, 0)
+    mini.next = Style.Button(mini, "", 56, NextInvite, NextTip, { title = "Next invite", height = 18 })
+    mini.next:SetPoint("RIGHT", mini.handsFree, "LEFT", -4, 0)
     mini.note = Style.Text(mini, "GameFontDisableSmall", "CENTER")
     mini.note:SetPoint("TOPLEFT", 10, -60)
     mini.note:SetPoint("RIGHT", -10, 0)
@@ -1663,6 +1975,14 @@ function UI.RefreshMini(cands)
     mini.delayed:SetLabel(delayed and "Delay" or "No delay")
     Paint(mini.delayed, delayed)
     mini.delayed:SetShown(canInvite and true or false)
+    local handsFree = db().guildHandsFree == true
+    mini.handsFree:SetLabel(handsFree and "Free: on" or "Free: off")
+    Paint(mini.handsFree, handsFree)
+    mini.handsFree:SetShown(canInvite and true or false)
+    local ready = Guild.InviteQueue().ready
+    mini.next:SetLabel(NextLabel(true, ready))
+    Paint(mini.next, ready > 0)
+    mini.next:SetShown(canInvite and true or false)
     mini.note:SetShown(not canInvite)
     mini.note:SetText(guild and "Your guild rank cannot invite players." or "You are not in a guild.")
     if canInvite and #rows == 0 then rows[1] = { text = HEX.muted .. "Nobody without a guild in sight.|r" } end
@@ -1728,12 +2048,8 @@ function UI.OnChat()
 end
 
 function UI.Show(view)
-    -- A new frame starts shown, so its OnShow does not run the first time.
-    if not frame then
-        Build()
-        Guild.RequestRoster()
-        if ns.GuildSync then ns.GuildSync.OnWindowOpen() end
-    end
+    -- Built hidden (also ahead of time, after login): its OnShow asks for the roster.
+    if not frame then Build() end
     if view and views[view] then state.view = view end
     if frame:IsShown() then UI.Refresh() else frame:Show() end
 end
@@ -1749,11 +2065,24 @@ UI.views = views
 -- Roster reads and the guild log redraw the window; the recruit scan only
 -- while the Recruit tab is open.
 -- Guild chat lines only while the Activity tab is open.
+-- Frames and the long walks over the guild's history (recruits, who joined
+-- through whom) are built after login, so the first open does not stall.
 ns.Data.Window(UI, { "guild", "guild.scan", "guild.chat" }, { shows = function(src)
     if src == "guild.scan" then return UI.LiveView() end
     if src == "guild.chat" then return state.view == "activity" end
     return true
-end })
+end,
+    prebuild = function() if not frame then Build() end end,
+    warmSources = { "guild" },
+    warm = function()
+        if not Guild.Mine() then return end
+        Guild.Recruits()
+        if Guild.Can("invite") then InvitedList(nil) end
+        Guild.Conversations()
+        Guild.Unread()
+        Guild.Recruiters()
+    end,
+})
 
 ---------------------------------------------------------------------------
 -- Settings tab
@@ -1777,6 +2106,22 @@ local function BuildPage(parent)
     y = W.Checkbox(parent, y, "guildDelayedInvite", "Delayed invite: click again to invite",
         "The first click whispers your message; 10 s after it went out the player is back on the list in red, and "
         .. "the second click sends the guild invite. Off: message and invite in one click.")
+    y = W.Checkbox(parent, y, "guildHandsFree", "Hands Free: a click on the open world is my next recruit click",
+        "A left- or right-click on the world (not on a window, a player or an NPC) invites the next red row, else "
+        .. "runs a /who once the /who button's wait is over, else whispers the next player. One action per click; nothing goes "
+        .. "while you do not click. Off in combat.")
+    y = W.Checkbox(parent, y, "guildHandsFreeKeys", "Hands Free: my move and jump keys count too",
+        "A press of a key bound to moving, turning, strafing or jumping (WASD, Space, or whatever you bound) is a "
+        .. "Hands Free click as well. The key still moves you. One press = one action; holding a key is one press.")
+    W.Button(parent, y, "Set recruit key", 200, function() Guild.CatchStepKey() end,
+        "Press a key or mouse button after clicking: it becomes the recruit key. One press = the next queued invite, "
+        .. "else a /who, else a whisper to the next player, Hands Free on or off. A key press is something the game always "
+        .. "takes, so it can invite and search. Out of combat.")
+    y = y - 34
+    y = W.LiveText(parent, y, 18, function()
+        local key = Guild.StepKey()
+        return key and ("Recruit key: |cffffffff" .. key .. "|r") or "|cffffd100No recruit key yet.|r"
+    end)
     y = W.Checkbox(parent, y, "guildWhoZone", "/who searches only my current zone")
     y = W.Checkbox(parent, y, "guildHideChat", "Keep recruiting chatter out of chat",
         "Your opening whispers, the game's \"You have invited\" / \"declines\" / offline lines, and recruits' answers until "

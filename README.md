@@ -197,12 +197,29 @@ click by you.
   statistics"). Inspected figures are the server's; shared ones come from the member's own addon.
 - Unknown figures show `?`, never 0.
 
+## 👥 Groups (`/talod groups`)
+
+- **One record per party and per raid** (not per player): when, how long, where you went (time in each
+  zone and instance), who led, and the group's chat (party, raid, raid warnings, instance chat).
+- **Everyone who was in it**, with what the game showed while you were grouped: class, race, level when
+  they joined and when they left, guild and guild rank, role, raid subgroup, leader / assist / master
+  looter, highest health and power, time grouped with you, time offline and AFK, deaths seen.
+- **Now:** your current group, live: health, dead / offline / AFK, role and subgroup, time together and
+  deaths so far. Hover a member for everything known; click one with an Audit record to open it.
+- **Parties** and **Raids:** every group, newest first. Search a name to find every group you shared
+  with that player. Open one for its **Members**, **Chat**, **Loot** (from the loot messages; the
+  quality to keep is a setting) and **Timeline** (joins, leaves, deaths, zones).
+- A stray invite (under a minute, nothing said) isn't kept. A `/reload` keeps the same record going.
+  Unknown shows `?`: a member whose name the game hides isn't recorded, and a death counts only when
+  they were seen alive first.
+
 ---
 
 ## 🚀 Getting started
 
-1. Install with the CurseForge app, or copy the `TALOD` folder into
-   `World of Warcraft\<your game folder>\Interface\AddOns\`.
+1. Install with the CurseForge app, or copy the `TALOD` and `TALOD_Archive` folders into
+   `World of Warcraft\<your game folder>\Interface\AddOns\` (side by side; the archive is
+   optional and only read when you open it).
 2. **Restart the game** completely. A `/reload` isn't enough the first time.
 3. Type **`/talod`** for settings, or click the minimap button:
    - **Left-click**: main menu (every TALOD window)
@@ -218,8 +235,7 @@ Every option is in the settings window; slash commands are a shortcut.
 
 ## ⌨️ Commands
 
-`/talod` is the command. TALOD deliberately does **not** use `/pvp`: that is the game's own command for turning your PvP flag on, and a typo should never flag a Hardcore
-character.
+`/talod` is the command.
 
 | Command | What it does |
 |---|---|
@@ -249,8 +265,11 @@ character.
 | `/talod guild mini` | Show / hide the mini recruit window |
 | `/talod guild who` · `/talod guild invite [name]` | One /who search for players without a guild · whisper + invite one player (or your target) |
 | `/talod audit [me\|target\|members\|flags\|characters\|history\|status]` | Audit window · read yourself or your target |
+| `/talod groups [now\|parties\|raids]` | Groups window: your current group, past parties and raids (`party` and `raid` work too) |
 | `/talod menu` | Main menu: every TALOD window |
 | `/talod minimap` | Show or hide the minimap button |
+| `/talod archive [load\|move]` | Archive: state, load it, move what the cleanup rules would remove |
+| `/talod clean [now\|auto on\|off]` · `/talod memory` | What the cleanup rules would remove, run them, daily cleanup on / off · memory used and the largest stores |
 | `/talod clear` | Empty the nearby list |
 | `/talod reset` | Reset settings and positions (all your logged data is kept) |
 | `/talod errors` · `/talod probe` | Error list · client capability report, for bug reports |
@@ -277,6 +296,19 @@ sharing: what you said Yes to on the Guild window's Sharing tab goes to the offi
 who asks for it, and nothing else ever leaves your computer. Recruit whispers are kept so you can
 read the conversation again. The Audit page keeps other players' statistics (names, gold figures)
 in the same file.
+
+The game loads that whole file into memory at login, so a big log costs memory and loading time.
+Settings, **Data** has cleanup rules that remove what is old and no longer used (opening whispers
+nobody answered, old price history, items not seen on the Auction House for months) and a memory
+cap (150 MB by default) that warns you when it's passed. Cleanup runs once a day on its own for a
+new install; if you updated from an older version it stays off until you turn it on, so nothing
+you had is deleted without your say. `/talod clean` shows what each rule would remove.
+
+Old entries can go to the **archive** instead of being deleted: the **TALOD_Archive** folder that
+comes with TALOD is a second addon the game only reads when you open it (Settings, Data, Archive),
+so what's in it costs no memory until then. Once opened it stays loaded until you /reload. Run
+`python tools/data_report.py` to see what fills your saved data and what's in the archive
+(`--export <folder>` writes the archive out as JSON).
 The census and fishing logs contain other players' names, so think before you share those files
 or the viewer pages made from them.
 

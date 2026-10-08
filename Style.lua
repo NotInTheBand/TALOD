@@ -114,7 +114,14 @@ function Style.Button(parent, text, width, onClick, tooltip, opts)
         local tip = type(tooltip) == "function" and tooltip() or tooltip
         if tip then
             local title = opts.title or ((self.label:GetText() or ""):gsub("%s*>$", ""))
-            ns.Tooltip.Text(self, { title ~= "" and title or tip, title ~= "" and tip or nil })
+            if type(tip) == "table" then
+                -- Several lines: the title, then each line in turn.
+                local lines = { title ~= "" and title or nil }
+                for _, line in ipairs(tip) do lines[#lines + 1] = line end
+                ns.Tooltip.Text(self, lines)
+            else
+                ns.Tooltip.Text(self, { title ~= "" and title or tip, title ~= "" and tip or nil })
+            end
         end
     end)
     b:SetScript("OnLeave", function(self)
@@ -342,7 +349,8 @@ end
 --   bar = { value, max } (thin progress bar under the text), accent (color
 --   bar on the left), tint, indent, tooltip(owner); for the filters: time
 --   (when it happened) and search (text to match, else text, label, cols).
---   opts: labelWidth, colWidths, onClick(item, button), fallbackRows,
+--   opts: labelWidth, colWidths, onClick(item, button, row), menu(item, row)
+--   (a right-click menu, Style.ContextMenu; nil: onClick), fallbackRows,
 --   search = true (a search box), time = true (a time range), hint,
 --   columns = { name = "Item", label = "When", "Price", ... } (a fixed
 --   title row; [c] titles cols[c]).
@@ -521,7 +529,7 @@ function Style.List(parent, opts)
             first = lo
             edge = edge + w + 6
         end
-        if r.label:IsShown() then
+        if r.label and r.label:IsShown() then
             local l, rr = r.label:GetLeft(), r.label:GetRight()
             if l and rr and x >= l - 3 and x <= rr + 3 then return "label" end
         end
@@ -549,22 +557,13 @@ function Style.List(parent, opts)
         local r = CreateFrame("Button", nil, list)
         r:SetHeight(ROW)
         r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        -- Only what every row shows; the accent, icon, bar, label and columns
+        -- are made when a row first needs them (see Layout): a list keeps
+        -- about 30 rows, and most lists never show an icon or a bar.
         r.bg = Texture(r, "BACKGROUND")
         r.bg:SetAllPoints()
-        r.accent = Texture(r, "ARTWORK")
-        r.accent:SetWidth(3)
-        r.accent:SetPoint("TOPLEFT")
-        r.accent:SetPoint("BOTTOMLEFT")
-        r.iconBorder, r.icon = Style.IconFrame(r, ROW - 2)
-        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        r.barBg = Texture(r, "ARTWORK", { 1, 1, 1, 0.08 })
-        r.barBg:SetHeight(3)
-        r.barFill = Texture(r, "OVERLAY", COLORS.bar)
-        r.barFill:SetHeight(3)
-        r.label = Text(r, "GameFontDisableSmall", "RIGHT")
         r.text = Text(r, "GameFontHighlightSmall")
         r.cols = {}
-        for c = 1, 3 do r.cols[c] = Text(r, "GameFontHighlightSmall", "RIGHT") end
         local hl = r:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(1, 1, 1, 0.05)
@@ -573,8 +572,10 @@ function Style.List(parent, opts)
             if item and Titled(item) then
                 local col = TitleAt(self)
                 if col ~= nil then list:SortBy(SortId(item), col) end
-            elseif opts.onClick and item and not item.header then
-                opts.onClick(item, button)
+            elseif item and not item.header then
+                local menu = button == "RightButton" and opts.menu and opts.menu(item, self)
+                if menu then Style.ContextMenu(self, menu)
+                elseif opts.onClick then opts.onClick(item, button, self) end
             end
         end)
         r:SetScript("OnEnter", function(self)
@@ -589,17 +590,49 @@ function Style.List(parent, opts)
         return r
     end
 
+    -- Row parts made on first use.
+    local function Accent(r)
+        if not r.accent then
+            r.accent = Texture(r, "ARTWORK")
+            r.accent:SetWidth(3)
+            r.accent:SetPoint("TOPLEFT")
+            r.accent:SetPoint("BOTTOMLEFT")
+        end
+        return r.accent
+    end
+    local function Icon(r)
+        if not r.icon then
+            r.iconBorder, r.icon = Style.IconFrame(r, ROW - 2)
+            r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        end
+        return r.icon
+    end
+    local function Bar(r)
+        if not r.barBg then
+            r.barBg = Texture(r, "ARTWORK", { 1, 1, 1, 0.08 })
+            r.barBg:SetHeight(3)
+            r.barFill = Texture(r, "OVERLAY", COLORS.bar)
+            r.barFill:SetHeight(3)
+        end
+    end
+    local function Hide(part) if part then part:Hide() end end
+
     local function Layout(r, item, index)
         local x = 6 + (item.indent or 0)
         r.bg:SetColorTexture(1, 1, 1, 0)
         if item.tint then Fill(r.bg, item.tint)
         elseif not item.header and index % 2 == 0 then Fill(r.bg, COLORS.stripe) end
-        r.accent:SetShown(item.accent ~= nil)
-        if item.accent then Fill(r.accent, item.accent) end
+        if item.accent then
+            Accent(r):Show()
+            Fill(r.accent, item.accent)
+        else
+            Hide(r.accent)
+        end
 
         local titled = Titled(item)
         local useLabel = list.labelWidth > 0 and (not item.header or (titled and item.label ~= nil))
-        r.label:SetShown(useLabel)
+        if useLabel and not r.label then r.label = Text(r, "GameFontDisableSmall", "RIGHT") end
+        if r.label then r.label:SetShown(useLabel) end
         if useLabel then
             r.label:ClearAllPoints()
             r.label:SetPoint("LEFT", x, 0)
@@ -608,8 +641,11 @@ function Style.List(parent, opts)
             x = x + list.labelWidth + 8
         end
         local hasIcon = item.icon ~= nil
-        r.iconBorder:SetShown(hasIcon)
-        r.icon:SetShown(hasIcon)
+        if hasIcon then Icon(r) end
+        if r.icon then
+            r.iconBorder:SetShown(hasIcon)
+            r.icon:SetShown(hasIcon)
+        end
         if hasIcon then
             r.iconBorder:ClearAllPoints()
             r.iconBorder:SetPoint("LEFT", x, 0)
@@ -623,9 +659,11 @@ function Style.List(parent, opts)
 
         local right = 6
         for c = 1, 3 do
-            local fs, w = r.cols[c], list.colWidths[c]
+            local w = list.colWidths[c]
             local value = item.cols and item.cols[c]
-            fs:SetShown(w ~= nil and value ~= nil)
+            local fs = r.cols[c]
+            if w and value and not fs then fs = Text(r, "GameFontHighlightSmall", "RIGHT") r.cols[c] = fs end
+            if fs then fs:SetShown(w ~= nil and value ~= nil) end
             if w and value then
                 fs:ClearAllPoints()
                 fs:SetPoint("RIGHT", -right, 0)
@@ -644,8 +682,11 @@ function Style.List(parent, opts)
         else r.text:SetText(item.header and (HEX.gold .. item.text .. "|r") or (item.text or "")) end
 
         local bar = item.bar
-        r.barBg:SetShown(bar ~= nil)
-        r.barFill:SetShown(bar ~= nil and (bar[1] or 0) > 0)
+        if bar then Bar(r) end
+        if r.barBg then
+            r.barBg:SetShown(bar ~= nil)
+            r.barFill:SetShown(bar ~= nil and (bar[1] or 0) > 0)
+        end
         if bar then
             r.barBg:ClearAllPoints()
             r.barBg:SetPoint("BOTTOMLEFT", x, 2)
@@ -800,8 +841,11 @@ function Style.List(parent, opts)
         return out, true
     end
 
+    local countAll, countItems, countText
     local function UpdateCount(filtered)
         if not list.count then return end
+        -- The same rows again (a redraw with nothing new): the same count.
+        if list.all == countAll and list.items == countItems then list.count:SetText(countText) return end
         -- Entries: dated headers when the list is grouped, else rows.
         local grouped = false
         for _, item in ipairs(list.all) do if item.header and item.time ~= nil then grouped = true break end end
@@ -813,7 +857,9 @@ function Style.List(parent, opts)
             return n
         end
         local n, shown = Units(list.all), Units(list.items)
-        list.count:SetText(filtered and (HEX.muted .. shown .. " of " .. n .. " shown|r") or "")
+        countAll, countItems = list.all, list.items
+        countText = filtered and (HEX.muted .. shown .. " of " .. n .. " shown|r") or ""
+        list.count:SetText(countText)
     end
 
     -- Column sorts, applied before the filters (headers stay in place).
@@ -1061,4 +1107,127 @@ function Style.ChoiceItems(list, current, onPick, labelOf)
         out[#out + 1] = { label = labelOf and labelOf(c) or c.label, selected = c.key == current, pick = function() onPick(c.key, c) end }
     end
     return out
+end
+
+---------------------------------------------------------------------------
+-- Context menu: what a right-click opens, anywhere in the addon. A small
+-- box just above the pointer (where a desktop menu opens). It goes away on
+-- a pick, on Escape, when the row it came from hides or shows another item,
+-- or once the mouse is well clear of both the box and that row.
+--
+--   Style.ContextMenu(owner, menu) -> the menu frame
+--   menu = { title, sub (muted, after the title), items = {
+--     { label, notes = { { text, tone }, ... } (after the label), tone,
+--       selected (the current choice: accent bar), disabled, why (the
+--       reason, shown when hovered), tooltip = lines, pick = fn },
+--     { header = "Section" }, ... } }
+--   Tones are the tooltip's names (Tooltip.lua TONES): muted, good, bad,
+--   gold, accent, compare. Warnings are "bad", unknowns "gold".
+--
+-- A list opens one for its rows with opts.menu = fn(item, row) -> menu or
+-- nil (Style.List); a right-click with no menu still goes to onClick.
+---------------------------------------------------------------------------
+local CTX_ROWS, CTX_WIDTH, CTX_TITLE = 14, 240, 20
+-- How far (UI units) the mouse may stray from the box or the row.
+Style.CONTEXT_MARGIN = 40
+local ctx
+
+local function ToneHex(tone)
+    if tone == "white" or tone == "text" then return HEX.white end
+    return tone and HEX[tone] or nil
+end
+
+local function Toned(text, tone)
+    local hex = ToneHex(tone)
+    return hex and (hex .. text .. "|r") or text
+end
+
+local function CloseContext()
+    if ctx then ctx.owner, ctx.item = nil, nil ctx:Hide() end
+end
+Style.CloseContextMenu = CloseContext
+
+-- The cursor within pad of a frame; true when the frame's place is unknown,
+-- so a frame not laid out yet never closes the menu by itself.
+local function Near(f, x, y, pad)
+    local l, r, t, b = f:GetLeft(), f:GetRight(), f:GetTop(), f:GetBottom()
+    if not (l and r and t and b) then return true end
+    local s = f:GetEffectiveScale() or 1
+    x, y = x / s, y / s
+    return x >= l - pad and x <= r + pad and y >= b - pad and y <= t + pad
+end
+
+local function BuildContext()
+    ctx = CreateFrame("Frame", ns.FRAME .. "ContextMenu", UIParent)
+    ctx:SetFrameStrata("FULLSCREEN_DIALOG")
+    ctx:SetClampedToScreen(true)
+    ctx:EnableMouse(true)
+    Style.Surface(ctx)
+    ctx.title = Text(ctx, "GameFontNormalSmall")
+    ctx.title:SetPoint("TOPLEFT", 8, -5)
+    ctx.title:SetPoint("TOPRIGHT", -8, -5)
+    ctx.line = Style.HLine(ctx)
+    ctx.line:SetPoint("TOPLEFT", 4, -CTX_TITLE + 2)
+    ctx.line:SetPoint("TOPRIGHT", -4, -CTX_TITLE + 2)
+    ctx.holder = CreateFrame("Frame", nil, ctx)
+    ctx.holder:SetPoint("TOPLEFT", 3, -CTX_TITLE)
+    ctx.holder:SetPoint("BOTTOMRIGHT", -3, 3)
+    ctx.list = Style.List(ctx.holder, { fallbackRows = CTX_ROWS, onClick = function(item)
+        if not item.pick then return end
+        CloseContext()
+        item.pick()
+    end })
+    ctx:SetScript("OnUpdate", function(self)
+        local owner = self.owner
+        if not owner or not owner:IsVisible() or owner.item ~= self.item then CloseContext() return end
+        if type(GetCursorPosition) ~= "function" then return end
+        local x, y = GetCursorPosition()
+        if not (x and y) then return end
+        local pad = Style.CONTEXT_MARGIN
+        if not Near(self, x, y, pad) and not Near(owner, x, y, pad) then CloseContext() end
+    end)
+    ctx:Hide()
+    if UISpecialFrames then table.insert(UISpecialFrames, ns.FRAME .. "ContextMenu") end
+end
+
+-- One menu entry → a list row.
+local function MenuRow(it)
+    if it.header then return { header = true, text = tostring(it.header) } end
+    local tone = it.disabled and "dim" or (it.selected and "accent" or it.tone)
+    local text = Toned(tostring(it.label or ""), tone)
+    for _, n in ipairs(it.notes or {}) do
+        if n[1] and n[1] ~= "" then text = text .. "  " .. Toned(n[1], it.disabled and n[2] ~= "bad" and n[2] ~= "gold" and "dim" or n[2]) end
+    end
+    local tip = it.tooltip
+    if it.disabled and it.why then
+        tip = {}
+        for _, l in ipairs(it.tooltip or { tostring(it.label or "") }) do tip[#tip + 1] = l end
+        tip[#tip + 1] = HEX.muted .. "Not possible: " .. it.why .. ".|r"
+    end
+    return { text = text, accent = it.selected and COLORS.accent or nil, pick = not it.disabled and it.pick or nil,
+        tooltip = tip and function(o) ns.Tooltip.Text(o, tip) end }
+end
+
+function Style.ContextMenu(owner, menu)
+    if not ctx then BuildContext() end
+    menu = menu or {}
+    local rows = {}
+    for _, it in ipairs(menu.items or {}) do rows[#rows + 1] = MenuRow(it) end
+    if #rows == 0 then rows[1] = { text = HEX.muted .. "Nothing to do here.|r" } end
+    local shown = math.min(#rows, CTX_ROWS)
+    ctx:SetSize(menu.width or CTX_WIDTH, CTX_TITLE + shown * Style.ROW + 6)
+    ctx:ClearAllPoints()
+    local x, y = 0, 0
+    if type(GetCursorPosition) == "function" then x, y = GetCursorPosition() end
+    local s = UIParent:GetEffectiveScale() or 1
+    -- Just above the pointer, its left edge a little left of it.
+    ctx:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", (x or 0) / s - 12, (y or 0) / s + 6)
+    ctx.title:SetText(tostring(menu.title or "") .. (menu.sub and (HEX.muted .. "  " .. menu.sub .. "|r") or ""))
+    ctx.owner, ctx.item = owner, owner.item
+    ctx.list.visible = shown
+    ctx.list.offset = 0
+    ns.Tooltip.Hide()
+    ctx:Show()
+    ctx.list:SetItems(rows)
+    return ctx
 end

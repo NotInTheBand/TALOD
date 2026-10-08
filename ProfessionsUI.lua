@@ -441,6 +441,11 @@ local function BuildView(parent)
 end
 
 ns.GearUI.AddView({ key = "professions", label = "Professions", build = BuildView })
+-- The plan the tab opens on, built after login.
+ns.GearUI.AddWarm(function()
+    local prof = CurrentProf(ns.Gear.CharKey())
+    if prof then Prof.PlanFor(nil, prof) end
+end)
 
 ---------------------------------------------------------------------------
 -- Crafting tab: what you made (totals per recipe, left) and the log

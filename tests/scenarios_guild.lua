@@ -217,6 +217,277 @@ scenarios.guild_who = function()
     check(#MOCK.whoQueries == n, "no /who from the tick")
 end
 
+-- Hands Free: a click on the open world is the next recruit click (red row,
+-- else the next whisper, else one /who); windows, units and combat excluded.
+scenarios.guild_hands_free = function()
+    local ns = setup()
+    local G = ns.Guild
+    local function click(button) MOCK.MouseDown(button) end
+
+    -- Off by default: world clicks do nothing.
+    check(TALODDB.guildHandsFree == false, "off by default")
+    click()
+    check(#MOCK.whoQueries == 0 and #MOCK.whispers == 0, "off: nothing")
+
+    slash("guild handsfree")
+    check(TALODDB.guildHandsFree == true, "slash turns it on")
+
+    -- No click seen yet: the trace says so.
+    resetOutput()
+    slash("guild handsfree why")
+    check(printed("no click or key"), "why: no click seen")
+
+    -- Nobody listed: the click runs a /who; the next one waits only for the
+    -- /who button's own 5 s.
+    click()
+    check(#MOCK.whoQueries == 1, "/who from a world click")
+    MOCK.whoResults = {}
+    MOCK.FireEvent("WHO_LIST_UPDATE")
+    wait(2)
+    click()
+    check(#MOCK.whoQueries == 1, "no second /who within the button's wait")
+    local p = G.HandsFreePresses()
+    check(#p == 2 and p[1].result == "/who" and p[2].result:find("next /who in"), "trace: " .. tostring(p[2] and p[2].result))
+
+    -- Ticks and events never act, even while on.
+    wait(40)
+    check(#MOCK.whoQueries == 1 and #MOCK.whispers == 0, "nothing from the tick")
+
+    -- A recruit on the list: a /who that is due still goes first (searching
+    -- goes on while nameplates fill the list), then the whisper; ten seconds
+    -- later the next click invites.
+    plateAdd("nameplate1", MOCK.Friend({ name = "Newbie", guid = "Player-1-N", level = 12 }))
+    wait(5)
+    check(names(G.Candidates()) == "Newbie", "listed")
+    -- A click on a window or on a unit is used already.
+    MOCK.focus = UIParent
+    click()
+    check(#MOCK.whispers == 0 and #MOCK.whoQueries == 1, "click on a window: nothing")
+    MOCK.focus = nil
+    MOCK.units.mouseover = MOCK.Friend({ name = "Npc", guid = "Creature-1" })
+    click("RightButton")
+    check(#MOCK.whispers == 0 and #MOCK.whoQueries == 1, "click on a unit: nothing")
+    MOCK.units.mouseover = nil
+    p = G.HandsFreePresses()
+    check(p[#p - 1].result:find("window") and p[#p].result:find("unit"), "trace: window, unit")
+    click("MiddleButton")
+    check(#MOCK.whispers == 0, "middle button: nothing")
+    click("RightButton")
+    check(#MOCK.whoQueries == 2 and #MOCK.whispers == 0, "list not empty, /who due: the /who first")
+    MOCK.FireEvent("WHO_LIST_UPDATE")
+    wait(2)
+    click("RightButton")
+    check(#MOCK.whispers == 1 and MOCK.whispers[1].target == "Newbie", "right-click on the world: the whisper")
+    check(G.HandsFreeLast().what == "whisper", "last action kept")
+    click()
+    check(#MOCK.whispers == 1 and #MOCK.guildInvites == 0, "nothing left to do: nothing sent")
+    wait(11)
+    check(#MOCK.guildInvites == 0, "no invite from the tick")
+    -- In combat: paused.
+    MOCK.lockdown = true
+    click()
+    check(#MOCK.guildInvites == 0 and G.HandsFreeBlocked() == "in combat", "paused in combat")
+    MOCK.lockdown = false
+    click()
+    check(MOCK.guildInvites[1] == "Newbie" and #MOCK.whispers == 1, "the next world click: the invite")
+
+    wait(1)
+    resetOutput()
+    click()
+    check(#MOCK.whoQueries == 3, "/who again once the button's wait is over")
+    slash("guild handsfree why")
+    check(printed("over WorldFrame: /who"), "why lists the clicks")
+
+    -- A refusal outside a step (another of the addon's calls) is not Hands Free's.
+    MOCK.FireEvent("ADDON_ACTION_BLOCKED", "TALOD", "SomethingElse()")
+    check(TALODDB.guildHandsFree == true, "a block elsewhere: stays on")
+
+    -- The game blocks the /who inside the call (it fires the event there and
+    -- the call returns as if it went): traced, Hands Free stays on; three in
+    -- a row and world clicks leave the /who alone, keys still try it.
+    local realSend = C_FriendList.SendWho
+    C_FriendList.SendWho = function() MOCK.FireEvent("ADDON_ACTION_BLOCKED", "TALOD", "C_FriendList.SendWho()") end
+    resetOutput()
+    for _ = 1, 3 do
+        wait(5.1)
+        click()
+    end
+    p = G.HandsFreePresses()
+    check(TALODDB.guildHandsFree == true, "blocked: stays on")
+    check(p[#p].result:find("blocked by the game"), "trace says blocked: " .. tostring(p[#p].result))
+    check(printed("blocked the /who from world clicks 3 times"), "told once it backs off")
+    C_FriendList.SendWho = realSend
+    wait(5.1)
+    local whos = #MOCK.whoQueries
+    click()
+    check(#MOCK.whoQueries == whos, "world clicks leave the /who alone now")
+    MOCK.KeyDown("W")
+    check(#MOCK.whoQueries == whos + 1, "a move key still runs it")
+    resetOutput()
+    slash("guild handsfree why")
+    check(printed("left alone") and printed("mouse:who"), "why names what is left alone")
+    slash("guild handsfree")
+    check(TALODDB.guildHandsFree == false, "off again")
+
+    -- Delayed invite on, the game blocks Hands Free's invite to a red row: the
+    -- row stays red for your click (which sends it at once, no "repeat"),
+    -- and Hands Free never tries that player again (it used to loop on them).
+    slash("guild handsfree")
+    plateAdd("nameplate4", MOCK.Friend({ name = "Stuck", guid = "Player-1-S", level = 16 }))
+    wait(5)
+    G.Who()
+    MOCK.MouseDown("LeftButton")   -- the whisper
+    check(data().recruits["Stuck-Mockrealm"].status == "inviting", "Stuck: whispered")
+    wait(11)
+    G.Who()
+    local tries = 0
+    local realInvite = C_GuildInfo.Invite
+    C_GuildInfo.Invite = function()
+        tries = tries + 1
+        MOCK.FireEvent("ADDON_ACTION_BLOCKED", "TALOD", "C_GuildInfo.Invite()")
+    end
+    resetOutput()
+    MOCK.MouseDown("LeftButton")
+    check(tries == 1 and printed("blocked the guild invite to Stuck") and printed("click their red row"), "blocked, told once")
+    local back = G.Candidates()
+    check(#back >= 1 and back[#back].full == "Stuck-Mockrealm" and back[#back].ready, "still a red row")
+    check(G.HandsFreeBlockedFor("Stuck-Mockrealm"), "marked for your click")
+    wait(2)
+    MOCK.MouseDown("LeftButton")
+    check(tries == 1, "Hands Free does not try them again")
+    C_GuildInfo.Invite = realInvite
+    local before = #MOCK.guildInvites
+    check(G.Invite("Stuck-Mockrealm") and #MOCK.guildInvites == before + 1, "your click on the row sends it at once")
+    check(data().recruits["Stuck-Mockrealm"].status == "invited", "invited")
+    slash("guild handsfree")
+
+    -- One Hands Free step a second: a click or key sooner does nothing (and
+    -- says so); the recruit key does not wait.
+    slash("guild handsfree")
+    plateAdd("nameplate2", MOCK.Friend({ name = "Alpha", guid = "Player-1-A", level = 14 }))
+    plateAdd("nameplate3", MOCK.Friend({ name = "Bravo", guid = "Player-1-B", level = 15 }))
+    wait(5)
+    G.Who()   -- the /who button: its wait keeps the next clicks on the list
+    local sent = #MOCK.whispers
+    click()
+    click()
+    MOCK.KeyDown("W")
+    check(#MOCK.whispers + ns.Outbox.Pending() == sent + 1, "three quick presses: one whisper")
+    p = G.HandsFreePresses()
+    check(p[#p].result:find("too soon") and p[#p - 1].result:find("too soon"), "the others: too soon")
+    wait(0.5)
+    click()
+    check(#MOCK.whispers + ns.Outbox.Pending() == sent + 1, "half a second later: still waiting")
+    wait(0.5)
+    click()
+    check(#MOCK.whispers + ns.Outbox.Pending() == sent + 2, "a second later: the next whisper")
+    wait(3)
+    check(#MOCK.whispers == sent + 2, "both sent")
+    slash("guild handsfree")
+
+    -- Move and jump keys (bound keys, not letters) count as clicks; the key
+    -- still reaches the game.
+    slash("guild handsfree")
+    check(TALODDB.guildHandsFreeKeys == true and G.HandsFreeKeys().W and G.HandsFreeKeys().SPACE, "move keys read")
+    wait(5)   -- before Alpha's delayed invite is ready (10 s after the whisper), after the /who's wait
+    local whos = #MOCK.whoQueries
+    MOCK.KeyDown("E")
+    check(#MOCK.whoQueries == whos, "a key not bound to moving: nothing")
+    MOCK.KeyDown("SPACE")
+    check(#MOCK.whoQueries == whos + 1, "Space: the /who")
+    check(MOCK.keysEaten == 0, "keys handed on to the game")
+    MOCK.bindings.MOVEFORWARD = { "E" }
+    MOCK.FireEvent("UPDATE_BINDINGS")
+    wait(6)
+    MOCK.KeyDown("E")
+    local last = G.HandsFreePresses()[#G.HandsFreePresses()]
+    check(last.button == "E" and last.result == "invite Alpha", "rebound key follows the binding (red row first): " .. tostring(last.result))
+    resetOutput()
+    slash("guild handsfree why")
+    check(printed("key E: invite Alpha"), "why lists keys")
+    TALODDB.guildHandsFreeKeys = false
+    wait(6)
+    local n = #G.HandsFreePresses()
+    MOCK.KeyDown("E")
+    check(#G.HandsFreePresses() == n, "keys off: nothing")
+    TALODDB.guildHandsFreeKeys = true
+    slash("guild handsfree")
+
+    -- The toggle in the Recruit tab and the mini window.
+    TALODDB.guildMiniShown = true
+    ns.GuildUI.Show("recruit")
+    ns.Refresh()
+    local v = ns.GuildUI.views and ns.GuildUI.views.recruit
+    check(v and v.handsFree and ns.GuildUI.mini and ns.GuildUI.mini.handsFree, "toggles built")
+    v.handsFree:Fire("OnClick", "LeftButton")
+    check(TALODDB.guildHandsFree == true, "Recruit tab toggle")
+    ns.GuildUI.mini.handsFree:Fire("OnClick", "LeftButton")
+    check(TALODDB.guildHandsFree == false, "mini window toggle")
+end
+
+-- A /who the game drops from a world click raises nothing: no answer comes.
+-- The /who button's wait is given back at once, and after two in a row
+-- world clicks leave the /who to the button; keys and the button still work.
+scenarios.guild_hands_free_who_dropped = function()
+    local ns = setup()
+    local G = ns.Guild
+    slash("guild handsfree")
+    local realSend = C_FriendList.SendWho
+    local dropped = 0
+    C_FriendList.SendWho = function() dropped = dropped + 1 end   -- returns, never answers
+    MOCK.MouseDown("LeftButton")
+    check(dropped == 1 and G.WhoWait() > 0, "sent, the button waits")
+    wait(4.5)
+    check(G.WhoWait() == 0, "no answer: the button is free again")
+    check(G.WhoStatus():find("no answer"), "status says so: " .. tostring(G.WhoStatus()))
+    resetOutput()
+    MOCK.MouseDown("LeftButton")
+    wait(4.5)
+    check(dropped == 2 and printed("does not answer a /who sent from world clicks"), "two in a row: told")
+    MOCK.MouseDown("LeftButton")
+    check(dropped == 2, "world clicks leave the /who alone")
+    check(G.Who() and dropped == 3, "the /who button still searches")
+    C_FriendList.SendWho = realSend
+    wait(5.5)
+    MOCK.KeyDown("W")
+    check(#MOCK.whoQueries == 1, "a move key still runs it")
+    MOCK.whoResults = {}
+    MOCK.FireEvent("WHO_LIST_UPDATE")
+    wait(5)
+    check(G.WhoWait() == 0 and not G.WhoStatus():find("no answer"), "answered: no miss counted")
+end
+
+-- Set recruit key: the next key you press becomes a click binding on the
+-- step button (saved); Escape cancels, a lone modifier waits, the old key
+-- goes, combat refuses. The bound key then does one step.
+scenarios.guild_recruit_key = function()
+    local ns = setup()
+    local G = ns.Guild
+    check(G.StepKey() == nil, "no key yet")
+    slash("guild key")
+    MOCK.KeyDown("LSHIFT")
+    check(G.StepKey() == nil, "a lone modifier waits")
+    MOCK.KeyDown("F6")
+    check(G.StepKey() == "F6" and MOCK.savedBindings == 1, "F6 set and saved: " .. tostring(G.StepKey()))
+    check(GetBindingAction("F6") == "CLICK TALODRecruitStep:LeftButton", "a click binding on the step button")
+    slash("guild key")
+    MOCK.KeyDown("F7")
+    check(G.StepKey() == "F7" and GetBindingAction("F6") == "", "the old key goes")
+    slash("guild key")
+    MOCK.KeyDown("ESCAPE")
+    check(G.StepKey() == "F7", "Escape: unchanged")
+    MOCK.KeyDown("F8")
+    check(G.StepKey() == "F7", "after Escape, keys are not taken")
+    resetOutput()
+    MOCK.lockdown = true
+    slash("guild key")
+    check(printed("out of combat"), "refused in combat")
+    MOCK.lockdown = false
+    -- What the key does: one step.
+    _G["TALODRecruitStep"]:Click()
+    check(#MOCK.whoQueries == 1, "the key's click: one step (a /who)")
+end
+
 scenarios.guild_roster_log = function()
     local ns = setup(nil, { guild = { roster = {
         { name = "Alpha", rank = 0, level = 60, classFile = "WARRIOR", online = true },
@@ -332,6 +603,48 @@ scenarios.guild_promotions = function()
     check(#MOCK.promoted == 1, "nothing promoted by the tick")
 end
 
+scenarios.guild_name_scripts = function()
+    local ns = setup(nil, { guild = { roster = { { name = "Alpha", rank = 0, level = 60, classFile = "WARRIOR", online = true } } } })
+    local G = ns.Guild
+    local function set(t) local out = {} for k in pairs(t) do out[#out + 1] = k end table.sort(out) return table.concat(out, ",") end
+    check(set(G.NameScripts("Zoë Brontë")) == "latin", "accented Latin is Latin")
+    check(set(G.NameScripts("Иван")) == "cyrillic", "Cyrillic")
+    check(set(G.NameScripts("Λέων")) == "greek", "Greek")
+    check(set(G.NameScripts("李雷")) == "han", "Han")
+    check(set(G.NameScripts("さくら")) == "kana", "kana")
+    check(set(G.NameScripts("山田さくら")) == "han,kana", "Japanese: Han + kana")
+    check(set(G.NameScripts("민수")) == "hangul", "Hangul")
+    check(set(G.NameScripts("สมชาย")) == "thai", "Thai")
+    check(set(G.NameScripts("Ivan Иванов")) == "cyrillic,latin", "mixed name")
+    check(set(G.NameScripts("Bad\200name")) == "latin,other", "broken UTF-8 is other")
+    check(G.ScriptHidden("Иван-Иванград") == false, "nothing hidden by default")
+
+    local list = { { "Zoë", "Z" }, { "Иван", "I" }, { "민수", "M" }, { "李雷", "L" }, { "Λέων", "G" } }
+    for i, p in ipairs(list) do plateAdd("nameplate" .. i, MOCK.Friend({ name = p[1], guid = "Player-1-" .. p[2], level = 20 })) end
+    wait(5)
+    check(#G.Candidates() == 5, "all five listed: " .. names(G.Candidates()))
+
+    -- The Recruit tab's alphabet card.
+    slash("guild")
+    ns.GuildUI.Show("recruit")
+    local rv = ns.GuildUI.views.recruit
+    check(#rv.scriptChips == #G.SCRIPTS and rv.abc.sub:GetText():find("Every alphabet"), "alphabet card")
+    local chips = {}
+    for _, chip in ipairs(rv.scriptChips) do chips[chip.script] = chip end
+    chips.cyrillic:Fire("OnClick", "LeftButton")
+    check(TALODDB.guildRecruitHideScript.cyrillic == true and #G.Candidates() == 4, "Cyrillic hidden: " .. names(G.Candidates()))
+    check(rv.abc.sub:GetText():find("1 player hidden"), "count shown: " .. tostring(rv.abc.sub:GetText()))
+    for _, id in ipairs({ "greek", "han", "kana", "hangul", "thai", "arabic", "hebrew", "other" }) do chips[id]:Fire("OnClick", "LeftButton") end
+    check(names(G.Candidates()) == "Zoë", "Latin only: " .. names(G.Candidates()))
+    check(rv.list.all[1].full == "Zoë-Mockrealm" and #rv.list.all == 1, "list redrawn")
+    -- The realm is not part of the check: a Latin name on a Cyrillic realm stays.
+    check(G.ScriptHidden("Zoë-Гордунни") == false, "realm ignored")
+    chips.latin:Fire("OnClick", "LeftButton")
+    check(#G.Candidates() == 0, "Latin hidden too: nobody")
+    for _, chip in ipairs(rv.scriptChips) do chip:Fire("OnClick", "LeftButton") end
+    check(next(TALODDB.guildRecruitHideScript) == nil and #G.Candidates() == 5, "every chip again: all alphabets")
+end
+
 scenarios.guild_window = function()
     Minimap = CreateFrame("Frame", "Minimap", UIParent)
     Minimap._cx, Minimap._cy = 1000, 700
@@ -354,7 +667,7 @@ scenarios.guild_window = function()
     check(ns.Options.TabIndex("Guild") ~= nil, "settings tab")
     check(UI.views.roster.list.all[2].text:find("alt of Alpha"), "roster row with note")
 
-    -- Recruit filters: classes of your faction, level buttons, class chips.
+    -- Recruit filters: level buttons, class chips.
     local rv = UI.views.recruit
     plateAdd("nameplate2", MOCK.Friend({ name = "Warry", guid = "Player-1-W", class = "WARRIOR", level = 40 }))
     plateAdd("nameplate3", MOCK.Friend({ name = "Mystery", guid = "Player-1-M", class = "MAGE", level = 20 }))
@@ -362,13 +675,15 @@ scenarios.guild_window = function()
     check(#G.Candidates() == 3, "three recruits: " .. names(G.Candidates()))
     local chips = {}
     for _, chip in ipairs(rv.classChips) do chips[chip.classFile] = chip end
-    check(chips.PALADIN and not chips.SHAMAN and #rv.classChips == 8, "Alliance classes only")
+    -- Forever has Alliance shamans: every class gets a chip.
+    check(chips.PALADIN and chips.SHAMAN and #rv.classChips == 9, "all nine classes")
     chips.WARRIOR:Fire("OnClick", "LeftButton")
     check(names(G.Candidates()) == "Mystery,Newbie" or names(G.Candidates()) == "Newbie,Mystery", "warrior hidden: " .. names(G.Candidates()))
     check(G.ClassOK(nil) == false, "unknown class hidden while a class is hidden")
     chips.WARRIOR:Fire("OnClick", "LeftButton")
     chips.PRIEST:Fire("OnClick", "RightButton")
     check(names(G.Candidates()) == "Newbie", "only priests")
+    check(TALODDB.guildRecruitHideClass.SHAMAN == true, "only priests hides shamans too")
     chips.PRIEST:Fire("OnClick", "RightButton")
     check(next(TALODDB.guildRecruitHideClass) == nil and #G.Candidates() == 3, "right-click again: all")
     check(G.ClassOK(nil) == true, "unknown class shown with no class hidden")
@@ -380,7 +695,7 @@ scenarios.guild_window = function()
     check(names(G.Candidates()) == "Warry", "level filter: " .. names(G.Candidates()))
     for _ = 1, 25 do rv.maxLevel:Fire("OnClick", "RightButton") end
     check(TALODDB.guildRecruitMaxLevel == 35 and #G.Candidates() == 0, "max 35")
-    check(rv.list.all[1].text:find("level / class filter"), "filtered empty text")
+    check(rv.list.all[1].text:find("level / class / name alphabet filter"), "filtered empty text")
     MOCK.shift = true
     for _ = 1, 3 do rv.maxLevel:Fire("OnClick", "RightButton") end
     MOCK.shift = false
@@ -1028,10 +1343,15 @@ scenarios.guild_refresh_cost = function()
 
     -- The unread count (tab, notice) without listing every conversation.
     local rec = data().recruits["Lone1-Mockrealm"]
+    -- Written around Guild.AddChat, which announces its writes: bumped here.
     rec.unread = 2
+    ns.Data.Bump("guild.replies")
     check(G.Unread() == 0, "unread without a line of theirs: not counted")
     rec.chat[#rec.chat + 1] = { t = time(), text = "sure" }
+    ns.Data.Bump("guild.replies")
     check(G.Unread() == 2, "their line: counted")
+    G.MarkRead("Lone1-Mockrealm")
+    check(G.Unread() == 0, "read: no longer counted (MarkRead announces it)")
     TALODDB.guildMiniShown = false
 end
 
@@ -1329,6 +1649,77 @@ scenarios.guild_delayed_off = function()
     check(data().recruits["Quick-Mockrealm"].status == "invited", "invited")
     wait(15)
     check(#MOCK.guildInvites == 1 and #G.Candidates() == 0, "nothing more, not listed again")
+
+    -- A repeat (the same invite went seconds ago, a double click): it counts.
+    plateAdd("nameplate2", MOCK.Friend({ name = "Twice", guid = "Player-1-W", level = 13 }))
+    wait(5)
+    ns.Outbox.GuildInvite("Twice")
+    local invites = #MOCK.guildInvites
+    check(G.Invite("Twice-Mockrealm") == true, "repeat: accepted")
+    local r = data().recruits["Twice-Mockrealm"]
+    check(r.status == "invited" and r.whisper and #MOCK.guildInvites == invites, "counted as invited, no second invite: " .. tostring(r.status))
+
+    -- The same-click invite the game does not take: it waits in the queue,
+    -- ready once the whisper is out; the next accepted input sends it.
+    local realInvite = C_GuildInfo.Invite
+    C_GuildInfo.Invite = function() error("refused") end
+    plateAdd("nameplate3", MOCK.Friend({ name = "Later", guid = "Player-1-L", level = 14 }))
+    plateAdd("nameplate4", MOCK.Friend({ name = "Queued", guid = "Player-1-Q2", level = 15 }))
+    plateAdd("nameplate6", MOCK.Friend({ name = "Early", guid = "Player-1-E", level = 16 }))
+    wait(5)
+    TALODDB.outboxBurst = 2   -- two whispers on their way at most: the third waits in the queue
+    check(G.Invite("Early-Mockrealm") == true, "first click")
+    check(G.Invite("Later-Mockrealm") == true, "click: the whisper went, the invite did not")
+    check(G.Invite("Queued-Mockrealm") == true, "second click: its whisper is queued behind")
+    C_GuildInfo.Invite = realInvite
+    r = data().recruits["Later-Mockrealm"]
+    check(r.status == "inviting" and r.whisper, "Later: in the invite queue")
+    local why, _, readyIn = G.InviteWhy("Later-Mockrealm")
+    check(why == "failed" and readyIn == 0, "Later: ready, why failed: " .. tostring(why))
+    check(G.InviteWhy("Queued-Mockrealm") == "message", "Queued: waits for its whisper")
+    local list = G.Candidates()
+    check(#list == 2 and list[1].full == "Early-Mockrealm" and list[2].full == "Later-Mockrealm" and list[2].why == "failed",
+        "Early and Later ready, oldest first")
+    check(G.InviteQueue().ready == 2 and G.InviteQueue().message == 1, "queue: 2 ready, 1 waiting for its message")
+    -- The tooltips say why; the Next invite button counts the ready ones.
+    UI.Show("recruit")
+    ns.Refresh()
+    local rv = UI.views.recruit
+    check(rv.next.label:GetText():find("Next invite %(2%)"), "Next invite (2): " .. tostring(rv.next.label:GetText()))
+    local rows = UI.CandidateRows()
+    rows[2].tooltip(UIParent)
+    rv.next:Fire("OnEnter")
+    rv.handsFree:Fire("OnEnter")
+    local tip = table.concat(UI.NextTip(), " | ")
+    check(tip:find("Early") and tip:find("Ready: 2") and tip:find("Waiting for their message to go out first: 1"), "Next tip: " .. tip)
+    wait(2)
+    check(G.InviteWhy("Queued-Mockrealm") == "failed" and G.InviteQueue().ready == 3, "Queued: whisper out, ready")
+    invites = #MOCK.guildInvites
+    check(G.InviteNext() == "Early-Mockrealm", "next invite: the oldest first")
+    check(G.InviteNext() == "Later-Mockrealm" and #MOCK.guildInvites == invites + 2, "then the next")
+    check(G.InviteNext() == "Queued-Mockrealm" and #MOCK.guildInvites == invites + 3, "then the last")
+    check(G.InviteNext() == nil, "queue empty")
+    check(ns.GuildUI.WhyText and ns.GuildUI.WhyText("failed"):find("did not accept"), "tooltip explains why")
+
+    -- A Hands Free invite the game blocks: back in the queue for another input.
+    plateAdd("nameplate5", MOCK.Friend({ name = "Held", guid = "Player-1-H2", level = 14 }))
+    wait(5)
+    G.Who()   -- the /who's wait keeps the click on the list
+    TALODDB.guildHandsFree = true
+    C_GuildInfo.Invite = function() MOCK.FireEvent("ADDON_ACTION_BLOCKED", "TALOD", "C_GuildInfo.Invite()") end
+    MOCK.MouseDown("LeftButton")
+    C_GuildInfo.Invite = realInvite
+    r = data().recruits["Held-Mockrealm"]
+    check(r and r.status == "inviting", "blocked invite: queued: " .. tostring(r and r.status))
+    check(G.InviteWhy("Held-Mockrealm") == "blocked" and G.HandsFreeBlockedFor("Held-Mockrealm") == "mouse", "why blocked, from world clicks")
+    invites = #MOCK.guildInvites
+    MOCK.MouseDown("LeftButton")
+    check(#MOCK.guildInvites == invites, "world clicks do not try it again")
+    -- The recruit key binding is a real key press: it sends it, Hands Free on or off.
+    TALODDB.guildHandsFree = false
+    _G["TALODRecruitStep"]:Click()
+    check(#MOCK.guildInvites == invites + 1 and MOCK.guildInvites[#MOCK.guildInvites] == "Held", "the binding sends it")
+    check(G.HandsFreePresses()[#G.HandsFreePresses()].result == "invite Held", "traced as the binding")
 end
 
 -- A reply you typed shows in the conversation as "sending" until the game's
@@ -1370,4 +1761,255 @@ scenarios.guild_replies_outgoing = function()
     check(G.Reply("Newbie-Mockrealm", "last try"), "sent")
     wait(61)
     check(#G.Outgoing("Newbie-Mockrealm") == 0, "no echo: leaves the list")
+end
+
+-- Replies: a tag per conversation (joined / declined / invited / blocked)
+-- with filters, a search over the messages, and opening one brings the
+-- player's level up to date (a unit showing them, else one /who).
+scenarios.guild_replies_filters_lookup = function()
+    local ns = setup()
+    local G, UI = ns.Guild, ns.GuildUI
+    plateAdd("nameplate1", MOCK.Friend({ name = "Newbie", guid = "Player-1-N", level = 12 }))
+    plateAdd("nameplate2", MOCK.Friend({ name = "Oldie", guid = "Player-1-O", level = 20 }))
+    plateAdd("nameplate3", MOCK.Friend({ name = "Grump", guid = "Player-1-G", level = 30 }))
+    wait(5)
+    G.Invite("Newbie-Mockrealm")
+    G.Invite("Oldie-Mockrealm")
+    G.Invite("Grump-Mockrealm")
+    MOCK.FireEvent("CHAT_MSG_WHISPER", "hi, do you raid?", "Newbie-Mockrealm")
+    MOCK.FireEvent("CHAT_MSG_WHISPER", "no thanks", "Oldie-Mockrealm")
+    MOCK.FireEvent("CHAT_MSG_WHISPER", "go away", "Grump-Mockrealm")
+    local rec = data().recruits
+    rec["Oldie-Mockrealm"].status = "declined"
+    MOCK.FireEvent("CHAT_MSG_IGNORED", "", "Grump")
+    check(G.ReplyGroup(rec["Newbie-Mockrealm"]) == "invited", "invited")
+    check(G.ReplyGroup(rec["Oldie-Mockrealm"]) == "declined", "declined")
+    check(G.ReplyGroup(rec["Grump-Mockrealm"]) == "blocked", "blocked")
+    rec["Newbie-Mockrealm"].status = "joined"
+    check(G.ReplyGroup(rec["Newbie-Mockrealm"]) == "joined", "joined")
+    ns.Data.Bump("guild.replies")
+
+    UI.Show("replies")
+    local v = UI.views.replies
+    local function shown()
+        local out = {}
+        for _, item in ipairs(v.list.items) do if item.full then out[#out + 1] = item.full:match("^[^-]+") end end
+        table.sort(out)
+        return table.concat(out, ",")
+    end
+    check(shown() == "Grump,Newbie,Oldie", "all three: " .. shown())
+    local tags = {}
+    for _, item in ipairs(v.list.items) do if item.full then tags[item.full] = item.cols and item.cols[1] or "" end end
+    check(tags["Grump-Mockrealm"]:find("Blocked", 1, true) and tags["Newbie-Mockrealm"]:find("Joined", 1, true)
+        and tags["Oldie-Mockrealm"]:find("Declined", 1, true), "each tagged")
+    for _, b in ipairs(v.groups) do if b.key == "blocked" then b:Fire("OnClick", "LeftButton") end end
+    check(UI.state.replyGroup == "blocked" and shown() == "Grump", "Blocked filter: " .. shown())
+    UI.state.replyGroup = "all"
+
+    -- The second search box: words said, not names.
+    v.words:SetText("RAID")
+    v.words:Fire("OnTextChanged")
+    check(shown() == "Newbie", "message search: " .. shown())
+    v.words:SetText("zebra")
+    v.words:Fire("OnTextChanged")
+    check(shown() == "" and v.list.items[1] and v.list.items[1].text:find("No conversation matches", 1, true), "nothing said: " .. shown())
+    v.words:SetText("")
+    v.words:Fire("OnTextChanged")
+    check(shown() == "Grump,Newbie,Oldie", "cleared")
+
+    -- Opening a conversation: a unit showing them is read first.
+    rec["Newbie-Mockrealm"].status = "invited"
+    MOCK.units.nameplate1.level = 14
+    check(G.LookUp("Newbie-Mockrealm") == "unit" and rec["Newbie-Mockrealm"].level == 14, "level from the nameplate")
+    check(#MOCK.whoQueries == 0, "no /who needed")
+    -- Out of sight: one /who for that one name.
+    plateRemove("nameplate1")
+    check(G.LookUp("Newbie-Mockrealm") == "who" and MOCK.whoQueries[1] == 'n-"Newbie"', "one /who: " .. tostring(MOCK.whoQueries[1]))
+    MOCK.whoResults = { { fullName = "Newbie", fullGuildName = "", level = 16, filename = "MAGE" } }
+    MOCK.FireEvent("WHO_LIST_UPDATE")
+    check(rec["Newbie-Mockrealm"].level == 16, "level from /who")
+    check(#G.Candidates() == 0, "a look-up adds no recruit candidate")
+    plateRemove("nameplate2")
+    check(G.LookUp("Oldie-Mockrealm") == nil and #MOCK.whoQueries == 1, "the /who wait holds a second one")
+    wait(1)
+    check(#MOCK.whoQueries == 1, "never from the tick")
+end
+
+-- The language filter stars words out of the echo; being ignored or an
+-- offline player marks the reply as not delivered.
+scenarios.guild_replies_filtered_ignored = function()
+    local ns = setup()
+    local G, UI = ns.Guild, ns.GuildUI
+    check(G.SameWhisper("a shit talking dude", "a @#$% talking dude"), "starred word matches")
+    check(G.SameWhisper("this shitty day, ok", "this @#$%ty day, ok"), "starred part of a word matches")
+    check(not G.SameWhisper("hello there", "hello where"), "another word does not")
+    check(not G.SameWhisper("hello there", "hello there friend"), "more words do not")
+    check(not G.SameWhisper("hello", "@#$% there"), "fewer words do not")
+
+    plateAdd("nameplate1", MOCK.Friend({ name = "Newbie", guid = "Player-1-N", level = 12 }))
+    wait(5)
+    G.Invite("Newbie-Mockrealm")
+    MOCK.FireEvent("CHAT_MSG_WHISPER", "hi!", "Newbie-Mockrealm")
+    UI.Show("replies")
+    local v = UI.views.replies
+    local r = data().recruits["Newbie-Mockrealm"]
+
+    check(G.Reply("Newbie-Mockrealm", "no shit talking here"), "sent")
+    MOCK.FireEvent("CHAT_MSG_WHISPER_INFORM", "no @#$% talking here", "Newbie-Mockrealm")
+    check(#G.Outgoing("Newbie-Mockrealm") == 0 and r.chat[#r.chat].text == "no @#$% talking here", "filtered echo replaces it")
+
+    MOCK.Tick(2)
+    check(G.Reply("Newbie-Mockrealm", "you there?"), "sent")
+    MOCK.FireEvent("CHAT_MSG_IGNORED", "", "Newbie")
+    local out = G.Outgoing("Newbie-Mockrealm")
+    check(#out == 1 and out[1].state == "ignoring", "marked: they ignore you")
+    check(r.ignoring ~= nil, "kept on the record")
+    UI.Refresh()
+    check(v.shown and v.shown:find("ignoring", 1, true), "drawn as not delivered")
+
+    MOCK.FireEvent("CHAT_MSG_WHISPER", "sorry, misclick", "Newbie-Mockrealm")
+    check(r.ignoring == nil, "a whisper from them clears it")
+
+    MOCK.Tick(2)
+    check(G.Reply("Newbie-Mockrealm", "back?"), "sent")
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "Newbie is ignoring you.")
+    check(G.Outgoing("Newbie-Mockrealm")[2].state == "ignoring", "system line works too")
+
+    MOCK.Tick(2)
+    check(G.Reply("Newbie-Mockrealm", "offline?"), "sent")
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "No player named 'Newbie' is currently playing.")
+    out = G.Outgoing("Newbie-Mockrealm")
+    check(out[#out].state == "notfound", "offline marked")
+end
+
+-- Right-click a member: every rank in order, one game command per pick,
+-- warnings for rights the new rank adds, gone once the mouse moves away.
+scenarios.guild_rank_menu = function()
+    local ns = setup(nil, { guild = { roster = {
+        { name = "Alpha", rank = 0, level = 60, online = true },
+        { name = "Vet", rank = 2, level = 50, online = true },
+        { name = "Mem1", rank = 3, level = 30, online = true },
+        { name = "Ini", rank = 4, level = 5, online = true },
+    } } })
+    MOCK.guild.can = { promote = true, demote = true }
+    local G, UI = ns.Guild, ns.GuildUI
+    readRoster()
+
+    local function choices(full)
+        local out = {}
+        for _, c in ipairs(G.RankChoices(full)) do out[c.rank] = c end
+        return out
+    end
+    local c = choices("Ini-Mockrealm")
+    check(c[0] and c[4] and c[4].current, "every rank in order, theirs marked")
+    check(not c[0].ok and not c[1].ok and c[1].why:find("not below your rank"), "not into your rank or above")
+    check(c[2].ok and c[3].ok, "the ranks below yours")
+    check(c[2].gained == nil, "rights unknown: nil, never \"none\"")
+    check(not choices("Alpha-Mockrealm")[3].ok, "the guild master cannot be moved")
+
+    MOCK.guild.flags = { [2] = { [7] = true, [11] = true }, [3] = {}, [4] = {} }
+    c = choices("Ini-Mockrealm")
+    check(table.concat(c[2].gained, ",") == "invite,read officer notes" and #c[3].gained == 0, "rights the new rank adds")
+    check(#choices("Vet-Mockrealm")[4].lost == 2, "rights a demotion takes")
+
+    check(G.SetRank("Ini-Mockrealm", 3) == true and MOCK.promoted[1] == "Ini", "one step up: the game's promote")
+    check(G.SetRank("Mem1-Mockrealm", 4) == true and MOCK.demoted[1] == "Mem1", "one step down: the game's demote")
+    check(G.SetRank("Ini-Mockrealm", 2) == true and #MOCK.rankSets == 1
+        and MOCK.rankSets[1][1] == 4 and MOCK.rankSets[1][2] == 3, "a jump: one SetGuildMemberRank, rank counted from 1")
+    resetOutput()
+    check(G.SetRank("Ini-Mockrealm", 1) == false and printed("not below your rank"), "refused with the reason")
+    check(G.SetRank("Ini-Mockrealm", 4) == false and #MOCK.demoted == 1, "their own rank: nothing")
+
+    local saved = SetGuildMemberRank
+    SetGuildMemberRank = nil
+    check(not choices("Ini-Mockrealm")[2].ok and choices("Ini-Mockrealm")[3].ok, "no rank pick on this client: one step only")
+    SetGuildMemberRank = saved
+    MOCK.guild.can.demote = false
+    check(not choices("Mem1-Mockrealm")[4].ok and choices("Mem1-Mockrealm")[2].ok, "no demote right: only up")
+    MOCK.guild.can.demote = true
+
+    -- The window: right-click a Roster row.
+    UI.Show("roster")
+    local list = UI.views.roster.list
+    list._height = 400
+    list:Draw()
+    local row
+    for _, r in ipairs(list.rows) do
+        if r:IsShown() and r.item and r.item.full == "Ini-Mockrealm" then row = r end
+    end
+    check(row ~= nil, "roster row")
+    MOCK.cursorX, MOCK.cursorY = 300, 300
+    row:Fire("OnClick", "RightButton")
+    local menu = TALODContextMenu
+    check(menu and menu:IsShown(), "menu opens on a right-click")
+    check(menu.title:GetText():find("Ini"), "titled with the member")
+    menu.list._height = 400
+    menu.list:Draw()
+    local warned, picked
+    for _, r in ipairs(menu.list.rows) do
+        if r:IsShown() and r.item and r.item.text:find("Veteran") then
+            warned = r.item.text:find("gains invite") ~= nil
+            picked = r
+        end
+    end
+    check(warned, "the promotion that adds rights carries a warning")
+    local sets = #MOCK.rankSets
+    picked:Fire("OnClick", "LeftButton")
+    check(#MOCK.rankSets == sets + 1 and not menu:IsShown(), "a pick: one command, menu closes")
+    row:Fire("OnClick", "LeftButton")
+    check(not menu:IsShown(), "a left-click does not open it")
+
+    -- Moving away closes it; staying near keeps it.
+    row:Fire("OnClick", "RightButton")
+    row._l, row._r, row._b, row._t = 100, 500, 290, 310
+    menu._l, menu._r, menu._b, menu._t = 288, 528, 306, 500
+    MOCK.cursorX, MOCK.cursorY = 400, 400
+    menu:Fire("OnUpdate", 0.1)
+    check(menu:IsShown(), "over the menu: stays")
+    MOCK.cursorX, MOCK.cursorY = 520, 280
+    menu:Fire("OnUpdate", 0.1)
+    check(menu:IsShown(), "a little off both: stays")
+    MOCK.cursorX, MOCK.cursorY = 900, 100
+    menu:Fire("OnUpdate", 0.1)
+    check(not menu:IsShown(), "well away from both: gone")
+    row:Fire("OnClick", "RightButton")
+    row:Hide()
+    menu:Fire("OnUpdate", 0.1)
+    check(not menu:IsShown(), "the row hides: gone")
+    row:Show()
+
+    -- The other tabs open it too; a recruiter who left has nothing to pick.
+    for _, view in ipairs({ "recruiters", "members", "activity", "promote" }) do
+        UI.Show(view)
+        check(UI.views[view].list ~= nil, "view " .. view)
+    end
+    local gone = UI.RankMenu("Gone-Mockrealm")
+    check(#gone.items == 1 and gone.items[1].disabled, "not in the roster: a note")
+
+    -- The game forbids a rank call to addons (seen on Forever): no Lua error,
+    -- nothing changes. Said in chat, never "done", and greyed out after.
+    readRoster()
+    MOCK.forbidden.SetGuildMemberRank = true
+    local mem = choices("Ini-Mockrealm")
+    check(mem[2].ok, "before: the jump is offered")
+    local setsBefore, reqs = #MOCK.rankSets, MOCK.rosterRequests
+    resetOutput()
+    check(G.SetRank("Ini-Mockrealm", 2) == false and #MOCK.rankSets == setsBefore, "forbidden: false, nothing changed")
+    check(printed("own guild window"), "says the game keeps it to its own window")
+    check(G.Refused("setRank") and not G.Refused("promote"), "remembers which call")
+    mem = choices("Ini-Mockrealm")
+    check(not mem[2].ok and mem[2].why:find("own guild window") and mem[3].ok, "the jump greyed out, one step still offered")
+    MOCK.forbidden.GuildPromote = true
+    resetOutput()
+    check(G.Promote("Mem1-Mockrealm") == false and printed("own guild window"), "Promotions tab: the same")
+    check(G.Refused("promote") and not choices("Mem1-Mockrealm")[2].ok, "promote remembered")
+    resetOutput()
+    check(G.Promote("Mem1-Mockrealm") == false and printed("own guild window"), "later clicks say so without calling")
+    TALODDB.guildRefused.build = "older"
+    check(not G.Refused("promote"), "a new game build: tried again")
+    MOCK.forbidden = {}
+    check(MOCK.rosterRequests == reqs, "a refused change asks for no roster")
+    local n = #MOCK.promoted + #MOCK.demoted + #MOCK.rankSets
+    wait(60)
+    check(#MOCK.promoted + #MOCK.demoted + #MOCK.rankSets == n, "nothing from the tick")
 end

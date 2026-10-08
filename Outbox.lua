@@ -213,6 +213,12 @@ local function SendInvite(target)
 end
 Outbox.GuildInvite = SendInvite
 
+-- The game blocked that invite (ADDON_ACTION_BLOCKED, the call returned as
+-- if it went): it is no repeat, the next click may send it.
+function Outbox.ForgetInvite(target)
+    if type(target) == "string" then recent["g|" .. target:lower()] = nil end
+end
+
 -- On the tick: queued whispers while the pace allows.
 Outbox.Drain = Drain
 
@@ -328,14 +334,6 @@ local function Slash(command, rest)
 end
 
 ns.RegisterModule("Outbox", {
-    init = function()
-        -- The limit used to be Guild's own.
-        local d = db()
-        if d.guildWhisperBurst ~= nil then
-            d.outboxBurst = d.outboxBurst or d.guildWhisperBurst
-            d.guildWhisperBurst = nil
-        end
-    end,
     tick = function() Outbox.Drain() end,
     events = { "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE", "UI_INFO_MESSAGE" },
     onEvent = OnEvent,

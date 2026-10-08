@@ -35,8 +35,14 @@ local function Tick()
     if not initialized then return end
     ns.BeginTickReads()
     if db().enabled then ns.SafeCall(ns.Spotter.Tick) end
+    local Clock, Time = ns.Data.Clock, ns.Data.Time
     for _, module in ipairs(ns.modules) do
-        if module.tick then ns.SafeCall(module.tick) end
+        if module.tick then
+            local t0 = Clock()
+            ns.SafeCall(module.tick)
+            local t1 = Clock()
+            if t0 and t1 then Time("tick", module.name, t1 - t0) end
+        end
     end
     ns.EndTickReads()
 end
@@ -61,6 +67,30 @@ Main.DATA_KEYS = { "players", "journal", "census", "gear", "skills", "economy", 
     "profPlanTargets", "profPlanFrom", "profPlanExcluded" }
 -- Positions saved without a default: a reset moves those frames back too.
 Main.POSITION_KEYS = { fishHudPos = true, fishHudDock = true, guildNoticePos = true, guildMiniPos = true, navPos = true, navSize = true }
+
+-- The slowest work this session (Data.Timings), in the copy window so it
+-- can be pasted into a bug report about frame lag.
+function Main.ShowTimings(arg)
+    if arg == "reset" then
+        ns.Data.ResetTimings()
+        ns.Print("timings cleared: play a while, then " .. ns.Cmd.Text("perf") .. " again.")
+        return
+    end
+    local list = ns.Data.Timings()
+    if #list == 0 then
+        ns.Print("no timings yet (this client cannot measure them, or nothing ran).")
+        return
+    end
+    local lines = { ns.NAME .. " " .. tostring(ns.VERSION) .. " timings this session (" .. ns.FLAVOR .. "), slowest first:",
+        "  max ms   avg ms    runs  what", "" }
+    for i = 1, math.min(#list, 60) do
+        local t = list[i]
+        lines[#lines + 1] = string.format("%8.1f %8.1f %7d  %s %s", t.max, t.avg, t.n, t.kind, t.name)
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "build / background: only runs of 1 ms or more are counted. " .. ns.Cmd.Text("perf", "reset") .. " starts over."
+    if ns.Probe and ns.Probe.ShowText then ns.Probe.ShowText(table.concat(lines, "\n")) end
+end
 
 function Main.ResetSettings()
     local old, kept = db(), {}
@@ -212,6 +242,9 @@ local function HandleSlash(msg)
             ns.ShowErrors()
         end
 
+    elseif command == "perf" then
+        Main.ShowTimings(value)
+
     elseif command == "clear" then
         ns.Spotter.Clear()
         ns.Spotter.ScanPlates()
@@ -255,6 +288,7 @@ local function MaybePrintHints()
 end
 
 local function Initialize()
+    local fresh = ns.DB() == nil
     ns.SetDB(ns.DB() or {})
     ns.CopyDefaults(ns.DB(), ns.defaults)
 
@@ -266,7 +300,7 @@ local function Initialize()
     end
 
     -- Migrations, checks and the tamper seal see the data as it was loaded, before any module touches it.
-    ns.Store.Load()
+    ns.Store.Load(fresh)
 
     ns.RequestProbeItemData()
     for _, module in ipairs(ns.modules) do
@@ -325,9 +359,12 @@ function Main.OnEvent(self, event, ...)
         return
     end
     if not initialized then return end
+    local t0 = ns.Data.Clock()
     for _, handler in ipairs((self == unitFrame and unitRoutes or routes)[event] or NONE) do
         ns.SafeCall(handler, event, ...)
     end
+    local t1 = ns.Data.Clock()
+    if t0 and t1 then ns.Data.Time("event", event, t1 - t0) end
 end
 
 local function OnEvent(self, event, ...)

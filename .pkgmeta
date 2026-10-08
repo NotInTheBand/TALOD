@@ -1,13 +1,19 @@
 # CurseForge / Wago / BigWigsMods packager configuration.
 package-as: TALOD
 
+# The load-on-demand archive addon lives in a subfolder; the game loads it
+# only from the top of AddOns.
+move-folders:
+  TALOD/TALOD_Archive: TALOD_Archive
+
 manual-changelog:
   filename: CHANGELOG.md
   markup-type: markdown
 
 # Shipped: the TOC and its Lua files, README.md, CHANGELOG.md, LICENSE (when
-# present) and the two viewers in tools/ (the in-game Census and Fishing pages
-# tell players to run them). Everything below stays out.
+# present), the two viewers and data_report.py in tools/ (the in-game Census
+# and Fishing pages tell players to run them), and the archive addon as a
+# second folder (move-folders below). Everything below stays out.
 ignore:
   # Developer files
   - tests
@@ -17,6 +23,7 @@ ignore:
   - tools/cache
   - tools/__pycache__
   - tools/build_release.py
+  - build.sh
   - tools/version.py
   - version.json
   - tools/gen_enhancements.py

@@ -961,7 +961,7 @@ scenarios.auction_prices = function()
     -- A later look: the new price, the old one in the history.
     Pr.Record(783, 44, 2, time() + 3600)
     local e = Pr.Entry(783)
-    check(e.p == 44 and e.h and e.h[1][2] == 30, "new look replaces, history kept")
+    check(e.p == 44 and e.h and ns.Prices.Looks(e)[1].p == 30, "new look replaces, history kept")
 
     -- Planner and texts.
     local unit, how = P.ItemPrice(783)
@@ -1045,7 +1045,7 @@ scenarios.market = function()
     local st = M.Stats(2589)
     check(st.looks == 4 and st.usual == 95 and st.low == 50 and st.high == 110 and st.a == 20 and st.over == 0, "stats")
     check(st.trend < -0.4 and st.supplyTrend > 0.5, "under usual, more supply: " .. st.trend .. " " .. tostring(st.supplyTrend))
-    check(Pr.Entry(2589).name == "Linen Cloth" and Pr.Entry(2589).h[1][4] == 10, "name and auctions kept in history")
+    check(Pr.Entry(2589).name == "Linen Cloth" and Pr.Looks(Pr.Entry(2589))[1].a == 10, "name and auctions kept in history")
 
     local deals = M.Deals()
     -- Usual = the earlier looks (100, 110, 90): today's 50c does not pull it down.
@@ -2553,6 +2553,7 @@ scenarios.review_fixes = function()
     slash("reset")
     check(TALODDB.alertsEnabled == true, "setting reset")
     check(TALODDB.someFutureLog and #TALODDB.someFutureLog == 3, "unknown data store kept")
+    TALODDB.someFutureLog = nil
     check(TALODDB.economy["Alt-Mockrealm"] and #ns.Economy.Char().auctions == 3, "economy kept")
     check(TALODDB.fishHudPos == nil, "HUD position reset")
 

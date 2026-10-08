@@ -134,15 +134,7 @@ end
 ---------------------------------------------------------------------------
 -- Officers
 ---------------------------------------------------------------------------
--- The game's permission flags of a rank (0 = guild master), or nil.
-local function RankFlags(rank)
-    local fn = C_GuildInfo and C_GuildInfo.GuildControlGetRankFlags
-    if type(fn) ~= "function" then return nil end
-    local ok, t = pcall(fn, rank + 1)
-    t = ok and S.Value(t) or nil
-    if type(t) ~= "table" then return nil end
-    return t
-end
+local function RankFlags(rank) return Guild.RankFlags(rank) end
 
 -- How officer ranks are decided now: "gm" (set by the guild master),
 -- "permissions" or "default" (ranks 0 and 1).
@@ -440,7 +432,7 @@ local function Whole(n, lo, hi) return type(n) == "number" and n == math.floor(n
 local function GuildSaw(g, kind, who, by, t)
     if type(g.eventsSince) ~= "number" or not g.eventsRead or g.eventsSince > t - 3600 then return nil end
     local from = t - 2 * 86400
-    for _, e in ipairs(g.events or {}) do
+    for _, e in ns.Guild.Events(g) do
         if e.t >= from then
             if kind == "invite" and e.k == "invite" and e.b == who and e.a == by then return true end
             if kind == "join" and e.k == "join" and e.a == who then return true end
