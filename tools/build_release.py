@@ -1,9 +1,12 @@
 """Builds a clean release zip: dist/TALOD-<version>.zip.
 
-The zip holds one folder, TALOD/, with only what the game loads (the
-files listed in the TOC) plus README.md, CHANGELOG.md, LICENSE (when present)
-and the two SavedVariables viewers (tools/census_viewer.py,
-tools/fishing_viewer.py: the in-game pages tell players to run them). Tests,
+The zip holds two folders. TALOD/ has only what the game loads (the files
+listed in the TOC) plus README.md, CHANGELOG.md, LICENSE (when present), the
+two SavedVariables viewers (tools/census_viewer.py, tools/fishing_viewer.py:
+the in-game pages tell players to run them) and tools/data_report.py.
+TALOD_Archive/ is the load-on-demand archive addon, kept in the repository
+as a subfolder (the game loads addons only from the top of AddOns), with
+its TOC's @project-version@ set to the version. Tests,
 docs, generators and developer notes are left out; the build stops if one
 of those would be packed, or anything matching .git/info/exclude (local
 files kept out of the repository).
@@ -22,7 +25,9 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The game loads an addon by its folder name, so the package is named after this folder.
 PACKAGE = ROOT.name
-EXTRA_FILES = ["README.md", "CHANGELOG.md", "tools/census_viewer.py", "tools/fishing_viewer.py"]
+EXTRA_FILES = ["README.md", "CHANGELOG.md", "Bindings.xml", "tools/census_viewer.py", "tools/fishing_viewer.py", "tools/data_report.py"]
+# The archive addon: a second folder in the package (Brand.lua ARCHIVE_ADDON).
+ARCHIVE = PACKAGE + "_Archive"
 OPTIONAL_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt"]
 # Developer-only paths: never in a release.
 FORBIDDEN = re.compile(r"(^|/)(\.[^/]+|tests|docs|dist|census|fishing|concept\.md|cache|__pycache__)(/|$)")
@@ -107,11 +112,37 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / f, target)
 
+    stages = [stage]
+    source = ROOT / ARCHIVE
+    if (source / f"{ARCHIVE}.toc").exists():
+        side = dist / ARCHIVE
+        if side.exists():
+            shutil.rmtree(side)
+        side.mkdir(parents=True)
+        side_toc = (source / f"{ARCHIVE}.toc").read_text(encoding="utf-8").replace("@project-version@", version)
+        side_files = [line.strip().replace("\\", "/") for line in side_toc.splitlines()
+                      if line.strip() and not line.startswith("#")]
+        missing = [f for f in side_files if not (source / f).exists()]
+        if missing:
+            sys.exit(f"{ARCHIVE} TOC lists missing files: " + ", ".join(missing))
+        leaks = leaks_in(f"{ARCHIVE}.toc", side_toc)
+        for f in side_files:
+            leaks += leaks_in(f"{ARCHIVE}/{f}", (source / f).read_text(encoding="utf-8", errors="replace"))
+        if leaks:
+            sys.exit("refusing to package, these mention assistants or developer notes:\n  " + "\n  ".join(leaks[:40]))
+        (side / f"{ARCHIVE}.toc").write_text(side_toc, encoding="utf-8")
+        for f in side_files:
+            target = side / f
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / f, target)
+        stages.append(side)
+
     archive = dist / f"{PACKAGE}-{version}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
-        for path in sorted(stage.rglob("*")):
-            if path.is_file():
-                z.write(path, path.relative_to(dist).as_posix())
+        for folder in stages:
+            for path in sorted(folder.rglob("*")):
+                if path.is_file():
+                    z.write(path, path.relative_to(dist).as_posix())
 
     # Last look at the finished archive itself.
     with zipfile.ZipFile(archive) as z:

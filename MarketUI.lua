@@ -216,9 +216,10 @@ local function PriceItems()
                 out[#out + 1] = { id = id, e = e, name = name, s = Market.Stats(id) }
             end
         end
-        table.sort(out, function(a, b) return a.e.t > b.e.t end)
-        return out
-    end, 60)
+        return ns.Utils.SortBy(out, function(x) return ns.Utils.NumKey(x.e.t, true) end)
+    -- Nothing here moves with the clock; the age picks up item names the
+    -- game's item cache sends later.
+    end, 300)
 end
 
 local function BuildPrices(parent)

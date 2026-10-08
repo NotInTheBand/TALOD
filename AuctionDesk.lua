@@ -109,11 +109,23 @@ function Desk.Holders(ladder)
 end
 
 -- Plans and lists read prices, ladders and your auctions: kept until one
--- changes (Data.lua), a minute at most (ages, "stale").
+-- changes (Data.lua), or their age runs out (below).
 local SOURCES = { "prices", "economy" }
-local function Kept(name, extra, build)
-    return ns.Data.Memo("desk:" .. name, ns.Data.Key(SOURCES) .. "|" .. tostring(extra), build, 60)
+-- base: Data.Key(SOURCES) when the caller already has it (a walk over every
+-- ladder asks for thousands of plans: the key is read once, not per plan).
+-- maxAge: LIST_AGE by default. Lists filter on ages (FRESH an hour, OLD two
+-- days): a few minutes late is nothing, and an open desk does not rebuild
+-- them every minute.
+local LIST_AGE = 300
+local function Kept(name, extra, build, base, maxAge)
+    return ns.Data.Memo("desk:" .. name, (base or ns.Data.Key(SOURCES)) .. "|" .. tostring(extra), build, maxAge or LIST_AGE)
 end
+
+-- A plan's numbers change only with prices and your auctions; its age moves
+-- with the clock and is refreshed on each read. Rebuilding every plan each
+-- minute for the age alone was thousands of plans a minute while the desk
+-- was open. The sell rate drifts over days: PLAN_AGE bounds that.
+local PLAN_AGE = 1800
 
 -- The control plan for one item, or nil without a ladder. {
 --   id, ladder, stats, usual, rate (your sell rate or nil), age, stale,
@@ -123,8 +135,13 @@ end
 --   best (the step with the highest profit, if any makes money),
 --   all = { units, cost, relist, deposit, revenue, profit, roi },
 -- }
-function Desk.Plan(id)
-    return Kept("plan:" .. tostring(id), "", function() return Desk.BuildPlan(id) end)
+function Desk.Plan(id, base)
+    local plan = Kept("plan:" .. tostring(id), "", function() return Desk.BuildPlan(id) end, base, PLAN_AGE)
+    if plan then
+        plan.age = time() - plan.ladder.t
+        plan.stale = plan.age > Desk.FRESH
+    end
+    return plan
 end
 
 function Desk.BuildPlan(id)
@@ -192,15 +209,16 @@ end
 function Desk.BuildOpportunities()
     local out = {}
     local minProfit = db().deskMinProfit or 5000
+    local base = ns.Data.Key(SOURCES)
     for id in pairs(Prices.AllLadders()) do
-        local plan = Desk.Plan(id)
+        local plan = Desk.Plan(id, base)
         local best = plan and plan.best
         if best and plan.age <= Desk.OLD and best.profit >= minProfit and (best.roi or 0) >= Desk.MIN_ROI
             and plan.moves.key ~= "dead" then
             out[#out + 1] = plan
         end
     end
-    table.sort(out, function(a, b) return a.best.profit > b.best.profit end)
+    ns.Utils.SortBy(out, function(p) return ns.Utils.NumKey(p.best.profit, true) end)
     return out
 end
 
@@ -212,39 +230,26 @@ end
 
 function Desk.BuildMarkets(sort, search)
     local out = {}
+    local base = ns.Data.Key(SOURCES)
     for id in pairs(Prices.AllLadders()) do
         local name = Market.ItemInfo(id)
         if not search or search == "" or name:lower():find(search, 1, true) then
-            local plan = Desk.Plan(id)
+            local plan = Desk.Plan(id, base)
             if plan then
                 plan.name = name
                 out[#out + 1] = plan
             end
         end
     end
-    local cmp = {
-        profit = function(a, b)
-            local pa, pb = a.best and a.best.profit or -math.huge, b.best and b.best.profit or -math.huge
-            if pa ~= pb then return pa > pb end
-            return a.name < b.name
-        end,
-        cost = function(a, b)
-            if a.all.cost ~= b.all.cost then return a.all.cost < b.all.cost end
-            return a.name < b.name
-        end,
-        held = function(a, b)
-            local sa, sb = a.holders and a.holders.share or -1, b.holders and b.holders.share or -1
-            if sa ~= sb then return sa > sb end
-            return a.name < b.name
-        end,
-        name = function(a, b) return a.name < b.name end,
-        recent = function(a, b)
-            if a.ladder.t ~= b.ladder.t then return a.ladder.t > b.ladder.t end
-            return a.name < b.name
-        end,
+    local N = ns.Utils.NumKey
+    local keyOf = {
+        profit = function(p) return N(p.best and p.best.profit, true) .. p.name end,
+        cost = function(p) return N(p.all.cost) .. p.name end,
+        held = function(p) return N(p.holders and p.holders.share or -1, true) .. p.name end,
+        name = function(p) return p.name end,
+        recent = function(p) return N(p.ladder.t, true) .. p.name end,
     }
-    table.sort(out, cmp[sort] or cmp.profit)
-    return out
+    return ns.Utils.SortBy(out, keyOf[sort] or keyOf.profit)
 end
 
 ---------------------------------------------------------------------------

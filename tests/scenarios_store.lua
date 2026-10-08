@@ -26,7 +26,7 @@ scenarios.store_chars_and_tags = function()
     check(e and e.c == 1, "price look")
     MOCK.now = MOCK.now + 3600
     e = ns.Prices.Record(2589, 90, 5, MOCK.now, 1, "Linen Cloth")
-    check(e.h[1][5] == 1 and ns.Prices.History(2589)[1].c == 1, "price history keeps who looked")
+    check(ns.Prices.Looks(e)[1].c == 1 and ns.Prices.History(2589)[1].c == 1, "price history keeps who looked")
     local l = ns.Prices.RecordLadder(2589, { { 90, 5 } }, false)
     check(l.c == 1, "ladder")
 
@@ -229,4 +229,81 @@ scenarios.store_audit_claim = function()
     d.snaps[2].build = "1.60.1.70124"
     d.snaps[2].v.acquired = 950 * G
     check(#A.Contradictions(d) == 0, "the server shows more later: fine")
+end
+
+-- Data from other versions: retired keys (dropped, or carried into their new
+-- home), undeclared keys swept only when an older version saved the file,
+-- settings whose shape changed, a store older than its floor, a migration
+-- that fails, and a store a newer version saved (parked, restored later).
+scenarios.store_legacy = function()
+    local ns = boot(11509, { db = {
+        guildWhoBracket = 5,
+        guildWhisperBurst = 3,
+        oldThingNobodyReads = { 1, 2, 3 },
+        ahSources = true,                      -- became a table of switches
+        journal = { { t = 1700000000, key = "Kept" } },
+    } })
+    local St = ns.Store
+    check(TALODDB.guildWhoBracket == nil, "retired key dropped")
+    check(TALODDB.guildWhisperBurst == nil and TALODDB.outboxBurst == 3, "renamed key carried over")
+    check(TALODDB.oldThingNobodyReads == nil, "undeclared key from an older file swept")
+    check(type(TALODDB.ahSources) == "table" and TALODDB.ahSources.plan == true, "setting of another shape back to its default")
+    check(TALODDB.journal[1].key == "Kept", "current data untouched")
+    check(printed("old parts? w[ae][sr]e? cleared or kept aside"), "said once")
+    check(#St.Unknown() == 0, "nothing undeclared left")
+    local log = St.LegacyLog()
+    check(#log >= 4, "each change logged: " .. #log)
+    check(TALODDB.store.addon == ns.VERSION, "the version that saved the file")
+
+    -- A file a newer version saved: its keys are not this version's to judge.
+    ns.VERSION = "1.0.0"
+    TALODDB.store.addon = "1.2.0"
+    TALODDB.newerSetting = true
+    St.Load(false)
+    check(TALODDB.newerSetting == true, "a newer version's key is kept")
+    check(TALODDB.store.addon == "1.2.0", "still marked newer")
+    check(St.CompareVersions("0.9.10", "0.11.1") == -1 and St.CompareVersions("1.0", "1.0.0") == 0
+        and St.CompareVersions("?", "1.0.0") == nil, "version order")
+    -- Back on an older file: now it is legacy.
+    TALODDB.store.addon = "0.9.0"
+    St.Load(false)
+    check(TALODDB.newerSetting == nil, "swept once the file is older")
+
+    -- A store saved by a newer version: parked untouched, restored when readable again.
+    local def = St.Def("journal")
+    local real = def.version
+    TALODDB.store.v.journal = real + 1
+    TALODDB.journal = { { t = 1700000000, key = "FromTheFuture", extra = "x" } }
+    St.Load(false)
+    check(St.Parked().journal and St.Parked().journal.data[1].key == "FromTheFuture", "parked")
+    check(TALODDB.journal == nil or #TALODDB.journal == 0, "this version starts empty")
+    TALODDB.journal = { { t = 1700000001, key = "Meanwhile" } }
+    def.version = real + 1
+    St.Load(false)
+    check(TALODDB.journal[1].key == "FromTheFuture" and St.Parked().journal == nil, "restored")
+    def.version = real
+
+    -- A failed migration step: the store is set aside, not left half-updated.
+    def = St.Def("fishing")
+    local oldMigrate, oldVersion = def.migrate, def.version
+    def.version = oldVersion + 1
+    def.migrate = { [oldVersion + 1] = function() error("boom") end }
+    TALODDB.fishing = { casts = { "1,2,3" } }
+    St.Load(false)
+    check(TALODDB.fishing == nil or TALODDB.fishing.casts == nil or #TALODDB.fishing.casts == 0, "failed store cleared")
+    check(TALODDB.store.v.fishing == oldVersion + 1, "and marked current")
+    TALODDB.errorLog = {}                      -- the error was the test's own
+
+    -- A floor: data older than it is cleared as legacy (its migrations are gone).
+    def.migrate, def.floor = oldMigrate, oldVersion + 1
+    TALODDB.store.v.fishing = oldVersion
+    TALODDB.fishing = { casts = { "4,5,6" } }
+    St.Load(false)
+    check(TALODDB.fishing == nil or TALODDB.fishing.casts == nil or #TALODDB.fishing.casts == 0, "below the floor: cleared")
+    def.version, def.floor = oldVersion, nil
+    TALODDB.store.v.fishing = oldVersion
+
+    St.ReportText()
+    slash("data")
+    check(St.ReportText():find("Data from other versions"), "the report lists it")
 end

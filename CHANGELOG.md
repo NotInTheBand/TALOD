@@ -2,6 +2,344 @@
 
 ## Unreleased
 
+## 0.23.2 — 2026-10-08
+
+### Changed
+
+- **Much faster with a lot of saved data.** Measured on a 16 MB save with a large guild (16,000 recruits,
+  11,000 guild events) and 3,500 auction items:
+  - Login work is about a tenth of what it was: checking the tamper seal on what officers receive now runs over
+    the first frames instead of all at once.
+  - The Guild window's Recruiters, Invited, Replies and Roster tabs, the Professions plan and the Auction desk's
+    Control tab no longer stall on first open: their data is prepared in the background after login, and
+    reading the packed guild history is several times faster.
+  - An open Auction desk or Market window no longer rebuilds every plan each minute (it produced memory churn
+    the whole time it was open).
+  - Lists create the parts of a row (icon, bar, columns) only when a row shows them: far fewer frames.
+
+## 0.23.1 — 2026-10-08
+
+### Fixed
+
+- **Guild recruiting: the class filter has a Shaman (and Paladin) button on both factions.** WoW Forever has Alliance
+  shamans and Horde paladins; they had no button, so they could not be hidden and showed even with "only this class".
+
+## 0.23.0 — 2026-10-08
+
+### Changed
+
+- **Saved data from other versions is brought up to date or cleared at login.** Settings that were removed are
+  dropped, renamed ones are carried over, a setting that changed form goes back to its default, and data an update
+  could not convert is set aside and starts fresh instead of breaking a window. Going back to an older version keeps
+  what a newer one saved, untouched, until you update again. `/talod data` lists what was changed.
+
+## 0.22.3 — 2026-10-08
+
+### Fixed
+
+- **Less stutter opening the guild window.** Opening it reads the game's guild event log; with a long saved
+  history (thousands of invites and joins) each read re-sorted all of it and could take 30 ms or more, several
+  times per open. New entries are now slotted into place instead.
+
+### Changed
+
+- **`/talod perf` names more of the cleanup work:** the memory read (it walks every loaded addon) and each
+  cleanup rule's count show on their own lines, so a slow moment there can be told apart.
+
+## 0.22.2 — 2026-10-08
+
+### Fixed
+
+- **Guild Recruit tab:** the Next invite, Mini window and Friendly nameplates buttons no longer cover the
+  "Players without a guild" help line; they have their own row under the /who toggles. The Next invite button's
+  label is readable again when no invite is ready (dimmed like the other toggles).
+
+## 0.22.1 — 2026-10-07
+
+### Changed
+
+- **Hands Free takes one step a second.** World clicks and move keys sooner than 1 second after Hands Free's
+  last step do nothing (`/talod guild handsfree why` shows them as "too soon"), so fast clicking or walking
+  no longer fires a burst of whispers and invites. Your recruit key, the Next invite button and clicks on the
+  list are not slowed.
+
+## 0.22.0 — 2026-10-07
+
+### Added
+
+- **Set your recruit key from TALOD.** Right-click the **Next invite** button (or use "Set recruit key" in Guild
+  settings, or `/talod guild key`), then press the key or mouse button you want (side buttons and the wheel
+  work; Escape cancels). One press = the next queued invite, else a /who, else a whisper. This works even where
+  the game's Key Bindings window does not list TALOD's binding. Out of combat; it replaces your previous recruit
+  key, and chat says what else that key did before.
+
+## 0.21.0 — 2026-10-07
+
+### Added
+
+- **Invite queue.** Every invite still owed waits in one queue, oldest first: delayed invites, invites the
+  game did not take, and invites it blocked from Hands Free. Each accepted click or key press sends one: a red
+  row, the new **Next invite** button (Recruit tab and mini window, with the count), Hands Free, or the new
+  key binding.
+- **Key binding "Next recruit step"** (Key Bindings > AddOns > TALOD): one press = the next queued invite,
+  else a /who, else a whisper to the next player. Always on, Hands Free or not; a key press is something
+  the game always takes, so it can invite and search. Also `/talod guild next` for macros.
+  **Needs a full game restart** (not just /reload) the first time, so the game finds the binding.
+- **Tooltips that say why.** Hover a red row to see why its invite waits (delayed invite, the game did not
+  take it, blocked from Hands Free, left from before a reload) and its place in the queue; hover Next invite
+  for what is ready, what comes soon and what waits for its message; hover Hands Free for what it is doing,
+  what the game does not take from world clicks or keys, and your binding.
+
+### Changed
+
+- **Delayed invite off:** the invite still goes in the same click as the message; when the game does not take
+  it, it waits in the queue and is ready as soon as your message is out (it used to leave the player
+  uninvited). A double click on the same player counts as one invite.
+
+## 0.20.4 — 2026-10-07
+
+### Fixed
+
+- **The /who button no longer looks stuck with Hands Free on.** The game drops a /who sent from a world
+  click without a word, but the button still started its 5-second wait each time. Now a Hands Free /who
+  that gets no answer gives the button's wait back after 4 seconds, and after two in a row world clicks
+  stop sending the /who (until you reload); the /who button always searches. The game also blocks guild
+  invites from world clicks: world clicks are best for the whispers, and invites go from your click on
+  the red row.
+
+## 0.20.3 — 2026-10-07
+
+### Fixed
+
+- **Red rows no longer get stuck with Hands Free.** When the game blocked Hands Free's invite to a red row,
+  Hands Free kept trying that same player and the row stayed red until something else moved them on. Now
+  Hands Free tries a player only once: their red row waits for your click (its tooltip says so, and chat
+  says it once), your click sends the invite right away, and Hands Free goes on with the others.
+
+## 0.20.2 — 2026-10-07
+
+### Fixed
+
+- **No red "invite" rows with Delayed invite off.** When an invite did not go (the game held it back as a
+  repeat, or blocked a Hands Free invite), the player could come back as a red delayed-invite row, often
+  after a reload. With Delayed invite off they now stay a normal row marked not invited; your message
+  already went, so the next click sends the invite alone. Players who were mid delayed invite when you
+  turned it off also come back as normal rows after a reload.
+
+## 0.20.1 — 2026-10-07
+
+### Fixed
+
+- **Hands Free no longer turns itself off.** One action the game blocked (even one that was not Hands
+  Free's) switched it off for good. Now only a refusal during Hands Free's own step counts; it shows in
+  `/talod guild handsfree why`, a blocked invite puts the player back as a red row, and only after the game
+  blocks the same action from the same input three times in a row does Hands Free leave that one alone
+  (e.g. /who from world clicks) until you reload, with one line in chat. Hands Free itself stays on.
+- Hands Free's /who no longer waits on the game saying your rank can invite.
+
+## 0.20.0 — 2026-10-07
+
+### Added
+
+- **Hands Free: your move and jump keys count too.** With Hands Free on, a press of a key bound to moving,
+  turning, strafing or jumping (WASD and Space, or whatever you bound) is a click as well; the key still
+  moves you. One press = one action. Setting: Guild settings, "my move and jump keys count too" (on).
+
+### Changed
+
+- **Hands Free has no pace of its own.** The /who runs on the first click after the /who button's own
+  5-second wait (no extra 15 s), and quick clicks go straight to the next players: the message queue
+  paces the whispers, as it does for clicks on the list.
+
+## 0.19.2 — 2026-10-07
+
+### Fixed
+
+- **Hands Free now runs the /who.** It only searched when the recruit list was empty, so with players around
+  from nameplates your clicks only ever whispered. Now a click runs a /who whenever one is due (every 15 s),
+  and whispers in between.
+
+### Added
+
+- `/talod guild handsfree why` lists what Hands Free did with your last clicks, or why it did nothing (on a
+  window, on a unit, in combat, nobody to message). The Recruit tab shows the last click's result too.
+
+## 0.19.1 — 2026-10-07
+
+### Fixed
+
+- **Rank changes the game refuses no longer look like they worked.** When the game keeps a rank change to its
+  own guild window, the menu (and the Promotions tab) now says so in chat instead of doing nothing, and those
+  ranks are greyed out with the reason from then on (until the next game patch, when it tries again).
+
+## 0.19.0 — 2026-10-07
+
+### Added
+
+- **Hands Free recruiting** (Guild window, Recruit tab; the mini recruit window; Guild settings;
+  `/talod guild handsfree`). While it is on, a left- or right-click on the open world (not on a window,
+  a player or an NPC) counts as your click on the recruit list: it invites the next red row, else
+  whispers the next player, else runs a /who (at most one every 30 s). One action per click, nothing
+  ever goes on its own, and it pauses in combat. If the game refuses the click, Hands Free turns
+  itself off and says so.
+
+## 0.18.3 — 2026-10-07
+
+### Changed
+
+- **Recruit tab, Name alphabets:** Latin is now a button like the other alphabets (the separate "Latin only"
+  button is gone). Each of the ten alphabets can be hidden or shown with one click.
+
+## 0.18.2 — 2026-10-07
+
+### Changed
+
+- Main menu: every page has a clearer description of what it is for, and hovering a tile or a page in the
+  list on the left shows what each of its tabs holds.
+
+## 0.18.1 — 2026-10-07
+
+### Changed
+
+- Right-click menus now share one look across the addon: a title with a line under it, the current choice
+  marked, warnings in red, and greyed-out entries that say why when you hover them.
+
+## 0.18.0 — 2026-10-07
+
+### Added
+
+- **Change a member's rank with a right-click** in the Guild window (Roster, Activity, Recruiters, Members and
+  Promotions). A small menu opens just above the pointer with every rank in order, theirs marked; pick one to
+  move that member there (one click, one change). A rank that would give them new rights (officer chat,
+  invite, promote, remove members, officer notes...) says so in red; where the game does not tell a rank's
+  rights, it shows **rights ?** instead of staying quiet. Ranks you cannot give are greyed out, with the
+  reason when you hover them. Move the mouse away from the name and the menu and it closes.
+
+## 0.17.1 — 2026-10-07
+
+### Changed
+
+- **Name alphabets moved to the Recruit tab**, in a card under the whisper message (they were in Settings →
+  Guild). Click an alphabet to hide or show it; **Latin only** hides them all (again: shows them all). The
+  card says how many players it is hiding.
+
+## 0.17.0 — 2026-10-07
+
+### Added
+
+- **Groups window** (`/talod groups`, also in the main menu): a record of every party and raid you are in,
+  one per group. Who was there (class, level, guild and rank, role, subgroup, time grouped with you,
+  deaths seen, time offline and AFK), where you went and for how long, the group's chat and the loot.
+- **Now** tab: your current group, live (health, dead / offline / AFK), to size up players mid-raid.
+- **Parties** and **Raids** tabs: search a name to find every group you shared with that player; open one
+  for its members, chat, loot and timeline.
+- Settings → Groups: turn recording, chat or loot off, and choose the loot quality to keep. Settings →
+  Data has a cleanup rule for groups older than a year.
+- Two new files: **restart the game** (a /reload is not enough) after updating.
+
+## 0.16.0 — 2026-10-07
+
+### Added
+
+- **Replies: each conversation is tagged Joined, Declined, Invited or Blocked**, with a filter button for each
+  above the list. Blocked means they have you on ignore; Declined covers a declined invite and "Said no".
+- **Replies: search the messages.** A second search box finds conversations by words said in them (the list's
+  own box still searches names); the line found is shown under the name and marked in the open conversation.
+- **Opening a conversation updates the player's level** (and class, race, zone): from the guild roster if they
+  joined, from a nameplate, target or group member showing them, else with one /who for that name. The level
+  now shows next to each name in the list.
+
+## 0.15.0 — 2026-10-07
+
+### Added
+
+- **Recruit by name alphabet.** Settings → Guild → Name alphabets hides players whose names are written in
+  Cyrillic, Greek, Chinese characters, Japanese kana, Korean, Thai, Arabic, Hebrew or other scripts.
+  "Latin names only" hides them all in one click; names with accents (é, ö, ß, ñ) still count as Latin.
+  Everything is shown until you change it.
+
+## 0.14.1 — 2026-10-07
+
+### Fixed
+
+- **Replies no longer stick on "sending...".** The game sends a whisper back with swear words starred out
+  ("@#$%"), so a reply with such a word stayed marked as sending for a minute after it was delivered.
+
+### Added
+
+- **Replies shows when a player has you on ignore.** A reply to them is marked "not delivered: they have you on
+  ignore" instead of "sending...", and the conversation's status line says "has you on ignore since ..." until
+  they whisper you again. A reply to a player who went offline is marked "not delivered: they are offline".
+
+## 0.14.0 — 2026-10-07
+
+### Changed
+
+- **About half the memory for the same data.** Records that are kept but rarely change are now stored in a
+  compact form: recruits whose invite is settled (no reply, nothing unread, untouched for 3 days), each item's
+  earlier Auction House prices, and the guild event log. Nothing is lost: everything reads back the same, and a
+  recruit record opens up again as soon as something about them changes. Measured on a big recruiting account:
+  guild data 22 MB to 12 MB, prices 8.6 MB to 4 MB. Your existing data is converted at the first login.
+
+### Added
+
+- **The archive: old data off to the side, not deleted.** TALOD now comes with a second addon,
+  **TALOD_Archive**, which the game only reads when it's opened. With *Move old entries to the archive instead
+  of deleting them* (Settings, Data, Archive; on by default), the cleanup rules for recruit messages, price
+  history, unseen items and the guild event log move what they remove into it. The archive is loaded by a click
+  (Load archive, Move now) or by the daily cleanup once 2000 entries are waiting, and then stays in memory until
+  you /reload. While it's loaded, price history and graphs include the archived prices. Without the archive
+  addon installed, the rules delete as before.
+- **Cleanup rule for the guild event log** (older than 360 days by default). Recruiter stats then start at the
+  cutoff.
+- `/talod archive` (state and what waits), `/talod archive load`, `/talod archive move`.
+- `tools/data_report.py`: run it with Python 3 to see what fills your saved data (largest first, about what it
+  costs in game memory) and what is in the archive; `--export <folder>` writes the archive out as JSON. It
+  only reads the files.
+- **Install both folders**: TALOD and TALOD_Archive go side by side in Interface/AddOns. Restart the game after
+  updating (new files).
+
+## 0.13.0 — 2026-10-07
+
+### Added
+
+- **Settings, Data: cleanup and memory.** The game loads all saved data into memory at login, so big
+  logs cost memory and loading time. Cleanup rules remove what is old and no longer read, each with its
+  own age and an on / off switch: opening whispers to recruits who never answered (who invited them,
+  when and how it ended are kept), price history older than 60 days (the latest price and the price
+  graph's daily summary are kept), items not seen on the Auction House for 180 days, and unreadable
+  entries set aside at login. Each rule shows how much it would remove now; **Clean up now** runs them
+  once.
+- **Automatic cleanup**, once a day, 30 seconds after login, never in combat. It is on for a new
+  install. **If you updated, it stays off** until you turn it on, so nothing you had is deleted
+  without your say.
+- **Memory cap** (150 MB by default): one warning per session when the addon's memory passes it, and
+  a cleanup run if automatic cleanup is on. The Memory page shows the figure and which kinds of data
+  take the most room.
+- `/talod clean` (what each rule would remove), `/talod clean now`, `/talod clean auto on|off`,
+  `/talod memory`.
+- New file: restart the game (not just /reload) after updating.
+
+## 0.12.0 — 2026-10-07
+
+### Fixed
+
+- **Less frame lag while recruiting with a long history.** With thousands of recruits on record, every click,
+  every reply from the game ("You have invited...", "declines...") and the Recruit tab's redraw each second counted
+  your unread replies by reading every recruit you ever invited. That count is now kept until a conversation
+  actually changes. The Invited and Replies tabs no longer sort the whole list again on every change (one moved
+  player is put in place), and the Replies list formats only the conversations you see.
+- **Character window, Professions: no lag on every redraw.** The leveling plan was worked out again each time the
+  window redrew; it is now kept until a price, your skills, your recipes, your bags (when counted) or a planner
+  setting changes, and a rebuild runs a little each frame.
+- Price lookups are faster everywhere (Market, Auction desk, crafting costs).
+
+### Added
+
+- `/talod perf`: a copyable list of the slowest work TALOD did this session (window redraws, list builds,
+  events). If something still lags, reproduce it, then send this list with your report. `/talod perf reset`
+  starts over.
+
 ## 0.11.2 — 2026-10-07
 
 ### Changed

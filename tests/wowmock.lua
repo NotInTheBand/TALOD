@@ -61,8 +61,18 @@ end
 MOCK.NewWidget = NewWidget
 
 function Widget:GetName() return self._name end
+-- A button pressed by a key binding or /click: its OnClick runs (inside the press).
+function Widget:Click(button) return self:Fire("OnClick", button or "LeftButton", false) end
 function Widget:GetObjectType() return self._kind end
 function Widget:SetScript(event, fn) self._scripts[event] = fn end
+-- Keyboard: a frame with keys on gets every press (MOCK.KeyDown); without
+-- propagation it would eat them (MOCK.keysEaten counts that).
+function Widget:EnableKeyboard(on) self._keyboard = on and true or false; MOCK.keyFrames[self] = on or nil end
+function Widget:SetPropagateKeyboardInput(on)
+    if MOCK.lockdown then error("SetPropagateKeyboardInput: blocked in combat", 2) end
+    self._propagate = on and true or false
+end
+function Widget:GetPropagateKeyboardInput() return self._propagate == true end
 function Widget:GetScript(event) return self._scripts[event] end
 function Widget:HookScript(event, fn)
     local old = self._scripts[event]
@@ -281,7 +291,8 @@ function IsMouseButtonDown() return MOCK.mouseDown end
 MOCK.cursorX, MOCK.cursorY, MOCK.cursorDy = 0, 0, 0
 function GetCursorPosition() return MOCK.cursorX, MOCK.cursorY end
 function GetCursorDelta() local dy = MOCK.cursorDy; MOCK.cursorDy = 0; return 0, dy end
-function GetMouseFoci() return { WorldFrame } end
+-- MOCK.focus: the frame under the cursor (nil = the open world).
+function GetMouseFoci() return { MOCK.focus or WorldFrame } end
 C_CVar = {
     GetCVar = function(name) return MOCK.cvars[name] end,
     SetCVar = function(name, value) MOCK.cvars[name] = value; return true end,
@@ -509,6 +520,7 @@ function UnitAffectingCombat(unit) local u = MOCK.units[unit]; return u and u.co
 function UnitIsUnit(a, b)
     local ua, ub = MOCK.units[a], MOCK.units[b]
     if a == b then return ua ~= nil and ua.exists end
+    if b == "player" and ua and ua.isSelf then return true end
     if a:sub(-6) == "target" and a ~= "target" then
         local base = MOCK.units[a:sub(1, -7)]
         if base and base.targetsPlayer and b == "player" then return true end
@@ -567,6 +579,65 @@ local function NoInput(fn, ...)
     if not ok then error(err, 0) end
 end
 
+-- Key bindings: [action] = { keys }.
+MOCK.keyFrames, MOCK.keysEaten = {}, 0
+MOCK.bindings = { MOVEFORWARD = { "W", "UP" }, MOVEBACKWARD = { "S" }, STRAFELEFT = { "A" }, STRAFERIGHT = { "D" },
+    JUMP = { "SPACE" } }
+function GetBindingKey(action) return unpack(MOCK.bindings[action] or {}) end
+function GetBindingAction(key)
+    for action, keys in pairs(MOCK.bindings) do
+        for _, k in ipairs(keys) do if k == key then return action end end
+    end
+    return ""
+end
+local function Unbind(key)
+    for action, keys in pairs(MOCK.bindings) do
+        for i = #keys, 1, -1 do if keys[i] == key then table.remove(keys, i) end end
+    end
+end
+function SetBinding(key, action)
+    if MOCK.lockdown then error("SetBinding: blocked in combat", 2) end
+    Unbind(key)
+    if action then MOCK.bindings[action] = MOCK.bindings[action] or {}; table.insert(MOCK.bindings[action], key) end
+    return true
+end
+function SetBindingClick(key, button, mouse)
+    return SetBinding(key, "CLICK " .. button .. ":" .. (mouse or "LeftButton"))
+end
+MOCK.savedBindings = 0
+function SaveBindings() MOCK.savedBindings = MOCK.savedBindings + 1 end
+function GetCurrentBindingSet() return 1 end
+-- A key press: frames with keys on see it inside the press (protected calls
+-- count as the press's).
+function MOCK.KeyDown(key)
+    local was = MOCK.hardware
+    MOCK.hardware = true
+    local ok, err = pcall(function()
+        for frame in pairs(MOCK.keyFrames) do
+            if frame:IsShown() ~= false then
+                if not frame._propagate then MOCK.keysEaten = MOCK.keysEaten + 1 end
+                frame:Fire("OnKeyDown", key)
+            end
+        end
+    end)
+    MOCK.hardware = was
+    if not ok then error(err, 0) end
+end
+
+-- A mouse press: GLOBAL_MOUSE_DOWN arrives inside it, so protected calls made
+-- from its handlers count as the click's (the game's behavior is [VERIFY]).
+function MOCK.MouseDown(button)
+    local was = MOCK.hardware
+    MOCK.hardware = true
+    local ok, err = pcall(function()
+        for frame, events in pairs(MOCK.events) do
+            if events.GLOBAL_MOUSE_DOWN then frame:Fire("OnEvent", "GLOBAL_MOUSE_DOWN", button or "LeftButton") end
+        end
+    end)
+    MOCK.hardware = was
+    if not ok then error(err, 0) end
+end
+
 function MOCK.FireEvent(event, ...)
     NoInput(function(...)
         for frame, events in pairs(MOCK.events) do
@@ -601,6 +672,7 @@ function MOCK.LoadAddon(dir, files, addonName)
         if not chunk then error("load " .. file .. ": " .. tostring(err)) end
         chunk(addonName, ns)
     end
+    MOCK.ns = ns
     return ns
 end
 
@@ -663,9 +735,35 @@ function GetZoneText() return MOCK.zone end
 function GetZonePVPInfo() return MOCK.zonePvP, MOCK.zonePvPFFA or false, nil end
 MOCK.inGroup, MOCK.inGuild = false, false
 function IsInGroup() return MOCK.inGroup end
-function IsInRaid() return false end
+function IsInRaid() return MOCK.inRaid == true end
 function IsInGuild() return MOCK.inGuild end
-function GetNumGroupMembers() return MOCK.inGroup and 2 or 0 end
+function GetNumGroupMembers() return MOCK.groupSize or (MOCK.inGroup and 2 or 0) end
+-- Group rosters: MOCK.SetGroup({ units }, raid) puts Friend units at party1.. (or raid1..,
+-- the player last), MOCK.SetGroup(nil) leaves. Unit fields also read here: connected,
+-- afk, leader, assist, role, subgroup, raidRank, zone, ml.
+function MOCK.SetGroup(members, raid)
+    for token in pairs(MOCK.units) do
+        if token:find("^party%d") or token:find("^raid%d") then MOCK.units[token] = nil end
+    end
+    if not members then
+        MOCK.inGroup, MOCK.inRaid, MOCK.groupSize = false, false, nil
+        return
+    end
+    MOCK.inGroup, MOCK.inRaid, MOCK.groupSize = true, raid and true or false, #members + 1
+    for i, u in ipairs(members) do MOCK.units[(raid and "raid" or "party") .. i] = u end
+    if raid then MOCK.units["raid" .. (#members + 1)] = { exists = true, isPlayer = true, name = "Me", isSelf = true } end
+end
+function UnitIsConnected(unit) local u = MOCK.units[unit]; if not u then return false end; return u.connected ~= false end
+function UnitIsAFK(unit) local u = MOCK.units[unit]; return u and u.afk or false end
+function UnitIsGroupLeader(unit) if unit == "player" then return MOCK.leader or false end; local u = MOCK.units[unit]; return u and u.leader or false end
+function UnitIsGroupAssistant(unit) local u = MOCK.units[unit]; return u and u.assist or false end
+function UnitGroupRolesAssigned(unit) local u = MOCK.units[unit]; return u and u.role or "NONE" end
+function GetRaidRosterInfo(i)
+    local u = MOCK.units["raid" .. i]
+    if not u then return nil end
+    return u.name, u.raidRank or 0, u.subgroup or 1, u.level, nil, u.class, u.zone, u.connected ~= false, u.dead or false, u.raidRole, u.ml or false
+end
+function GetInstanceInfo() return MOCK.instance and MOCK.instance[1] or MOCK.zone, MOCK.instance and MOCK.instance[2] or "none" end
 MOCK.addonMessages = {}
 C_ChatInfo = {
     RegisterAddonMessagePrefix = function() return true end,
@@ -773,6 +871,7 @@ C_Container.GetContainerNumFreeSlots = function(bag) return bag == 0 and MOCK.fr
 --   online, offline = { y, m, d, h }, zone, note }, ... } } or nil (no guild).
 MOCK.guild = nil
 MOCK.whispers, MOCK.guildInvites, MOCK.promoted, MOCK.whoQueries, MOCK.whoResults = {}, {}, {}, {}, {}
+MOCK.demoted, MOCK.rankSets = {}, {}
 MOCK.rosterRequests = 0
 function IsInGuild() return MOCK.guild ~= nil or MOCK.inGuild end
 local unitGuildInfo = GetGuildInfo
@@ -787,6 +886,7 @@ end
 local function can(what) return MOCK.guild ~= nil and MOCK.guild.can ~= nil and MOCK.guild.can[what] == true end
 function CanGuildInvite() return can("invite") end
 function CanGuildPromote() return can("promote") end
+function CanGuildDemote() return can("demote") end
 function GetNumGuildMembers()
     local r = MOCK.guild and MOCK.guild.roster or {}
     local online = 0
@@ -815,8 +915,16 @@ function GuildControlGetRankName(i) return MOCK.guild and MOCK.guild.ranks[i - 1
 -- not. Outside one the game does nothing and fires ADDON_ACTION_BLOCKED (no
 -- Lua error): kept in MOCK.blocked, and tests/run.py fails the scenario.
 MOCK.hardware, MOCK.blocked = true, {}
+-- Functions kept for the game's own UI: MOCK.forbidden[name] = true. A call
+-- does nothing and fires ADDON_ACTION_FORBIDDEN inside the call ("UNKNOWN()",
+-- as the game names it), with no Lua error.
+MOCK.forbidden = {}
 local function Protected(name, fn)
     return function(...)
+        if MOCK.forbidden[name] then
+            MOCK.FireEvent("ADDON_ACTION_FORBIDDEN", "TALOD", "UNKNOWN()")
+            return
+        end
         if not MOCK.hardware then
             MOCK.blocked[#MOCK.blocked + 1] = name
             return
@@ -829,6 +937,16 @@ C_GuildInfo = {
     Invite = Protected("C_GuildInfo.Invite", function(name) MOCK.guildInvites[#MOCK.guildInvites + 1] = name end),
 }
 GuildPromote = Protected("GuildPromote", function(name) MOCK.promoted[#MOCK.promoted + 1] = name end)
+GuildDemote = Protected("GuildDemote", function(name) MOCK.demoted[#MOCK.demoted + 1] = name end)
+-- The game's own rank pick: roster index, rank counted from 1 (1 = guild master).
+SetGuildMemberRank = Protected("SetGuildMemberRank", function(index, rankOrder)
+    MOCK.rankSets[#MOCK.rankSets + 1] = { index, rankOrder }
+end)
+-- Rank permission flags: MOCK.guild.flags = { [rank] = { [flag] = true } } (nil: the client does not tell).
+C_GuildInfo.GuildControlGetRankFlags = function(rankOrder)
+    local f = MOCK.guild and MOCK.guild.flags
+    return f and f[rankOrder - 1] or nil
+end
 -- Party invites and Battle.net friend requests (the game's confirm window).
 MOCK.partyInvites, MOCK.bnetRequests, MOCK.bnetConnected = {}, {}, true
 C_PartyInfo = { InviteUnit = Protected("C_PartyInfo.InviteUnit", function(name) MOCK.partyInvites[#MOCK.partyInvites + 1] = name end) }

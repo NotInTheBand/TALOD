@@ -32,10 +32,51 @@ ns.Data = Data
 local BUDGET_MS = 4     -- per frame
 local SLOW_MS = 8       -- a build this slow is rebuilt in the background
 local WARM_DELAY = 5    -- seconds after login before the warm-up
+local WARM_TRIES = 3    -- a warm-up whose data keeps changing under it gives up (the window builds on open)
 
 -- Milliseconds, or nil without debugprofilestop (the test mock): every
 -- build then counts as fast and jobs run to the end in one frame.
 local function Clock() return debugprofilestop and debugprofilestop() or nil end
+Data.Clock = Clock
+
+---------------------------------------------------------------------------
+-- Timings (/talod perf)
+---------------------------------------------------------------------------
+-- The slowest work seen this session, measured in the client: what a frame
+-- costs there (widgets, the game's Lua, other addons' garbage) is what the
+-- offline tests cannot show. kind: "redraw", "build", "background",
+-- "event", "tick"; name: what ran. Not saved.
+local timings = {}
+
+function Data.Time(kind, name, ms)
+    if not ms then return end
+    local byName = timings[kind]
+    if not byName then byName = {} timings[kind] = byName end
+    local t = byName[name]
+    if not t then t = { n = 0, total = 0, max = 0 } byName[name] = t end
+    t.n, t.total = t.n + 1, t.total + ms
+    if ms > t.max then t.max = ms end
+end
+
+-- { { kind, name, n, avg, max } }, slowest single run first.
+function Data.Timings()
+    local out = {}
+    for kind, byName in pairs(timings) do
+        for name, t in pairs(byName) do
+            if type(name) == "table" then
+                -- A window: named after its module in ns (MarketUI, GuildUI...).
+                local label = "?"
+                for k, v in pairs(ns) do if v == name then label = k break end end
+                name = label
+            end
+            out[#out + 1] = { kind = kind, name = tostring(name), n = t.n, avg = t.total / t.n, max = t.max }
+        end
+    end
+    table.sort(out, function(a, b) return a.max > b.max end)
+    return out
+end
+
+function Data.ResetTimings() wipe(timings) end
 
 local jobs, queued = {}, {}   -- waiting jobs in order; name -> job
 local current                 -- the job being run (it may span frames)
@@ -95,7 +136,9 @@ local function RunSlice()
     if GetTime() < startAt or (InCombatLockdown and InCombatLockdown()) then return end
     local t0 = Clock()
     sliceEnd = t0 and (t0 + BUDGET_MS)
+    local last = t0   -- for /talod perf: the slice's own clock reads, no extra ones
     while true do
+        local ran
         local job = current
         if not job then
             job = table.remove(jobs, 1)
@@ -113,11 +156,15 @@ local function RunSlice()
             -- paused: a table it was walking may have new keys, and `next`
             -- cannot go on over those.
             Finish(job)
-            if job.again then Queue(job) end
+            -- A source that changes every second (a scan) would restart it
+            -- forever: garbage every frame for nothing.
+            job.tries = (job.tries or 0) + 1
+            if job.again and job.tries < WARM_TRIES then Queue(job) end
             job = nil
         end
         if job then
             thread = job.thread
+            ran = job.name
             local ok, err = coroutine.resume(thread)
             thread = nil
             if not ok then
@@ -129,6 +176,8 @@ local function RunSlice()
             end
         end
         local t = Clock()
+        if ran and last and t and t - last >= 1 then Data.Time("background", ran, t - last) end
+        last = t
         if not t or t >= sliceEnd then return end
     end
 end
@@ -160,6 +209,8 @@ local function Make(name, key, build)
     local mine, t0 = serial, Clock()
     local value = build()
     local t1 = Clock()
+    -- Item-keyed memos are thousands of names: only builds worth a look.
+    if t0 and t1 and t1 - t0 >= 1 then Data.Time("build", name, t1 - t0) end
     local c = memo[name]
     -- A window built the same thing while this job was paused: keep that
     -- one, callers may already hold it.
@@ -285,7 +336,9 @@ end
 -- roster). Sets UI.RefreshSoon for other data-driven calls.
 -- Background work (see above): opts.prebuild() creates the window's frames
 -- and opts.warm() reads the memos its first tab shows, both a while after
--- login, so the first open is not the one that builds them. UI.Refresh is
+-- login, so the first open is not the one that builds them. The warm-up
+-- starts over when one of opts.warmSources (default: names) changes: name
+-- only what it reads, never a source that changes every second. UI.Refresh is
 -- wrapped: slow memos it reads are rebuilt in the background.
 function Data.Window(UI, names, opts)
     opts = opts or {}
@@ -297,10 +350,13 @@ function Data.Window(UI, names, opts)
         local was, wasSources = drawing, drawingSources
         drawing, drawingSources = ready and "ready" or true, names
         ready = false
+        local t0 = Clock()
         -- Put back even when the redraw errors: a stuck flag would give
         -- every later caller (slash, tooltips) old values.
         local ok, err = xpcall(refresh, WithStack)
         drawing, drawingSources = was, wasSources
+        local t1 = Clock()
+        if t0 and t1 then Data.Time("redraw", UI, t1 - t0) end
         if not ok then error(err, 0) end
     end
     local function Redraw() if UI.IsShown() then UI.Refresh() end end
@@ -319,18 +375,24 @@ function Data.Window(UI, names, opts)
     end
     local id = #windows
     if opts.prebuild then Queue({ name = "prebuild:" .. id, run = opts.prebuild }) end
-    if opts.warm then Queue({ name = "warm:" .. id, run = opts.warm, sources = names, again = true }) end
+    if opts.warm then Queue({ name = "warm:" .. id, run = opts.warm, sources = opts.warmSources or names, again = true }) end
 end
 
 
 -- A row whose fields come from make(arg) when it is first drawn or searched
 -- (Style.List calls `build`). `fields` are set now: what sorting or
 -- filtering needs (time, id, header).
+-- One shared build function (Style.List calls it once, then drops it): a
+-- closure per row was garbage for every row of a big list on each rebuild.
+local function BuildRow(self)
+    local make, arg = self._make, self._arg
+    self._make, self._arg = nil, nil
+    for k, v in pairs(make(arg)) do self[k] = v end
+end
+
 function Data.Row(make, arg, fields)
     local row = fields or {}
-    row.build = function(self)
-        for k, v in pairs(make(arg)) do self[k] = v end
-    end
+    row._make, row._arg, row.build = make, arg, BuildRow
     return row
 end
 
@@ -392,6 +454,8 @@ ns.RegisterModule("Data", {
         startAt = GetTime() + WARM_DELAY
         if #jobs > 0 then driver:Show() end
     end,
-    events = { "BAG_UPDATE", "BAG_UPDATE_DELAYED", "PLAYER_EQUIPMENT_CHANGED" },
+    -- PLAYERBANKSLOTS_CHANGED: the bank's own slots (not a bag) count in
+    -- GetItemCount(id, true), which profession plans read.
+    events = { "BAG_UPDATE", "BAG_UPDATE_DELAYED", "PLAYER_EQUIPMENT_CHANGED", "PLAYERBANKSLOTS_CHANGED" },
     onEvent = function() Data.Changed("bags") end,
 })

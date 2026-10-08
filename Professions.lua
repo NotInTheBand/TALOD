@@ -436,7 +436,20 @@ end
 -- now (this profession at `skill`, or another profession you have, e.g.
 -- smelting bars as a miner).
 function UnitCost(id, ctx, skill, depth)
-    local best = Prof.ItemPrice(id)
+    -- A plan asks for the same reagents at every point and in every recipe:
+    -- prices are fixed while it is built, costs for one skill point.
+    local memo = ctx.memo
+    local key = id * 8 + (depth or 0)
+    if memo then
+        if memo.skill ~= skill then memo.skill, memo.cost, memo.maker = skill, {}, {} end
+        local c = memo.cost[key]
+        if c then return c, memo.maker[key] or nil end
+    end
+    local best = memo and memo.price[id]
+    if not best then
+        best = Prof.ItemPrice(id)
+        if memo then memo.price[id] = best end
+    end
     local maker
     local it = DATA.items[id]
     if it and it.made and (depth or 0) < MAX_DEPTH then
@@ -449,6 +462,7 @@ function UnitCost(id, ctx, skill, depth)
             end
         end
     end
+    if memo then memo.cost[key], memo.maker[key] = best, maker or false end
     return best, maker
 end
 
@@ -475,7 +489,7 @@ function Prof.Plan(prof, from, to, opts)
     -- Mining: smelting gives skill too, but the profession levels by gathering.
     if Prof.IsGathering(prof) then plan.note = "levels mostly by " .. DATA.gathering[prof] end
 
-    local ctx = { prof = prof, ranks = opts.ranks or {} }
+    local ctx = { prof = prof, ranks = opts.ranks or {}, memo = { price = {} } }
     function ctx.Allowed(r, intermediate)
         if excluded[r.id] or r.cooldown then return false end
         if r.prof == prof and known[r.name] then return true end
@@ -489,6 +503,9 @@ function Prof.Plan(prof, from, to, opts)
     local used, seg = {}, nil
     local s = from
     while s < to do
+        -- A plan prices every recipe at every point: rebuilt in the
+        -- background (Data.lua), it pauses here between points.
+        ns.Data.Step()
         if s >= cap then
             local rank = Prof.NextRank(prof, cap)
             if not rank then break end
@@ -651,6 +668,12 @@ function Prof.Start(charKey, prof)
     return 1, "none", nil
 end
 
+-- What a plan is built from (Prof.PlanFor's memo key); Auctionator's prices
+-- change without a source, hence the age limit.
+local PLAN_SOURCES = { "prices", "skills", "crafts", "economy" }
+local PLAN_SOURCES_BAGS = { "prices", "skills", "crafts", "economy", "bags" }
+local PLAN_MAX_AGE = 300
+
 -- n nil: back to your read rank.
 function Prof.SetStart(charKey, prof, n)
     if not charKey then return end
@@ -672,7 +695,7 @@ function Prof.PlanFor(charKey, prof, target)
     -- past it means you trained since.
     local max = cur and cur.max or nil
     if max and from >= max then max = nil end
-    local plan = Prof.Plan(prof, from, target, {
+    local opts = {
         max = max,
         known = Prof.Known(charKey, prof),
         ranks = ranks,
@@ -681,9 +704,21 @@ function Prof.PlanFor(charKey, prof, target)
         excluded = db().profPlanExcluded,
         count = (db().profPlanBags and charKey == me) and Prof.Count or nil,
         level = charKey == me and S.Call(UnitLevel, "player") or nil,
-    })
-    plan.source, plan.rank, plan.max = source, cur and cur.rank or nil, cur and cur.max or nil
-    return plan
+    }
+    -- A plan prices every recipe at every skill point (tens of thousands of
+    -- lookups): kept until a price, a skill, a recipe, the sell rate, the
+    -- bags (when counted) or a planner setting changes. Callers must not change it.
+    local excluded = {}
+    for id, on in pairs(opts.excluded or {}) do if on then excluded[#excluded + 1] = tostring(id) end end
+    table.sort(excluded)
+    local key = table.concat({ ns.Data.Key(opts.count and PLAN_SOURCES_BAGS or PLAN_SOURCES), tostring(charKey), prof,
+        from, source, target, tostring(max), tostring(opts.patterns), tostring(opts.resale), tostring(opts.level),
+        table.concat(excluded, ",") }, "|")
+    return ns.Data.Memo("prof:plan:" .. tostring(charKey) .. ":" .. prof, key, function()
+        local plan = Prof.Plan(prof, from, target, opts)
+        plan.source, plan.rank, plan.max = source, cur and cur.rank or nil, cur and cur.max or nil
+        return plan
+    end, PLAN_MAX_AGE)
 end
 
 -- Saved target for a profession, else the end of the rank you are in.

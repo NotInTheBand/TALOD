@@ -624,6 +624,7 @@ ns.Data.Window(UI, { "prices", "economy", "skills", "crafts" }, {
     warm = function()
         Desk.Summary()
         Desk.Opportunities()
+        Desk.Markets("profit", state.search)
         Desk.Deals()
         Desk.NotWorthIt()
         Desk.DepositRate()

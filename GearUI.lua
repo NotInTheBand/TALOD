@@ -1020,7 +1020,7 @@ local VIEWS = {
 function UI.AddView(def) VIEWS[#VIEWS + 1] = def end
 
 local function Build()
-    frame = Style.Window(ns.FRAME .. "CharacterWindow", "Character", nil, nil, { nav = "character" })
+    frame = Style.Window(ns.FRAME .. "CharacterWindow", "Character", nil, nil, { nav = "character", hidden = true })
 
     frame.charButton = Button(frame, "", 220, function(_, button)
         local chars = Gear.Characters()
@@ -1097,9 +1097,17 @@ function UI.Toggle(view)
 end
 
 function UI.IsShown() return frame ~= nil and frame:IsShown() end
+-- Work a tab wants done after login, in the background (the leveling plan
+-- prices every recipe at every point): fn() reads its memos.
+local warmers = {}
+function UI.AddWarm(fn) warmers[#warmers + 1] = fn end
+
 -- Every tab of the character window: gear, skills, crafts, and prices (the
 -- planner and enhancements price materials).
-ns.Data.Window(UI, { "gear", "skills", "crafts", "prices" })
+ns.Data.Window(UI, { "gear", "skills", "crafts", "prices" }, {
+    prebuild = function() if not frame then Build() end end,
+    warm = function() for _, fn in ipairs(warmers) do fn() end end,
+})
 UI.state = state
 UI.views = views
 UI.CharKey = function() return state.char end

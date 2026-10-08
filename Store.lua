@@ -28,9 +28,19 @@
 -- seal on its own: GuildSync checks what is possible, Audit compares with
 -- the server's figures.
 --
--- TALODDB.store = { v = { [key] = version }, salt, seals = { [name] =
--- { h, t, bt, v } }, edited = { [name] = { t } }, since = { [name] = time
--- of the first seal }, quarantine = { { t, key, path, reason, value, ver } } }.
+-- Legacy: saved data from another version is either brought up to date or
+-- cleared, never left half-read (see "Legacy" below): retired keys
+-- (RETIRED), keys no code declares any more (only when an older version
+-- saved the file), settings whose shape changed, stores older than their
+-- `floor` or whose migration failed, and stores saved by a newer version
+-- (parked untouched until a version that reads them is back).
+--
+-- TALODDB.store = { v = { [key] = version }, addon = version that saved the
+-- file, salt, seals = { [name] = { h, t, bt, v } }, edited = { [name] = { t } },
+-- since = { [name] = time of the first seal }, quarantine = { { t, key, path,
+-- reason, value, ver } }, cleaned = { { t, id, n, auto, c } } (Cleanup.lua's
+-- runs, newest last), legacy = { { t, key, what, from, to } } (newest last),
+-- parked = { [key] = { v, data, t, ver } } (stores a newer version saved) }.
 
 local ADDON_NAME, ns = ...
 local S = ns.Secret
@@ -63,13 +73,28 @@ local function KeyLess(a, b)
     return tostring(a) < tostring(b)
 end
 
+local floor, format = math.floor, string.format
+local putYield, putCount = false, 0     -- a background digest pauses every PUT_STEP values
+local PUT_STEP = 3000
+
 local function Put(buf, v, depth)
+    if putYield then
+        putCount = putCount + 1
+        if putCount >= PUT_STEP then putCount = 0 coroutine.yield() end
+    end
     local t = type(v)
     if t == "table" then
         if depth > 16 then buf[#buf + 1] = "{..}" return end
-        local keys = {}
-        for k in pairs(v) do keys[#keys + 1] = k end
-        table.sort(keys, KeyLess)
+        local keys, n, kind, mixed = {}, 0, nil, false
+        for k in pairs(v) do
+            n = n + 1
+            keys[n] = k
+            local tk = type(k)
+            if kind == nil then kind = tk elseif tk ~= kind then mixed = true end
+        end
+        -- All strings or all numbers (nearly always): the built-in order is
+        -- KeyLess's, without a Lua call per comparison.
+        if mixed or (kind ~= "string" and kind ~= "number") then table.sort(keys, KeyLess) else table.sort(keys) end
         buf[#buf + 1] = "{"
         for _, k in ipairs(keys) do
             Put(buf, k, depth + 1)
@@ -80,8 +105,8 @@ local function Put(buf, v, depth)
         buf[#buf + 1] = "}"
     elseif t == "number" then
         if v ~= v then buf[#buf + 1] = "nan"
-        elseif v == math.floor(v) then buf[#buf + 1] = string.format("%.0f", v)
-        else buf[#buf + 1] = string.format("%.4f", v) end
+        elseif v == floor(v) then buf[#buf + 1] = (v > -1e14 and v < 1e14) and tostring(v) or format("%.0f", v)
+        else buf[#buf + 1] = format("%.4f", v) end
     elseif t == "string" then
         buf[#buf + 1] = #v .. ":" .. v
     elseif t == "boolean" then
@@ -100,11 +125,29 @@ end
 -- Two polynomial checksums over the bytes, each below 2^32 (every product
 -- stays exact in a double).
 local M1, M2 = 4294967291, 4294967279
+-- Login hashes megabytes (every recruit): eight bytes per read, and two
+-- bytes folded before each modulo. The value is the same as one byte at a
+-- time (h < 2^32, so h * 263^2 + ... < 2^49 stays exact).
+local P1, P2 = 257 * 257, 263 * 263
 local function Hash(s, h1, h2)
     h1, h2 = h1 or 2166136261, h2 or 1540483477
     local byte = string.byte
-    for i = 1, #s do
-        local b = byte(s, i)
+    local n = #s
+    local i = 1
+    while i + 7 <= n do
+        local a, b, c, d, e, f, g, h = byte(s, i, i + 7)
+        h1 = (h1 * P1 + (a + 1) * 257 + b + 1) % M1
+        h2 = (h2 * P2 + (a * 7 + 3) * 263 + b * 7 + 3) % M2
+        h1 = (h1 * P1 + (c + 1) * 257 + d + 1) % M1
+        h2 = (h2 * P2 + (c * 7 + 3) * 263 + d * 7 + 3) % M2
+        h1 = (h1 * P1 + (e + 1) * 257 + f + 1) % M1
+        h2 = (h2 * P2 + (e * 7 + 3) * 263 + f * 7 + 3) % M2
+        h1 = (h1 * P1 + (g + 1) * 257 + h + 1) % M1
+        h2 = (h2 * P2 + (g * 7 + 3) * 263 + h * 7 + 3) % M2
+        i = i + 8
+    end
+    for j = i, n do
+        local b = byte(s, j)
         h1 = (h1 * 257 + b + 1) % M1
         h2 = (h2 * 263 + b * 7 + 3) % M2
     end
@@ -114,6 +157,74 @@ Store.Hash = Hash
 
 function Store.Digest(v)
     return string.format("%08x%08x", Hash(Store.Serialize(v)))
+end
+
+---------------------------------------------------------------------------
+-- Packed values
+---------------------------------------------------------------------------
+-- Every Lua table costs memory of its own (about 60 bytes, plus 40 per
+-- field rounded up to a power of two), and the whole saved file sits in
+-- memory while you play. Records that are read far more than they are
+-- written are kept as one string instead. Each value is tagged: "" nil,
+-- "T" / "F" a boolean, "n<number>", "s<text>" with the separators escaped
+-- (%XX), so any value comes back exactly.
+local SEPARATORS = "[%%|;~,:#]"
+local function Esc(s) return (s:gsub(SEPARATORS, function(c) return string.format("%%%02X", c:byte()) end)) end
+-- Packed logs are read by the thousand in one window build: most values hold
+-- no escape at all (plain find, no new string), and the rest look the code
+-- up in a table instead of calling a function per match.
+local UNESC = {}
+for i = 0, 255 do
+    local h = string.format("%02X", i)
+    UNESC[h], UNESC[h:lower()] = string.char(i), string.char(i)
+end
+local function Unesc(s)
+    if not s:find("%", 1, true) then return s end
+    return (s:gsub("%%(%x%x)", UNESC))
+end
+Store.Unesc = Unesc
+
+local B_S, B_N, B_T, B_F = ("s"):byte(), ("n"):byte(), ("T"):byte(), ("F"):byte()
+
+function Store.PackValue(v)
+    local t = type(v)
+    if v == nil then return "" end
+    if t == "boolean" then return v and "T" or "F" end
+    if t == "number" then return (v == v and v ~= math.huge and v ~= -math.huge) and ("n" .. tostring(v)) or "" end
+    if t == "string" then return "s" .. Esc(v) end
+    return nil      -- a table or anything else: not packable
+end
+
+function Store.UnpackValue(s)
+    local tag = s:byte(1)
+    if tag == B_S then return Unesc(s:sub(2)) end
+    if tag == B_N then return tonumber(s:sub(2)) end
+    if tag == B_T then return true end
+    if tag == B_F then return false end
+    return nil
+end
+
+-- values[1..n] joined by `sep` (one of | ; ~ , :), or nil when one cannot be packed.
+function Store.PackList(values, n, sep)
+    local parts = {}
+    for i = 1, n do
+        local p = Store.PackValue(values[i])
+        if not p then return nil end
+        parts[i] = p
+    end
+    return table.concat(parts, sep)
+end
+
+-- The raw fields of a packed list (still tagged), in order.
+function Store.SplitList(s, sep)
+    local out, n, pos = {}, 0, 1
+    while true do
+        local i = s:find(sep, pos, true)
+        n = n + 1
+        if not i then out[n] = s:sub(pos) return out end
+        out[n] = s:sub(pos, i - 1)
+        pos = i + 1
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -234,6 +345,9 @@ local function Meta()
     m.edited = Tab(m.edited) and m.edited or {}
     m.since = Tab(m.since) and m.since or {}
     m.quarantine = Tab(m.quarantine) and m.quarantine or {}
+    m.cleaned = Tab(m.cleaned) and m.cleaned or {}
+    m.legacy = Tab(m.legacy) and m.legacy or {}
+    m.parked = Tab(m.parked) and m.parked or {}
     if not Str(m.salt) or #m.salt < 8 then
         m.salt = string.format("%08x%08x", math.random(0, 0x7fffffff), (time() * 7919 + math.random(0, 0xffff)) % 0x7fffffff)
     end
@@ -303,9 +417,11 @@ local function IsLogEntry(e) return Tab(e) and Num(e.t) end
 ---------------------------------------------------------------------------
 -- The stores
 ---------------------------------------------------------------------------
--- { key, scope, label, version, migrate = { [n] = fn(data) }, check =
+-- { key, scope, label, version, migrate = { [n] = fn(data) }, floor, check =
 -- fn(data) -> data, count = fn(data) -> entries, byChar = fn(data, add):
 -- add(character number or nil, n) per entry }.
+-- floor: the oldest saved version still migrated. Raising it lets the
+-- migrations below it be deleted: older data is cleared as legacy instead.
 -- scope: "account" (one for the account; entries tagged `c`), "char" (keyed
 -- by Name-Realm), "realm" (keyed by Realm-Faction; entries tagged `c`),
 -- "guild" (per guild; entries tagged `c` or by name), "observed" (keyed by the
@@ -413,7 +529,9 @@ Store.DEFS = {
         end,
         count = function(d) local n = 0 for _, c in pairs(d) do n = n + #(c.log or {}) end return n end,
         byChar = function(d, add) ByName(d, add, function(c) return #(c.log or {}) end) end },
-    { key = "prices", scope = "realm", label = "Auction prices",
+    -- v3: each item's earlier looks packed into one string (Prices.Looks).
+    { key = "prices", scope = "realm", label = "Auction prices", version = 3,
+        migrate = { [3] = function(d) ns.Prices.PackStore(d) end },
         check = function(d)
             d = Map("prices", "prices", d, Tab, "not a realm's prices")
             for realm, items in pairs(d or {}) do
@@ -479,7 +597,9 @@ Store.DEFS = {
         migrate = { [2] = Adopt },
         check = function(d) return Map("fishSwap", "fishSwap", d, Tab, "not a weapon pair") end,
         count = CountMap, byChar = function(d, add) ByName(d, add) end },
-    { key = "guild", scope = "guild", label = "Guild (roster log, recruits)",
+    -- v3: the guild event log's entries packed into strings (Guild.Event).
+    { key = "guild", scope = "guild", label = "Guild (roster log, recruits)", version = 3,
+        migrate = { [3] = function(d) ns.Guild.PackEvents(d) end },
         check = function(d)
             if not Tab(d) then Store.Quarantine("guild", "guild", "not a table", d) return nil end
             d.guilds = Map("guild", "guild.guilds", d.guilds, Tab, "not a guild")
@@ -488,7 +608,9 @@ Store.DEFS = {
                 g.members = Map("guild", p .. ".members", g.members, Tab, "not a member")
                 g.recruits = Map("guild", p .. ".recruits", g.recruits, Tab, "not a recruit")
                 g.log = List("guild", p .. ".log", g.log, IsLogEntry, "not a log entry")
-                g.events = List("guild", p .. ".events", g.events, IsLogEntry, "not a guild event")
+                g.events = List("guild", p .. ".events", g.events, function(e)
+                    return (Str(e) and e:match("^n%d") ~= nil) or IsLogEntry(e)
+                end, "not a guild event")
             end
             return d
         end,
@@ -508,6 +630,22 @@ Store.DEFS = {
         count = CountMap,
         byChar = function(d, add)
             for name, days in pairs(d) do add(Store.CharId(name) or Store.CharIdOfFull(name), CountMap(days)) end
+        end },
+    { key = "groups", scope = "account", label = "Parties and raids",
+        check = function(d)
+            if not Tab(d) then Store.Quarantine("groups", "groups", "not a table", d) return nil end
+            local function Session(s) return Tab(s) and Num(s.id) and Num(s.start) and Tab(s.m) end
+            d.list = List("groups", "groups.list", d.list, Session, "not a group")
+            if d.cur ~= nil and not Session(d.cur) then
+                Store.Quarantine("groups", "groups.cur", "not a group", d.cur)
+                d.cur = nil
+            end
+            return d
+        end,
+        count = function(d) return #(d.list or {}) + (d.cur and 1 or 0) end,
+        byChar = function(d, add)
+            for _, s in ipairs(d.list or {}) do add(s.c, 1) end
+            if d.cur then add(d.cur.c, 1) end
         end },
     { key = "guildShare", scope = "account", label = "Guild sharing consent",
         check = function(d) return Map("guildShare", "guildShare", d, function(v) return type(v) == "boolean" end, "not a yes / no") end,
@@ -546,7 +684,8 @@ function Store.Def(key) return BY_KEY[key] end
 ---------------------------------------------------------------------------
 -- { name, v (bump when get changes: an old seal then counts as "new", not
 -- "edited"), keep (days an "edited" mark stays: longer than the data is
--- shared), get = fn() -> the sealed value }. Seal names are GuildSync's
+-- shared), get = fn() -> the sealed value, copy (get builds a fresh table
+-- nothing else changes: digested in the background) }. Seal names are GuildSync's
 -- category keys.
 local function SharedSkills()
     local out = {}
@@ -574,9 +713,9 @@ local function SharedRecruits()
 end
 
 Store.SEALS = {
-    { name = "recruiting", v = 1, keep = 35, get = SharedRecruits },
+    { name = "recruiting", v = 1, keep = 35, get = SharedRecruits, copy = true },
     { name = "activity", v = 1, keep = 65, get = function() return db().guildActivity end },
-    { name = "prof", v = 1, keep = 7, get = SharedSkills },
+    { name = "prof", v = 1, keep = 7, get = SharedSkills, copy = true },
 }
 local SEAL = {}
 for _, s in ipairs(Store.SEALS) do SEAL[s.name] = s end
@@ -605,13 +744,80 @@ local function SealOf(name, digest, salt, tag, editedT)
     return string.format("%08x%08x", h1, h2)
 end
 
+-- A big guild's recruiting is megabytes of text: serializing and hashing it
+-- in the login frame was most of the login cost. A seal whose get() builds
+-- a fresh copy (`copy`) already holds the data exactly as loaded, so it is
+-- serialized and hashed over the next frames (BUDGET_MS each); the others
+-- are read at once. Anything that needs the result sooner (a seal state
+-- asked for, logout) finishes it then.
+local HASH_CHUNK = 65536        -- bytes hashed between pauses
+local BUDGET_MS = 3             -- per frame
+local hashing = {}              -- coroutines still digesting, in order
+local hashFrame
+
+local function Resume(co)
+    putYield = true
+    local ok, err = coroutine.resume(co)
+    putYield, putCount = false, 0
+    if not ok then ns.SafeCall(error, "seal digest: " .. tostring(err), 0) end
+    return coroutine.status(co) == "dead"
+end
+
+-- Works through the digests for `ms` milliseconds (all of them without a
+-- clock or with `ms` nil); true when nothing is left.
+local function HashSome(ms)
+    local clock = ms and debugprofilestop
+    local stop = clock and (clock() + ms)
+    while hashing[1] do
+        if Resume(hashing[1]) then table.remove(hashing, 1) end
+        if stop and clock() >= stop then break end
+    end
+    return hashing[1] == nil
+end
+
+local function Digester(name, value)
+    return coroutine.create(function()
+        local text = Store.Serialize(value)
+        local h1, h2
+        for i = 1, #text, HASH_CHUNK do
+            h1, h2 = Hash(text:sub(i, i + HASH_CHUNK - 1), h1, h2)
+            coroutine.yield()
+        end
+        if not h1 then h1, h2 = Hash("") end
+        digests[name] = string.format("%08x%08x", h1, h2)
+    end)
+end
+
 local function DigestAll()
+    wipe(hashing)
     for _, s in ipairs(Store.SEALS) do
         local value
         ns.SafeCall(function() value = s.get() end)
-        digests[s.name] = Store.Digest(value)
+        if s.copy then
+            digests[s.name] = nil
+            hashing[#hashing + 1] = Digester(s.name, value)
+        else
+            digests[s.name] = Store.Digest(value)
+        end
     end
 end
+
+local verifyPending     -- the login check runs once the hashing is done
+
+-- Finishes the login check now (the hashing too).
+local function Settle()
+    if not verifyPending then return end
+    HashSome(nil)
+    if hashFrame then hashFrame:Hide() end
+    verifyPending = nil
+    if not Store.Verify(false) then verifyWait = GetTime() end
+end
+
+hashFrame = CreateFrame("Frame")
+hashFrame:Hide()
+hashFrame:SetScript("OnUpdate", function()
+    if HashSome(BUDGET_MS) then Settle() end
+end)
 
 -- Compares the loaded data with the seals of the last logout. `force`: stop
 -- waiting for the BattleTag (seals that used it become "unknown").
@@ -652,6 +858,8 @@ end
 -- At logout (after every module): seals what will be shared next time.
 function Store.SealAll()
     if not db() then return end
+    -- An edit found at this login must be marked before the new seal covers it.
+    Settle()
     local m = Meta()
     local tag = BattleTag()
     Store.NoteMe()
@@ -670,49 +878,243 @@ end
 -- (could not be checked), and when the seal chain began.
 function Store.SealState(name)
     if not SEAL[name] then return nil end
+    Settle()
     local m = db() and Meta()
     return states[name] or "unknown", m and m.since[name] or nil
 end
+
+---------------------------------------------------------------------------
+-- Legacy
+---------------------------------------------------------------------------
+-- Top-level keys no longer used. [key] = why (removed at the next login), or
+-- fn(value, data) that carries what is worth keeping into its new home first.
+-- A key renamed or dropped goes here, so players who update lose nothing
+-- silently and keep nothing that no code reads.
+Store.RETIRED = {
+    guildWhoBracket = "the /who level bracket setting was removed",
+    -- The whisper limit used to be Guild's own.
+    guildWhisperBurst = function(v, d) if d.outboxBurst == nil then d.outboxBurst = v end end,
+}
+
+-- Top-level keys written without a default (and not a store above).
+-- tests/run.py fails when a scenario leaves a key that is not declared
+-- anywhere, so the unknown-key sweep never takes data a module still uses.
+Store.EXTRA_KEYS = {
+    store = true, chars = true, errorLog = true, lastProbe = true, cleanAuto = true, cleanLast = true,
+    fishAutoLootLast = true, fishSoundLast = true, fishSoundRestore = true, guildAckSeen = true,
+    guildMessageIndex = true, guildMessages = true, guildMyNames = true, outboxBurst = true, profPlanProf = true,
+    fishAutoLootRestore = true, craftTrackPos = true,
+}
+
+local MAX_LEGACY = 100
+local KEEP_KEYS = 50           -- a set-aside table with more top-level keys than this is described, not copied
+
+-- Sets a whole store or setting aside without serializing a big one at login.
+local function Aside(key, reason, v)
+    if Tab(v) then
+        local n = 0
+        for _ in pairs(v) do n = n + 1 if n > KEEP_KEYS then break end end
+        if n > KEEP_KEYS then v = "(a table of more than " .. KEEP_KEYS .. " entries: too big to keep)" end
+    end
+    -- Counted once as legacy, not again as an unreadable entry.
+    local before = report and report.dropped
+    Store.Quarantine(key, key, reason, v)
+    if before then report.dropped = before end
+end
+
+local function Note(key, what, from, to)
+    local list = Meta().legacy
+    list[#list + 1] = { t = time(), key = key, what = what, from = from, to = to }
+    while #list > MAX_LEGACY do table.remove(list, 1) end
+    if report then
+        report.legacy[#report.legacy + 1] = key
+        if what ~= "updated" then report.cleared = report.cleared + 1 end
+    end
+end
+
+-- "0.11.2" -> { 0, 11, 2 }; nil when it is not a version ("?", a dev string).
+local function Parts(v)
+    if not Str(v) or not v:match("^%d+[%.%d]*$") then return nil end
+    local out = {}
+    for n in v:gmatch("%d+") do out[#out + 1] = tonumber(n) end
+    return out
+end
+
+-- -1 when a is older than b, 0 the same, 1 newer, nil when either is unreadable.
+function Store.CompareVersions(a, b)
+    local pa, pb = Parts(a), Parts(b)
+    if not pa or not pb then return nil end
+    for i = 1, math.max(#pa, #pb) do
+        local x, y = pa[i] or 0, pb[i] or 0
+        if x ~= y then return x < y and -1 or 1 end
+    end
+    return 0
+end
+
+local function DefaultCopy(key)
+    local d = ns.defaults and ns.defaults[key]
+    if not Tab(d) then return d end
+    local t = {}
+    ns.CopyDefaults(t, d)
+    return t
+end
+
+-- Every top-level key this version declares.
+local function Known(key)
+    return BY_KEY[key] ~= nil or (ns.defaults and ns.defaults[key] ~= nil) or Store.EXTRA_KEYS[key]
+        or (ns.Main and ns.Main.POSITION_KEYS and ns.Main.POSITION_KEYS[key]) or false
+end
+
+Store.Known = Known
+
+function Store.Unknown()
+    local out = {}
+    for key in pairs(db() or {}) do
+        if not Known(key) and not Store.RETIRED[key] then out[#out + 1] = tostring(key) end
+    end
+    table.sort(out)
+    return out
+end
+
+-- Before the stores are migrated. `older`: the file was saved by an older
+-- version (or before versions were recorded): only then are undeclared keys
+-- legacy. A newer version's keys are left alone, so going back a version
+-- and forward again loses nothing.
+local function SweepKeys(older)
+    local d = db()
+    for key, why in pairs(Store.RETIRED) do
+        if d[key] ~= nil then
+            if type(why) == "function" then ns.SafeCall(why, d[key], d) end
+            Aside(key, "retired", d[key])
+            d[key] = nil
+            Note(key, type(why) == "string" and why or "carried over and removed")
+        end
+    end
+    if older then
+        for _, key in ipairs(Store.Unknown()) do
+            Aside(key, "not used by this version", d[key])
+            d[key] = nil
+            Note(key, "not used by this version")
+        end
+    end
+    -- A setting that changed shape (a switch that became a list, or back)
+    -- would break whatever reads it: back to its default. Stores have checks.
+    for key, def in pairs(ns.defaults or {}) do
+        local v = d[key]
+        if v ~= nil and not BY_KEY[key] and Tab(def) ~= Tab(v) then
+            Aside(key, "setting of another shape", v)
+            d[key] = DefaultCopy(key)
+            Note(key, "reset to its default (its shape changed)")
+        end
+    end
+end
+
+-- One store before it is migrated. Returns the data and the version to
+-- migrate from, or nil when it was cleared, parked or is new.
+local function Bring(def, m)
+    local key, d = def.key, db()
+    local data = d[key]
+    local parked = m.parked[key]
+    -- A store a newer version saved, and this one can read it again.
+    if Tab(parked) and Num(parked.v) and parked.v <= def.version then
+        if data ~= nil then Aside(key, "gathered while an older version ran", data) end
+        data, d[key] = parked.data, parked.data
+        m.v[key] = parked.v
+        m.parked[key] = nil
+        Note(key, "restored from version " .. tostring(parked.ver or "?"), parked.v, def.version)
+    end
+    if data == nil then return nil end
+    -- Data saved before the handler existed is version 1.
+    local from = m.v[key] or 1
+    if from > def.version then
+        -- This version cannot read it, and an older check would cut it to
+        -- what it understands: keep it untouched for the newer version.
+        m.parked[key] = { v = from, data = data, t = time(), ver = m.addon }
+        d[key] = DefaultCopy(key)
+        Note(key, "saved by a newer version: kept aside until it is back", from, def.version)
+        return nil
+    end
+    if def.floor and from < def.floor then
+        Aside(key, "too old to bring up to date (v" .. from .. ")", data)
+        d[key] = DefaultCopy(key)
+        Note(key, "cleared: saved in a format this version no longer reads", from, def.version)
+        return nil
+    end
+    return data, from
+end
+
+-- The migration steps of one store; a failed step sets the store aside
+-- (half-migrated data would break the windows that read it).
+local function Migrate(def, data, from)
+    for n = from + 1, def.version do
+        local fn = def.migrate and def.migrate[n]
+        if fn and not ns.SafeCall(fn, data) then
+            Aside(def.key, "update to v" .. n .. " failed", data)
+            db()[def.key] = DefaultCopy(def.key)
+            Note(def.key, "cleared: the update to this version failed", from, def.version)
+            return false
+        end
+    end
+    if from < def.version then
+        report.migrated[def.key] = from
+        Note(def.key, "updated", from, def.version)
+    end
+    return true
+end
+
+-- What the last logins changed, newest last.
+function Store.LegacyLog() return Meta().legacy end
+function Store.Parked() return Meta().parked end
 
 ---------------------------------------------------------------------------
 -- Load
 ---------------------------------------------------------------------------
 -- Runs once, before the modules start: seals are checked against the data
 -- exactly as it was loaded, then each store is migrated and checked.
-function Store.Load()
+-- `fresh`: no saved data existed (a first install). Automatic cleanup is
+-- decided here once: on for a first install, off for an update, so an
+-- update never deletes data its owner did not agree to.
+function Store.Load(fresh)
     if not db() then return end
-    report = { dropped = 0, migrated = {} }
+    if db().cleanAuto == nil then db().cleanAuto = fresh and true or false end
+    report = { dropped = 0, migrated = {}, legacy = {}, cleared = 0 }
     for k in pairs(states) do states[k] = nil end
     local m = Meta()
     DigestAll()
     Store.Me()
+    -- Older: saved by an older version, or before the version was recorded.
+    local cmp = Store.CompareVersions(m.addon, ns.VERSION)
+    local older = not fresh and (m.addon == nil or cmp == -1)
+    ns.SafeCall(SweepKeys, older)
     for _, def in ipairs(Store.DEFS) do
-        local data = db()[def.key]
-        -- Data saved before the handler existed is version 1.
-        local from = m.v[def.key] or (data ~= nil and 1 or def.version)
-        if data ~= nil then
-            for n = from + 1, def.version do
-                local fn = def.migrate and def.migrate[n]
-                if fn then ns.SafeCall(fn, data) end
-            end
-            if from < def.version then report.migrated[def.key] = from end
-            if def.check then
-                local checked, ran = nil, false
-                ns.SafeCall(function() checked, ran = def.check(data), true end)
-                if ran then db()[def.key] = checked end
-            end
+        local data, from = Bring(def, m)
+        if data ~= nil and Migrate(def, data, from) and def.check then
+            local checked, ran = nil, false
+            ns.SafeCall(function() checked, ran = def.check(data), true end)
+            if ran then db()[def.key] = checked end
         end
         m.v[def.key] = def.version
     end
-    if not Store.Verify(false) then verifyWait = GetTime() end
+    -- A newer file stays marked newer, so its keys are never swept.
+    if cmp ~= 1 then m.addon = ns.VERSION end
+    verifyPending = true
+    if hashing[1] then hashFrame:Show() else Settle() end
     local done = report
     report = nil
+    if done.cleared > 0 then
+        ns.Print("saved data from another version: " .. done.cleared .. " old part" .. (done.cleared == 1 and " was" or "s were")
+            .. " cleared or kept aside (" .. ns.Cmd.Text("data") .. " lists them).")
+    end
     if done.dropped > 0 then
         ns.Print(done.dropped .. " unreadable saved entr" .. (done.dropped == 1 and "y was" or "ies were")
             .. " set aside (" .. ns.Cmd.Text("data") .. " shows them).")
     end
     return done
 end
+
+-- For Cleanup.lua: the set-aside list and the log of cleanup runs.
+function Store.Quarantined() return Meta().quarantine end
+function Store.CleanLog() return Meta().cleaned end
 
 ---------------------------------------------------------------------------
 -- Report: account and characters
@@ -765,6 +1167,19 @@ function Store.ReportText()
     for _, s in ipairs(Store.SEALS) do
         local state, since = Store.SealState(s.name)
         lines[#lines + 1] = "  " .. s.name .. ": " .. (STATE_TEXT[state] or state) .. (since and ("  (sealed since " .. date("%Y-%m-%d", since) .. ")") or "")
+    end
+    local legacy = Meta().legacy
+    if #legacy > 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "Data from other versions (updated or cleared, newest last):"
+        for i = math.max(1, #legacy - 30), #legacy do
+            local e = legacy[i]
+            lines[#lines + 1] = string.format("  %s  %s: %s%s", date("%Y-%m-%d %H:%M", e.t or 0), tostring(e.key), tostring(e.what),
+                e.from and e.to and string.format(" (v%s -> v%s)", tostring(e.from), tostring(e.to)) or "")
+        end
+    end
+    for key, p in pairs(Meta().parked) do
+        lines[#lines + 1] = string.format("  kept for a newer version: %s (v%s, from %s)", tostring(key), tostring(p.v), tostring(p.ver or "?"))
     end
     local q = Meta().quarantine
     lines[#lines + 1] = ""

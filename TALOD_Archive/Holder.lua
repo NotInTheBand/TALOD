@@ -1,0 +1,3 @@
+-- Holds the archive's saved data (the SavedVariables global named in the
+-- .toc). The main addon loads this addon on demand and reads and writes
+-- that global itself: nothing runs here.

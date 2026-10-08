@@ -85,8 +85,10 @@ scenarios.auction_desk_ladder = function()
     -- 30 units listed three days running: nothing leaves the AH, so no reset.
     check(ns.Market.Movement(2589).key == "dead" and #Desk.Opportunities() == 0, "doesn't sell: left out")
     -- Units leaving between looks: it moves, the reset shows.
-    local h = Pr.Entry(2589).h
-    h[1][3], h[2][3], h[3][3] = 90, 60, 45
+    local e = Pr.Entry(2589)
+    local looks = Pr.Looks(e)
+    looks[1].n, looks[2].n, looks[3].n = 90, 60, 45
+    e.h = Pr.PackLooks(looks)
     Desk.Invalidate()
     check(ns.Market.Movement(2589).key ~= "dead" and #Desk.Opportunities() == 1, "shown from 10s")
 

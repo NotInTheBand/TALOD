@@ -1,0 +1,11 @@
+## Interface: 16001, 11509
+## Title: |cffff7f3fTALOD|r Archive
+## Notes: Old TALOD data moved out of TALOD's own save file. The game reads it only when TALOD opens it (Settings, Data, Archive), so it costs no memory or loading time otherwise.
+## Author: NotInTheBand
+## Version: @project-version@
+## LoadOnDemand: 1
+## Dependencies: TALOD
+## SavedVariables: TALODArchiveDB
+## Category: PvP
+
+Holder.lua

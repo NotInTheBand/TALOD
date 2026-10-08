@@ -42,6 +42,16 @@ Cmd.LIST = {
     { id = "distance", words = { "distance" }, help = { { "[max]", "show or maximize nameplate distance (detection reach)" } } },
     { id = "probe", words = { "probe" }, help = { { "", "what this client lets addons read (target an enemy player)" } } },
     { id = "errors", words = { "errors", "error" }, help = { { "[clear]", "copyable list of " .. ns.NAME .. " errors (for bug reports)" } } },
+    { id = "perf", words = { "perf" }, help = { { "[reset]", "copyable list of the slowest " .. ns.NAME .. " work this session (redraws, builds, events)" } } },
+    { id = "clean", words = { "clean", "cleanup" }, help = {
+        { "", "what each cleanup rule would remove now" },
+        { "now", "run the cleanup rules that are on" },
+        { "auto on|off", "clean up once a day after login" } } },
+    { id = "archive", words = { "archive" }, help = {
+        { "", "archive addon: state and what waits for it" },
+        { "load", "load the archive (stays in memory until /reload)" },
+        { "move", "load it and move what the cleanup rules would remove" } } },
+    { id = "memory", words = { "memory" }, help = { { "", "memory used by " .. ns.NAME .. ", your cap and the largest stores" } } },
     { id = "data", words = { "data" }, help = { { "[clear]", "saved data: stores by character, tamper seals, set-aside entries (clear deletes those)" } } },
     { id = "clear", words = { "clear" }, help = { { "", "empty the nearby list" } } },
     { id = "reset", words = { "reset" }, help = { { "", "reset settings and positions (all your logged data is kept)" } } },
@@ -98,12 +108,20 @@ Cmd.LIST = {
         { "[recruit|invited|replies|roster|activity|recruiters|promote|log|members|sharing]", "guild window" },
         { "mini", "show / hide the mini recruit window" },
         { "who", "one /who search for players without a guild (your level range)" },
+        { "handsfree", "Hands Free on / off: a click on the open world is the next recruit click" },
+        { "handsfree why", "what Hands Free did with your last clicks, and why not" },
+        { "next", "one recruit step: the next queued invite, else /who, else the next whisper (for macros)" },
+        { "key", "set the recruit key: press the key or mouse button for one recruit step" },
         { "invite [name]", "whisper + guild invite to one player (or your target)" },
         { "pace [reset]", "whisper limit learned from the game's throttle (reset forgets it)" },
         { "check", "your invites of the last hour: confirmed by the game, answered, unconfirmed" },
     } },
     { id = "audit", words = { "audit" }, help = {
         { "[me|target|flags|members|status]", "statistics ledger: members' gold and activity, flags" } } },
+
+    -- Groups.lua
+    { id = "groups", words = { "groups", "party", "raid" }, help = {
+        { "[now|parties|raids]", "your parties and raids: who, where, how long, chat, loot" } } },
 
     { id = "credits", words = { "credits", "discord", "donate" }, help = { { "", "credits, the Discord invite, how to send gold" } } },
 }

@@ -110,19 +110,24 @@ end
 function Market.Stats(id)
     local e = ns.Prices.Entry(id)
     if not e then return nil end
-    local key = table.concat({ tostring(e), e.p, e.t, e.n or "", e.a or "", e.b or "", e.h and #e.h or 0 }, ":")
+    local h = e.h
+    local key = tostring(e) .. ":" .. e.p .. ":" .. e.t .. ":" .. (e.n or "") .. ":" .. (e.a or "") .. ":" .. tostring(e.b or "")
+        .. ":" .. (type(h) == "table" and #h or type(h) == "string" and #h or 0)
     return ns.Data.Memo("market:stats:" .. id, key, function() return Market.BuildStats(e) end)
 end
 
 function Market.BuildStats(e)
-    local points = {}
-    for _, h in ipairs(e.h or {}) do points[#points + 1] = { t = h[1], p = h[2], n = h[3], a = h[4], b = h[6] and true or nil } end
+    -- Prices.Looks hands out new tables: they are the points (the warm-up
+    -- builds this for every item seen, so no copies).
+    local points = ns.Prices.Looks(e)
+    for _, x in ipairs(points) do x.c, x.b = nil, x.b and true or nil end
     points[#points + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, b = e.b and true or nil }
-    -- The earlier looks on their own first (the marks are redone below).
+    -- The earlier looks on their own first (MarkOverpriced clears and redoes
+    -- the marks, so the same tables serve both).
     local usualBefore
     if #points > 1 then
         local before = {}
-        for i = 1, #points - 1 do before[i] = { p = points[i].p, b = points[i].b } end
+        for i = 1, #points - 1 do before[i] = points[i] end
         usualBefore = Market.MarkOverpriced(before)
     end
     local usual, _, over = Market.MarkOverpriced(points)
@@ -691,8 +696,8 @@ function Market.Deals()
             if gain > 0 then out[#out + 1] = { id = id, s = s, gain = gain, usual = usual } end
         end
     end
-    table.sort(out, function(a, b) return a.gain / math.max(1, a.s.p) > b.gain / math.max(1, b.s.p) end)
-    return out
+    -- Biggest gain for the money first (the ratio scaled: NumKey keeps two decimals).
+    return ns.Utils.SortBy(out, function(d) return ns.Utils.NumKey(d.gain / math.max(1, d.s.p) * 1e6, true) end)
 end
 Market.DEAL_FACTOR, Market.DEAL_LOOKS = DEAL_FACTOR, DEAL_LOOKS
 

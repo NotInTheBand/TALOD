@@ -59,7 +59,7 @@ scenarios.market_outliers = function()
     Pr.Record(2592, 40, 100, now, 5)
     s = M.Stats(2592)
     check(s.over == 2 and s.usual == 40, "browse stack prices marked against exact looks: usual " .. tostring(s.usual))
-    check(Pr.Entry(2592).h[2][6] == 1 and Pr.Entry(2592).b == nil, "browse flag stored per look")
+    check(Pr.Looks(Pr.Entry(2592))[2].b == 1 and Pr.Entry(2592).b == nil, "browse flag stored per look")
     -- An exact read in the same look clears the flag.
     Pr.Record(2592, 500, 100, now + 60, 5, nil, true)
     check(Pr.Entry(2592).b == nil, "exact look stays exact after a browse row")

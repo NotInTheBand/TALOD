@@ -90,6 +90,18 @@ def toc_check():
             problems.append(f"TOC lists missing file {f}")
     if not re.search(r"^## Interface:.*\b16001\b", TOC.read_text(encoding="utf-8"), re.M):
         problems.append("TOC does not list Interface 16001")
+    # The archive addon (a subfolder here, its own folder in the package): names as Brand.lua builds them.
+    side = ROOT / (folder + "_Archive")
+    if side.exists() or ROOT == TESTS.parent:
+        toc = side / f"{folder}_Archive.toc"
+        text = toc.read_text(encoding="utf-8") if toc.exists() else ""
+        for want in (r"^## LoadOnDemand: 1\s*$", rf"^## Dependencies: {folder}\s*$",
+                     rf"^## SavedVariables: {folder}ArchiveDB\s*$", r"^## Interface:.*\b16001\b"):
+            if not re.search(want, text, re.M):
+                problems.append(f"archive TOC {toc.name}: missing {want}")
+        for line in text.splitlines():
+            if line.strip() and not line.startswith("#") and not (side / line.strip()).exists():
+                problems.append(f"archive TOC lists missing file {line.strip()}")
     return problems
 
 
@@ -131,6 +143,24 @@ def tooltip_check():
     return problems
 
 
+# Menus are Style's (Style.ContextMenu, Style.OpenDropdown): one look, and the
+# game's menu frames taint secure buttons when an addon opens them.
+MENU_ONLY = re.compile(r"\b(EasyMenu|EasyMenu_Initialize|ToggleDropDownMenu|UIDropDownMenu_\w+|MenuUtil\s*\.\s*\w+)\b"
+                       r"|\bUIDropDownMenuTemplate\b")
+
+
+def menu_check():
+    problems = []
+    for f in toc_files():
+        if not f.endswith(".lua") or f == "Style.lua":
+            continue
+        for n, line in enumerate((ROOT / f).read_text(encoding="utf-8").splitlines(), 1):
+            code = line.split("--", 1)[0]
+            if MENU_ONLY.search(code):
+                problems.append(f"{f}:{n} uses the game's menus (use Style.ContextMenu / a list's opts.menu): {line.strip()}")
+    return problems
+
+
 # The addon's name lives in Brand.lua and the slash prefix in Commands.lua only, so a rename is one edit there.
 def brand_literal():
     brand = (ROOT / "Brand.lua").read_text(encoding="utf-8")
@@ -155,6 +185,26 @@ def brand_check():
                 problems.append(f"{f}:{n} names the addon outside Brand.lua (use ns.NAME / ns.FRAME / ns.DB() ...): {line.strip()}")
     return problems
 
+_CODE_DB_KEYS = None
+
+
+def code_db_keys():
+    """Every top-level saved key the addon's Lua names as db().key or ns.DB().key."""
+    global _CODE_DB_KEYS
+    if _CODE_DB_KEYS is None:
+        keys = set()
+        for f in toc_files():
+            if f.endswith(".lua"):
+                code = (ROOT / f).read_text(encoding="utf-8")
+                keys.update(re.findall(r"(?:\bdb\(\)|ns\.DB\(\))\.([A-Za-z_]\w*)", code))
+                # local d = db() ... d.key (within the next 60 lines)
+                for m in re.finditer(r"local (\w+) = (?:db\(\)|ns\.DB\(\))\s*\n", code):
+                    near = "\n".join(code[m.end():].split("\n")[:60])
+                    keys.update(re.findall(r"\b" + m.group(1) + r"\.([A-Za-z_]\w*)", near))
+        _CODE_DB_KEYS = sorted(keys)
+    return _CODE_DB_KEYS
+
+
 def run(name, verbose):
     lua = lua51.LuaRuntime(unpack_returned_tuples=True)
     g = lua.globals()
@@ -171,6 +221,17 @@ def run(name, verbose):
         blocked = list(g.MOCK.blocked.values())
         if blocked:
             ok, err = False, "blocked outside a click (ADDON_ACTION_BLOCKED): " + ", ".join(blocked)
+        # Every saved top-level key must be declared (a default, a store, Store.EXTRA_KEYS):
+        # at the next update an undeclared one is swept as legacy.
+        ns = g.MOCK.ns
+        if ok and ns and ns.Store and ns.DB():
+            unknown = list(ns.Store.Unknown().values())
+            if unknown:
+                ok, err = False, "saved keys no code declares (add a default or Store.EXTRA_KEYS): " + ", ".join(unknown)
+            # Keys the code reads or writes on paths no scenario reached.
+            unread = sorted(k for k in code_db_keys() if not ns.Store.Known(k) and not ns.Store.RETIRED[k])
+            if ok and unread:
+                ok, err = False, "db() keys in the code that no default declares (add one or Store.EXTRA_KEYS): " + ", ".join(unread)
     except Exception as e:  # lupa raises LuaError
         ok, err = False, str(e)
     if verbose or not ok:
@@ -280,6 +341,40 @@ TALODDB = {
     return problems
 
 
+def data_report_check():
+    """tools/data_report.py: sizes and the archive's packed entries read back."""
+    import importlib.util
+    path = ROOT / "tools" / "data_report.py"
+    if not path.exists():
+        return []
+    spec = importlib.util.spec_from_file_location("data_report", path)
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    problems = []
+    # Entries as the addon writes them (Archive.Put of Store.PackList / Prices.PackLooks / Guild.PackEvent).
+    archive = {"v": 1, "stores": {
+        "recruitText": ["n1700000000|n1|sG/Bo-Realm|sshey%253B you %257C 100%2525%3B%3B%3Bs%2523n1%253BT%253BW%253Bn1%3Bn1700000001"],
+        "priceHistory": ["n1700000000|n1|sR-A/2589|s1%3A50%3A5%3A1%3A1%3A%2C2%3A60%3A5%3A1%3A1%3A1"],
+        "guildEvents": ["n1700000000|n1|sG|sn5%7Csjoin%7CsAl-Realm%7C%7C"],
+    }}
+    rt = tool.archive_entries(archive, "recruitText")
+    want = {"whisper": "hey; you | 100%", "echo": None, "unsent": None,
+            "chat": [{"t": 1, "me": True, "text": "hey; you | 100%", "c": 1}], "echoT": 1700000001}
+    if len(rt) != 1 or rt[0]["key"] != "G/Bo-Realm" or rt[0]["c"] != 1 or rt[0]["value"] != want:
+        problems.append(f"data report recruit entry: {rt}")
+    ph = tool.archive_entries(archive, "priceHistory")[0]["value"]
+    if len(ph) != 2 or ph[1]["p"] != 60 or ph[1]["b"] != 1 or ph[0]["b"] is not None:
+        problems.append(f"data report price looks: {ph}")
+    ev = tool.archive_entries(archive, "guildEvents")[0]["value"]
+    if ev != {"t": 5, "k": "join", "a": "Al-Realm", "b": None, "rank": None}:
+        problems.append(f"data report event: {ev}")
+    db = {"guild": {"guilds": {"G": {"recruits": {"A": {"x": "s"}, "B": {"status": "declined"}}}}}, "prices": {}}
+    text = tool.report(db, archive, "test")
+    if "1 packed, 1 plain" not in text or "recruitText: 1 entries" not in text:
+        problems.append("data report text: " + text)
+    return problems
+
+
 def version_check():
     """version.json, the TOC's ## Version and the CHANGELOG agree (tools/version.py).
     Only in the working folder: the release package carries no version.json."""
@@ -288,6 +383,28 @@ def version_check():
     sys.path.insert(0, str(ROOT / "tools"))
     import version
     return version.problems()
+
+
+# Bindings.xml (read by the game from the folder) must match Brand.lua: the
+# binding name, its header and the frame it clicks; the release must pack it.
+def bindings_check():
+    problems = []
+    path = ROOT / "Bindings.xml"
+    if not path.exists():
+        return ["Bindings.xml is missing"]
+    text = path.read_text(encoding="utf-8")
+    name = ROOT.name
+    want = {
+        'name="' + name.upper() + '_RECRUIT_STEP"': "binding name (ns.BINDING_STEP)",
+        'header="' + name.upper() + '"': "header (ns.NAME:upper())",
+        name + "RecruitStep:Click()": "frame it clicks (ns.FRAME .. \"RecruitStep\")",
+    }
+    for needle, what in want.items():
+        if needle not in text:
+            problems.append(f"Bindings.xml: {what} should read {needle}")
+    if '"Bindings.xml"' not in (ROOT / "tools" / "build_release.py").read_text(encoding="utf-8"):
+        problems.append("tools/build_release.py does not pack Bindings.xml")
+    return problems
 
 
 def main():
@@ -305,8 +422,14 @@ def main():
     for problem in tooltip_check():
         print("TOOLTIP FAIL", problem)
         failures += 1
-    for problem in viewer_check() + fishing_viewer_check():
+    for problem in menu_check():
+        print("MENU FAIL", problem)
+        failures += 1
+    for problem in viewer_check() + fishing_viewer_check() + data_report_check():
         print("VIEWER FAIL", problem)
+        failures += 1
+    for problem in bindings_check():
+        print("BINDINGS FAIL", problem)
         failures += 1
     for problem in version_check():
         print("VERSION FAIL", problem)

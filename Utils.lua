@@ -44,6 +44,36 @@ StaticPopupDialogs[ns.POPUP .. "COPY"] = {
     hideOnEscape = true,
 }
 
+---------------------------------------------------------------------------
+-- Sorting big lists
+---------------------------------------------------------------------------
+-- table.sort with a Lua comparator makes one Lua call per comparison:
+-- thousands of items (every ladder, every recruit) are a long step that
+-- background work cannot pause in. SortBy sorts by a text key in one C
+-- call instead; equal keys keep their order.
+local NUM_SPAN = 1e12           -- copper and times fit; beyond is clamped
+
+-- Text whose byte order is the numeric order (desc: high first). Two
+-- decimals; nil and NaN count as the lowest.
+function Utils.NumKey(v, desc)
+    v = tonumber(v)
+    if not v or v ~= v then v = -NUM_SPAN end
+    if v > NUM_SPAN then v = NUM_SPAN elseif v < -NUM_SPAN then v = -NUM_SPAN end
+    if desc then v = -v end
+    return string.format("%016.2f", v + NUM_SPAN)
+end
+
+function Utils.SortBy(list, keyOf)
+    local keys, byKey = {}, {}
+    for i, item in ipairs(list) do
+        local k = keyOf(item) .. "\1" .. string.format("%07d", i)
+        keys[i], byKey[k] = k, item
+    end
+    table.sort(keys)
+    for i, k in ipairs(keys) do list[i] = byKey[k] end
+    return list
+end
+
 -- what: the word in "Ctrl+C copies the <what>" ("name", "invite link", ...).
 function Utils.Copy(text, what)
     if type(text) ~= "string" or text == "" then return false end

@@ -202,3 +202,26 @@ scenarios.nav_size = function()
     ns.Main.ResetSettings()
     check(TALODDB.navSize == nil, "reset clears the size")
 end
+
+-- Menu descriptions fit a tile at the smallest window; hovering a tile or a
+-- rail entry shows the page's tabs.
+scenarios.navigation_descriptions = function()
+    local ns = boot(11509)
+    local Nav = ns.Nav
+    for _, page in ipairs(Nav.Pages()) do
+        check(type(page.desc) == "string" and page.desc ~= "", page.key .. ": has a description")
+        check(#page.desc <= 112, page.key .. ": description fits two lines (" .. #page.desc .. ")")
+        for _, tab in ipairs(page.tabs or {}) do
+            check(type(tab[1]) == "string" and type(tab[2]) == "string", page.key .. ": tab row")
+        end
+    end
+    Nav.ShowMenu()
+    local tile = TALODMainMenu.tiles.economy
+    tile:Fire("OnEnter")
+    check(GameTooltip:IsOwned(tile) and GameTooltip:IsShown(), "tile hover shows the page's tabs")
+    tile:Fire("OnLeave")
+    check(not GameTooltip:IsShown(), "tile leave hides it")
+    local rail = TALODMainMenu.navRail.buttons.market
+    rail:Fire("OnEnter")
+    check(GameTooltip:IsOwned(rail), "rail hover shows the page tooltip")
+end

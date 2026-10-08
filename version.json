@@ -1,7 +1,175 @@
 {
-  "version": "0.11.2",
-  "date": "2026-10-07",
+  "version": "0.23.2",
+  "date": "2026-10-08",
   "history": [
+    {
+      "version": "0.23.2",
+      "date": "2026-10-08",
+      "from": "0.23.1",
+      "note": "performance pass: login, guild history, background warm-up, sorting, list rows"
+    },
+    {
+      "version": "0.23.1",
+      "date": "2026-10-08",
+      "from": "0.23.0",
+      "note": "Class filter: all nine classes on both factions"
+    },
+    {
+      "version": "0.23.0",
+      "date": "2026-10-08",
+      "from": "0.22.3",
+      "note": "legacy data: retired keys, undeclared-key sweep, floors, parked newer stores"
+    },
+    {
+      "version": "0.22.3",
+      "date": "2026-10-08",
+      "from": "0.22.2",
+      "note": "guild event log merge without full re-sort; cleanup timings in perf"
+    },
+    {
+      "version": "0.22.2",
+      "date": "2026-10-08",
+      "from": "0.22.1",
+      "note": "Recruit tab header buttons moved to their own row"
+    },
+    {
+      "version": "0.22.1",
+      "date": "2026-10-07",
+      "from": "0.22.0",
+      "note": "Hands Free: 1 s between steps"
+    },
+    {
+      "version": "0.22.0",
+      "date": "2026-10-07",
+      "from": "0.21.0",
+      "note": "Set recruit key from the addon"
+    },
+    {
+      "version": "0.21.0",
+      "date": "2026-10-07",
+      "from": "0.20.4",
+      "note": "Invite queue, recruit key binding, why tooltips"
+    },
+    {
+      "version": "0.20.4",
+      "date": "2026-10-07",
+      "from": "0.20.3",
+      "note": "Hands Free: dropped /who frees the button"
+    },
+    {
+      "version": "0.20.3",
+      "date": "2026-10-07",
+      "from": "0.20.2",
+      "note": "Hands Free: blocked invite waits for your click"
+    },
+    {
+      "version": "0.20.2",
+      "date": "2026-10-07",
+      "from": "0.20.1",
+      "note": "No red rows with delayed invite off"
+    },
+    {
+      "version": "0.20.1",
+      "date": "2026-10-07",
+      "from": "0.20.0",
+      "note": "Hands Free never turns itself off"
+    },
+    {
+      "version": "0.20.0",
+      "date": "2026-10-07",
+      "from": "0.19.2",
+      "note": "Hands Free: move/jump keys, no own pace"
+    },
+    {
+      "version": "0.19.2",
+      "date": "2026-10-07",
+      "from": "0.19.1",
+      "note": "Hands Free: /who when due, click trace"
+    },
+    {
+      "version": "0.19.1",
+      "date": "2026-10-07",
+      "from": "0.19.0",
+      "note": "Detect rank changes the game forbids"
+    },
+    {
+      "version": "0.19.0",
+      "date": "2026-10-07",
+      "from": "0.18.3",
+      "note": "Hands Free recruiting"
+    },
+    {
+      "version": "0.18.3",
+      "date": "2026-10-07",
+      "from": "0.18.2",
+      "note": "Latin alphabet chip on the Recruit tab"
+    },
+    {
+      "version": "0.18.2",
+      "date": "2026-10-07",
+      "from": "0.18.1",
+      "note": "Main menu descriptions and tab tooltips"
+    },
+    {
+      "version": "0.18.1",
+      "date": "2026-10-07",
+      "from": "0.18.0",
+      "note": "Right-click menu as a shared Style component"
+    },
+    {
+      "version": "0.18.0",
+      "date": "2026-10-07",
+      "from": "0.17.1",
+      "note": "Rank menu on right-click in the Guild window"
+    },
+    {
+      "version": "0.17.1",
+      "date": "2026-10-07",
+      "from": "0.17.0",
+      "note": "Name alphabet filter on the Recruit tab"
+    },
+    {
+      "version": "0.17.0",
+      "date": "2026-10-07",
+      "from": "0.16.0",
+      "note": "Groups window: party and raid records"
+    },
+    {
+      "version": "0.16.0",
+      "date": "2026-10-07",
+      "from": "0.15.0",
+      "note": "Replies: status tags + filters, message search, level look-up on open"
+    },
+    {
+      "version": "0.15.0",
+      "date": "2026-10-07",
+      "from": "0.14.1",
+      "note": "Recruit filter by name alphabet"
+    },
+    {
+      "version": "0.14.1",
+      "date": "2026-10-07",
+      "from": "0.14.0",
+      "note": "Replies: filtered echo matched, ignored/offline replies marked"
+    },
+    {
+      "version": "0.14.0",
+      "date": "2026-10-07",
+      "from": "0.13.0",
+      "note": "Packed saved records (recruits, price history, guild events), archive addon, data_report tool"
+    },
+    {
+      "version": "0.13.0",
+      "date": "2026-10-07",
+      "from": "0.12.0",
+      "note": "Data settings tab: cleanup rules, automatic daily cleanup, memory cap"
+    },
+    {
+      "version": "0.12.0",
+      "date": "2026-10-07",
+      "from": "0.11.2",
+      "note": "Guild recruit list, unread count and profession plan kept between changes; /talod perf"
+    },
     {
       "version": "0.11.2",
       "date": "2026-10-07",
