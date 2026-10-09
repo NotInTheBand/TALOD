@@ -20,6 +20,8 @@ Style.COLORS = {
     stripe = { 1, 1, 1, 0.03 }, line = { 1, 1, 1, 0.08 }, button = { 0.13, 0.13, 0.14, 1 },
     accent = { 1, 0.50, 0.25 }, compare = { 0.35, 0.63, 1 }, bar = { 0.16, 0.47, 0.84 }, grid = { 1, 1, 1, 0.07 },
     text = { 1, 1, 1 }, muted = { 0.62, 0.62, 0.62 },
+    -- Brand header: lifts the shield's navy off the window; the rule is the art's gold.
+    brandBand = { 0.12, 0.125, 0.145, 1 }, brandRule = { 0.83, 0.65, 0.22, 0.45 },
 }
 local COLORS = Style.COLORS
 Style.HEX = { accent = "|cffff8040", compare = "|cff5aa0ff", muted = "|cff8a8a8a", dim = "|cff5c5c5c", gold = "|cffffd100",
@@ -285,6 +287,53 @@ function Style.SizeGrip(f, opts)
     return grip
 end
 
+-- Brand art (an entry of ns.TEX with path / coords / aspect) at its own shape:
+-- (height * aspect) x height with its texcoords. Style.BrandHeight resizes it
+-- later (a window that shrinks); under 1 it hides.
+function Style.BrandTexture(parent, tex, height, layer)
+    local t = parent:CreateTexture(nil, layer or "ARTWORK")
+    t:SetTexture(tex.path)
+    t:SetTexCoord(tex.coords[1], tex.coords[2], tex.coords[3], tex.coords[4])
+    t.brand = tex
+    Style.BrandHeight(t, height)
+    return t
+end
+
+function Style.BrandHeight(t, height)
+    if not height or height < 1 then t:Hide() return end
+    t:SetSize(height * t.brand.aspect, height)
+    t:Show()
+end
+
+-- The header of a home page: the crest on a band a shade lighter than the
+-- window (its navy body is lost on the window's near-black), the name in the
+-- art's gold and the tagline as text. The art's own lettering is too fine to
+-- read at window sizes, so the words are font strings. Anchor it under the
+-- title bar; header.sub takes a line of the page's own.
+Style.BRAND_HEADER_HEIGHT = 80
+function Style.BrandHeader(parent)
+    local h = CreateFrame("Frame", nil, parent)
+    h:SetHeight(Style.BRAND_HEADER_HEIGHT)
+    h.bg = Texture(h, "BACKGROUND", COLORS.brandBand)
+    h.bg:SetAllPoints()
+    h.rule = Texture(h, "ARTWORK", COLORS.brandRule)
+    h.rule:SetHeight(1)
+    h.rule:SetPoint("BOTTOMLEFT")
+    h.rule:SetPoint("BOTTOMRIGHT")
+    h.crest = Style.BrandTexture(h, ns.TEX.crest, 72)
+    h.crest:SetPoint("LEFT", 16, 0)
+    h.name = Text(h, "GameFontNormalHuge")
+    h.name:SetPoint("TOPLEFT", h.crest, "TOPRIGHT", 14, -8)
+    h.name:SetText("|cff" .. ns.ART_COLOR .. ns.NAME .. "|r")
+    h.tagline = Text(h, "GameFontHighlightSmall")
+    h.tagline:SetPoint("TOPLEFT", h.name, "BOTTOMLEFT", 0, -3)
+    h.tagline:SetText(HEX.muted .. ns.TAGLINE .. "|r")
+    h.sub = Text(h, "GameFontHighlight")
+    h.sub:SetPoint("BOTTOMLEFT", h.crest, "BOTTOMRIGHT", 14, 8)
+    h.sub:SetPoint("RIGHT", -16, 0)
+    return h
+end
+
 -- opts.nav: a main window; its size is the one all main windows share
 -- (Navigation.lua), so width / height may be nil.
 function Style.Window(name, title, width, height, opts)
@@ -305,8 +354,12 @@ function Style.Window(name, title, width, height, opts)
     bar:SetPoint("TOPLEFT", 1, -1)
     bar:SetPoint("TOPRIGHT", -1, -1)
     bar:SetHeight(38)
+    f.icon = f:CreateTexture(nil, "ARTWORK")
+    f.icon:SetTexture(ns.TEX.icon64)
+    f.icon:SetSize(18, 18)
+    f.icon:SetPoint("TOPLEFT", 12, -11)
     f.title = Text(f, "GameFontNormalLarge")
-    f.title:SetPoint("TOPLEFT", 14, -12)
+    f.title:SetPoint("TOPLEFT", 36, -12)
     f.title:SetText(ns.TITLE .. "  " .. HEX.white .. (title or "") .. "|r")
     local close = CreateFrame("Button", nil, f)
     close:SetSize(24, 24)
@@ -323,6 +376,193 @@ function Style.Window(name, title, width, height, opts)
     -- the navigation sees it, or it would close the window that is open.
     if opts and opts.hidden then f:Hide() end
     if opts and opts.nav and ns.Nav then ns.Nav.Attach(f, opts.nav, title) end
+    return f
+end
+
+---------------------------------------------------------------------------
+-- Notice: a small window that asks for the player's attention once (an
+-- update, a warning), never chat. A colored edge says how serious it is;
+-- the text wraps and the window grows to fit it.
+--   local n = Style.Notice(name, title, { width, tone = "bad" | "gold" | "accent" | "good", icon })
+--   n:Set({ headline, sub, pages = { { key, label, blocks } }, buttons = { { label, width, onClick, tooltip } } })
+--     blocks: { heading, text, copy = { label, text, what } }; with two or
+--     more pages a tab row picks the page (n:ShowPage(key)).
+--   n:SetTone(tone). Buttons close nothing by themselves; call n:Hide().
+---------------------------------------------------------------------------
+local NOTICE_TONES = {
+    bad = { 1, 0.31, 0.31 }, gold = { 1, 0.82, 0 }, accent = COLORS.accent, good = { 0.25, 1, 0.25 },
+}
+local NOTICE_PAD = 18
+
+local function WrapText(parent, template)
+    local fs = Text(parent, template)
+    if fs.SetWordWrap then fs:SetWordWrap(true) end
+    fs:SetJustifyV("TOP")
+    return fs
+end
+
+function Style.Notice(name, title, opts)
+    opts = opts or {}
+    local width = opts.width or 480
+    local f = Style.Window(name, title, width, 200, { hidden = true })
+    f.textWidth = width - 2 * NOTICE_PAD - (opts.icon and 42 or 0)
+
+    f.edge = Texture(f, "ARTWORK")
+    f.edge:SetPoint("TOPLEFT", 1, -39)
+    f.edge:SetPoint("BOTTOMLEFT", 1, 1)
+    f.edge:SetWidth(3)
+
+    local left = NOTICE_PAD + (opts.icon and 42 or 0)
+    if opts.icon then
+        f.icon = f:CreateTexture(nil, "ARTWORK")
+        f.icon:SetSize(32, 32)
+        f.icon:SetPoint("TOPLEFT", NOTICE_PAD, -54)
+        f.icon:SetTexture(opts.icon)
+    end
+    f.headline = WrapText(f, "GameFontHighlightLarge")
+    f.headline:SetPoint("TOPLEFT", left, -54)
+    f.headline:SetWidth(f.textWidth)
+    f.sub = WrapText(f, "GameFontHighlightSmall")
+    f.sub:SetPoint("TOPLEFT", f.headline, "BOTTOMLEFT", 0, -6)
+    f.sub:SetWidth(f.textWidth)
+    f.sub:SetTextColor(COLORS.muted[1], COLORS.muted[2], COLORS.muted[3])
+
+    f.body = CreateFrame("Frame", nil, f)
+    f.blocks, f.buttons = {}, {}
+
+    function f:SetTone(tone)
+        local c = NOTICE_TONES[tone] or NOTICE_TONES.accent
+        Fill(self.edge, c)
+        self.headline:SetTextColor(c[1], c[2], c[3])
+    end
+
+    -- One heading + text (+ copy button) per block, reused between pages.
+    local function Block(i)
+        local b = f.blocks[i]
+        if b then return b end
+        b = CreateFrame("Frame", nil, f.body)
+        b.heading = Text(b, "GameFontNormal")
+        b.heading:SetPoint("TOPLEFT")
+        b.text = WrapText(b, "GameFontHighlightSmall")
+        b.text:SetWidth(width - 2 * NOTICE_PAD - 8)
+        f.blocks[i] = b
+        return b
+    end
+
+    local function Height(fs) return fs:IsShown() and (fs:GetText() or "") ~= "" and (fs:GetStringHeight() or 14) or 0 end
+
+    -- Heights come from the wrapped text, so the window is as tall as what it says.
+    function f:Layout()
+        local top = 54 + math.max(Height(self.headline) + (Height(self.sub) > 0 and Height(self.sub) + 6 or 0), self.icon and 32 or 0) + 14
+        if self.tabs and self.tabs[1] and self.tabs[1]:IsShown() then
+            self.tabHolder:SetPoint("TOPLEFT", NOTICE_PAD - 8, -top)
+            top = top + 34
+        end
+        self.body:ClearAllPoints()
+        self.body:SetPoint("TOPLEFT", NOTICE_PAD, -top)
+        self.body:SetPoint("TOPRIGHT", -NOTICE_PAD, -top)
+        local y = 0
+        for _, b in ipairs(self.blocks) do
+            if b:IsShown() then
+                b:ClearAllPoints()
+                b:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -y)
+                b:SetPoint("RIGHT", self.body, "RIGHT")
+                local h = 0
+                if (b.heading:GetText() or "") ~= "" then
+                    h = 18
+                    b.text:SetPoint("TOPLEFT", 8, -h)
+                else
+                    b.text:SetPoint("TOPLEFT", 0, 0)
+                end
+                h = h + Height(b.text)
+                if b.copy and b.copy:IsShown() then
+                    b.copy:ClearAllPoints()
+                    b.copy:SetPoint("TOPLEFT", 8, -h - 6)
+                    h = h + 30
+                end
+                b:SetHeight(h)
+                y = y + h + 12
+            end
+        end
+        self.body:SetHeight(math.max(1, y))
+        self:SetHeight(top + y + (#self.buttons > 0 and 44 or 12))
+    end
+
+    function f:ShowPage(key)
+        local page
+        for _, p in ipairs(self.pages or {}) do if p.key == key then page = p end end
+        page = page or (self.pages or {})[1]
+        if not page then return end
+        self.page = page.key
+        if self.tabs then self.tabs:Select(page.key) end
+        for i, block in ipairs(page.blocks or {}) do
+            local b = Block(i)
+            b.heading:SetText(block.heading or "")
+            b.text:SetText(block.text or "")
+            if block.copy then
+                local copy = block.copy
+                b.copy = b.copy or Style.Button(b, "", 120, nil)
+                b.copy:SetLabel(copy.label or "Copy")
+                b.copy:SetWidth(copy.width or 120)
+                b.copy:SetScript("OnClick", function() ns.Utils.Copy(copy.text, copy.what) end)
+                b.copy:Show()
+            elseif b.copy then
+                b.copy:Hide()
+            end
+            b:Show()
+        end
+        for i = #(page.blocks or {}) + 1, #self.blocks do self.blocks[i]:Hide() end
+        self:Layout()
+    end
+
+    function f:Set(spec)
+        self:SetTone(spec.tone or opts.tone)
+        self.headline:SetText(spec.headline or "")
+        self.sub:SetText(spec.sub or "")
+        self.pages = spec.pages or {}
+        -- Tabs and buttons are kept and reused: a notice opened at every login must not grow frames.
+        local tabKey = {}
+        for i, p in ipairs(self.pages) do tabKey[i] = tostring(p.key) .. "=" .. tostring(p.label) end
+        tabKey = #self.pages > 1 and table.concat(tabKey, "|") or nil
+        if tabKey ~= self.tabKey then
+            if self.tabs then for _, t in ipairs(self.tabs) do t:Hide() end end
+            self.tabs, self.tabKey = nil, tabKey
+            if tabKey then
+                self.tabHolder = self.tabHolder or CreateFrame("Frame", nil, self)
+                self.tabHolder:SetSize(width - 2 * NOTICE_PAD, 26)
+                local defs = {}
+                for i, p in ipairs(self.pages) do defs[i] = { key = p.key, label = p.label } end
+                self.tabs = Style.Tabs(self.tabHolder, defs, function(key) self:ShowPage(key) end, opts.tabWidth or 150)
+            end
+        end
+        if self.tabHolder then self.tabHolder:SetShown(self.tabs ~= nil) end
+        self.buttonPool = self.buttonPool or {}
+        for _, b in ipairs(self.buttonPool) do b:Hide() end
+        self.buttons = {}
+        local x = -NOTICE_PAD
+        local defs = spec.buttons or {}
+        for i = #defs, 1, -1 do
+            local def = defs[i]
+            local b = self.buttonPool[i]
+            if not b then
+                local made
+                made = Style.Button(self, "", 140, nil, function() return made.tip end)
+                b, self.buttonPool[i] = made, made
+            end
+            b:SetLabel(def.label or "")
+            b:SetWidth(def.width or 140)
+            b:SetScript("OnClick", def.onClick)
+            b.tip = def.tooltip
+            b:ClearAllPoints()
+            b:SetPoint("BOTTOMRIGHT", x, 12)
+            b:Show()
+            x = x - (def.width or 140) - 8
+            self.buttons[i] = b
+        end
+        self:ShowPage(spec.page or self.page)
+    end
+
+    f:SetTone(opts.tone)
     return f
 end
 

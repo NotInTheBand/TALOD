@@ -126,6 +126,14 @@ function Widget:GetFont() return "Fonts\\FRIZQT__.TTF", 14, "" end
 function Widget:SetFont(file, size, flags) self._fontSize = size end
 function Widget:CreateFontString(name) return NewWidget("FontString", name, self) end
 function Widget:CreateTexture(name) return NewWidget("Texture", name, self) end
+-- Textures keep what they were given (path, texcoords) so tests can read it back.
+function Widget:SetTexture(path) self._texture = path end
+function Widget:GetTexture() return self._texture end
+function Widget:SetTexCoord(...) self._texCoord = { ... } end
+function Widget:GetTexCoord()
+    local c = self._texCoord or { 0, 1, 0, 1 }
+    return c[1], c[2], c[3], c[4]
+end
 function Widget:CreateLine(name) return NewWidget("Line", name, self) end
 -- Edges for snapping tests: set _l/_r/_t/_b on a frame.
 function Widget:GetLeft() return self._l end
@@ -737,6 +745,19 @@ MOCK.inGroup, MOCK.inGuild = false, false
 function IsInGroup() return MOCK.inGroup end
 function IsInRaid() return MOCK.inRaid == true end
 function IsInGuild() return MOCK.inGuild end
+-- Custom channels: joined at once unless MOCK.channelsFull or MOCK.channelsLocked[name]
+-- (a password or a ban); MOCK.channels[name] = id.
+MOCK.channels, MOCK.channelsLocked = {}, {}
+function JoinTemporaryChannel(name)
+    if MOCK.channelsFull or MOCK.channelsLocked[name] then return end
+    local n = 4
+    for _ in pairs(MOCK.channels) do n = n + 1 end
+    MOCK.channels[name] = MOCK.channels[name] or n + 1
+end
+function GetChannelName(name) local id = MOCK.channels[name]; if id then return id, name end; return 0, nil end
+function LeaveChannelByName(name) MOCK.channels[name] = nil end
+-- TOC fields a scenario sets (MOCK.metadata = { Version = "1.2.3" }); none by default.
+function GetAddOnMetadata(_, field) return MOCK.metadata and MOCK.metadata[field] or nil end
 function GetNumGroupMembers() return MOCK.groupSize or (MOCK.inGroup and 2 or 0) end
 -- Group rosters: MOCK.SetGroup({ units }, raid) puts Friend units at party1.. (or raid1..,
 -- the player last), MOCK.SetGroup(nil) leaves. Unit fields also read here: connected,

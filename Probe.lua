@@ -259,6 +259,10 @@ local function Collect(out)
     out("")
     out("[5] CHAT_MSG_ADDON valid=%s", valid("CHAT_MSG_ADDON"))
     SendAddonProbes(out)
+    -- The version channel (Version.lua): "heard N asks" > 0 proves channel addon messages arrive.
+    if ns.Version then
+        for _, line in ipairs(ns.Version.StatusLines()) do out("%s", line) end
+    end
 
     -- Item 6: battleground APIs.
     out("")

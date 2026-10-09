@@ -14,6 +14,7 @@ professions, your gold, the Auction House, fishing and your guild.
 | 💰 **Gold & Auction House** | Where every copper went, auction prices and trends, undercuts, deals, crafting profit |
 | 🎣 **Fishing** | Catch rates and gold per hour by spot, rare-fish goals, a HUD, one-click lure and weapon swap |
 | 🛡️ **Guild** | Find unguilded players, invite with your message, roster, promotion rules, join/leave log |
+| 👥 **Groups & Audit** | A record of every party and raid, and the game's statistics for you and your guild |
 
 Use the parts you want; the rest stays out of your way. You decide what
 happens: the addon never targets, casts, moves, buys or posts on its own. Every action is one
@@ -101,6 +102,8 @@ click by you.
   - every auction price you've seen, with its usual price and trend
   - what to sell where (auction house or vendor)
   - which crafts make a profit
+  - **Bids:** auctions whose next bid is under the item's price, ending soonest first (bidding stays the
+    game's Bid button)
   - deals listed well under the usual price
   - your own sell-through rate, and your AH price on every item tooltip
 - **Auction desk** (`/talod ah`): the trading view.
@@ -119,6 +122,11 @@ click by you.
 
   The desk works from your own looks: a full scan or an exact search keeps every auction of an
   item. It never buys or posts anything.
+- **Craft tracker**: double-click a recipe on the Market's Crafting tab and a small window follows it:
+  the cheapest route (buy each part, or make it when you can and that is cheaper), what is in your bags
+  and in the mailbox from the Auction House, what is left to buy, and the crafts in order. **Craft next**
+  starts the next step whose materials you have (one click, one step, with the profession window open).
+  The scan panel's search list starts with what the tracked craft still needs.
 - **Scan panel** (opens beside the Auction House, or `/talod ah scan`): a full scan (every 15
   minutes, as the server allows) and a "search next" list. Each click runs exactly one search,
   so nothing is automated.
@@ -152,8 +160,17 @@ click by you.
   level range; only when the game's answer is full (about 50 players) do the next clicks search smaller
   level ranges to reach the rest. Levels go up to the top level the game reports (read live, so they follow when Forever raises its cap).
   One click whispers your message and sends the guild invite. Right-click: never offer them again.
-  Filter by name, level range and class. A **mini recruit window** with the same list can stay on
+  Filter by name, level range, class and name alphabet (hide names written in alphabets you can't
+  read). A **mini recruit window** with the same list can stay on
   your screen while you play (off by default: turn it on from the Recruit tab or `/talod guild mini`).
+- **Delayed invite** (on by default): the first click sends your message, the second click, once the
+  row turns red 10 seconds later, sends the invite, so they have read it first. Invites still owed wait
+  in one queue, oldest first; the **Next invite** button sends the next one.
+- **Recruit key:** right-click Next invite (or `/talod guild key`) and press any key or mouse button.
+  One press = one step: the next queued invite, else a /who, else the next whisper.
+- **Hands Free** (off by default): a click on the open world, or a press of your move and jump keys,
+  counts as one click on the list, at most one step a second and never in combat. The keys still move
+  you. `/talod guild handsfree why` shows what it did with your last clicks.
 - Write your own whisper messages, or use the default. `{name}`, `{guild}`, `{class}`, `{level}`,
   `{zone}` and `{me}` are filled in.
 - **Invited:** who you invited and what happened: joined, declined, offline, already in a guild,
@@ -161,10 +178,16 @@ click by you.
 - **Replies:** whispers with the players you invited, in one place, with a reply box. A small notice
   shows when one answers. Your opening whispers, the "You have invited..." lines and answers you
   haven't written back to stay out of your chat window, so mass recruiting doesn't flood it. Once you
-  write back, that conversation shows in chat as usual (a setting turns the hiding off).
+  write back, that conversation shows in chat as usual (a setting turns the hiding off). Each
+  conversation is tagged Joined, Declined, Invited or Blocked, a search box finds words said in them, and
+  buttons send a party invite, a Battle.net friend request or open the game's report window for that player.
 - **Recruiters:** who invited whom, from the game's guild log: how many joined, are still here, left
   within a week, or joined more than once. Hover a name for the list.
 - **Roster:** members by rank with last online, and who has been offline long enough to count as inactive.
+  Right-click a member to move them to another rank (one pick, one change; a rank that gives new rights
+  says so in red).
+- **Activity** (officers and guild master only): who talks in guild chat, who is online with you without
+  a word.
 - **Promotions:** set rules per rank (level, days in the guild, online recently, recruits kept) and see who qualifies.
   One click promotes one member.
 - **Log:** joins, leaves, removals, promotions and demotions, with who did it when the game says so.
@@ -215,6 +238,17 @@ click by you.
 
 ---
 
+## 📰 Updates, changelog and credits
+
+- **Update notice:** TALOD tells you when a newer version is out, heard from other TALOD players on your
+  realm. Notes are signed, so nobody can fake one. A window with step-by-step update instructions opens
+  at login (never in combat); `/talod version` opens it any time, and the setting is under General.
+- **Changelog** (`/talod changelog`, or Main menu): what changed in every version, with "Copy text" for
+  plain notes.
+- **Credits** (`/talod credits`): who made it, the Discord invite and how to send gold.
+
+---
+
 ## 🚀 Getting started
 
 1. Install with the CurseForge app, or copy the `TALOD` and `TALOD_Archive` folders into
@@ -224,13 +258,15 @@ click by you.
 3. Type **`/talod`** for settings, or click the minimap button:
    - **Left-click**: main menu (every TALOD window)
    - **Shift-click**: economy
+   - **Alt-click**: market
    - **Ctrl-click**: Enemies nearby panel
    - **Right-click**: settings
    - **Shift + right-click**: guild
 4. Enemies are spotted by their nameplates. For the earliest warning, type
    **`/talod distance max`** to raise the nameplate range to the maximum (41 yards).
 
-Everything is on by default, except the stealth heuristic, auto loot and session summaries.
+Everything is on by default, except the stealth heuristic, auto loot, session summaries, Hands Free and
+the mini recruit window.
 Every option is in the settings window; slash commands are a shortcut.
 
 ## ⌨️ Commands
@@ -248,7 +284,7 @@ Every option is in the settings window; slash commands are a shortcut.
 | `/talod kos <name>` · `/talod avoid <name>` | Add a player to a list (`target` works as a name) |
 | `/talod unlist <name>` · `/talod note <name> <text>` | Remove from lists · write a note |
 | `/talod who <name>` | Everything the journal knows about a player |
-| `/talod journal` | Journal and lists |
+| `/talod journal` · `/talod lists` | Journal · your kill-on-sight and avoid lists |
 | `/talod distance [max]` | Show the nameplate distance, or set it to the maximum |
 | `/talod census [on\|off\|clear]` | Player census (`allies on\|off`, `friendly`) |
 | `/talod char` · `/talod gear snap [name]` | Character window · take a named gear snapshot |
@@ -264,15 +300,22 @@ Every option is in the settings window; slash commands are a shortcut.
 | `/talod guild [recruit\|invited\|replies\|roster\|recruiters\|promote\|log\|members\|sharing]` | Guild window |
 | `/talod guild mini` | Show / hide the mini recruit window |
 | `/talod guild who` · `/talod guild invite [name]` | One /who search for players without a guild · whisper + invite one player (or your target) |
+| `/talod guild next` · `/talod guild key` | One recruit step (for macros) · set your recruit key |
+| `/talod guild handsfree [why]` | Hands Free on / off · what it did with your last clicks |
+| `/talod guild check` · `/talod pace [reset]` | Your invites of the last hour · the whisper limit learned from the game |
 | `/talod audit [me\|target\|members\|flags\|characters\|history\|status]` | Audit window · read yourself or your target |
 | `/talod groups [now\|parties\|raids]` | Groups window: your current group, past parties and raids (`party` and `raid` work too) |
 | `/talod menu` | Main menu: every TALOD window |
+| `/talod version [status]` | Your version, whether a newer one is out, how to update |
+| `/talod changelog [version]` | What changed in each version |
+| `/talod credits` | Credits, Discord invite, how to send gold |
 | `/talod minimap` | Show or hide the minimap button |
 | `/talod archive [load\|move]` | Archive: state, load it, move what the cleanup rules would remove |
 | `/talod clean [now\|auto on\|off]` · `/talod memory` | What the cleanup rules would remove, run them, daily cleanup on / off · memory used and the largest stores |
+| `/talod data` | Your saved data by character |
 | `/talod clear` | Empty the nearby list |
 | `/talod reset` | Reset settings and positions (all your logged data is kept) |
-| `/talod errors` · `/talod probe` | Error list · client capability report, for bug reports |
+| `/talod errors` · `/talod probe` · `/talod perf` | Error list · client capability report · slowest work this session, for bug reports |
 
 ## ❓ What it can't do, and why
 
@@ -316,7 +359,8 @@ or the viewer pages made from them.
 
 Type `/talod errors` and copy the list into your report. If something was read wrong (a distance,
 a flag, a level), also run `/talod probe` near an enemy player and include that. Reports go to
-[GitHub issues](https://github.com/NotInTheBand/TALOD/issues).
+[GitHub issues](https://github.com/NotInTheBand/TALOD/issues) or the
+[Discord](https://discord.gg/2FYCFyRczN).
 
 ## 🛠️ For developers
 

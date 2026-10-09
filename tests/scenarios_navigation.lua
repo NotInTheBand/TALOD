@@ -4,7 +4,7 @@ local scenarios, T = ...
 local check, boot, slash = T.check, T.boot, T.slash
 
 local MAIN = { "TALODMainMenu", "TALODCharacterWindow", "TALODEconomyWindow", "TALODMarketWindow",
-    "TALODAuctionDesk", "TALODFishingWindow", "TALODGuildWindow", "TALODOptionsWindow", "TALODCreditsWindow" }
+    "TALODAuctionDesk", "TALODFishingWindow", "TALODGuildWindow", "TALODOptionsWindow", "TALODCreditsWindow", "TALODChangelogWindow" }
 
 local function openMain()
     local open = {}

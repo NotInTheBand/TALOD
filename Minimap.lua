@@ -15,7 +15,7 @@ local HEX = Style.HEX
 local Mini = {}
 ns.MinimapButton = Mini
 
-local ICON = "Interface\\Icons\\Ability_DualWield"
+local ICON = ns.TEX.icon64
 local EDGE = 5             -- how far outside the minimap's edge the button's center sits
 
 local button, shownState
@@ -101,7 +101,6 @@ local function Build()
     icon:SetTexture(ICON)
     icon:SetSize(17, 17)
     icon:SetPoint("TOPLEFT", 7, -6)
-    icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
     button.icon = icon
     local border = button:CreateTexture(nil, "OVERLAY")
     border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")

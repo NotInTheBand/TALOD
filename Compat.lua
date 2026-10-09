@@ -18,7 +18,7 @@ ns.IS_ERA = ns.interfaceVersion > 0 and ns.interfaceVersion < 16000
 ns.FLAVOR = ns.IS_FOREVER and "forever" or (ns.IS_ERA and "era" or "other")
 ns.FLAVOR_NAME = ns.IS_FOREVER and "WoW Forever" or (ns.IS_ERA and "Classic Era" or "unsupported client")
 
-ns.CHAT_PREFIX = ns.TITLE
+ns.CHAT_PREFIX = ns.ICON_TAG .. " " .. ns.TITLE
 
 ---------------------------------------------------------------------------
 -- Secret values

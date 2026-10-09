@@ -12,8 +12,10 @@ manual-changelog:
 
 # Shipped: the TOC and its Lua files, README.md, CHANGELOG.md, LICENSE (when
 # present), the two viewers and data_report.py in tools/ (the in-game Census
-# and Fishing pages tell players to run them), and the archive addon as a
-# second folder (move-folders below). Everything below stays out.
+# and Fishing pages tell players to run them), the textures in media/textures
+# (TALOD-icon-64/128/256.png, TALOD-crest-512.png, TALOD-crest-phrase-512.png,
+# TALOD-banner-1024.png), and the archive addon as a second folder
+# (move-folders above). Everything below stays out.
 ignore:
   # Developer files
   - tests
@@ -25,10 +27,21 @@ ignore:
   - tools/build_release.py
   - build.sh
   - tools/version.py
+  - tools/release_sign.py
+  - SIGN_RELEASE.cmd
   - version.json
+  - changelogs
   - tools/gen_enhancements.py
   - tools/gen_professions.py
   - tools/gen_fishing.py
+  # Source art; the game uses the copies in media/textures
+  - media/branding
+  # The release signing key never ships (it lives outside the repository anyway)
+  - "*SIGNING_KEY*"
+  - "*signing_key*"
+  - "*release_key*"
+  - "*.pem"
+  - "*.key"
   # Viewer output (other players' names)
   - census
   - fishing
