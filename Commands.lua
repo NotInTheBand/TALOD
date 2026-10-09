@@ -56,6 +56,9 @@ Cmd.LIST = {
     { id = "clear", words = { "clear" }, help = { { "", "empty the nearby list" } } },
     { id = "reset", words = { "reset" }, help = { { "", "reset settings and positions (all your logged data is kept)" } } },
     { id = "minimap", words = { "minimap" }, help = { { "", "show / hide the minimap button" } } },
+    { id = "version", words = { "version", "update" }, help = {
+        { "", "your version, whether a newer one is out, and how to update" },
+        { "status", "what the version check sees (channel, messages, notes)" } } },
     { id = "pace", words = { "pace" }, help = { { "[reset]", "whisper limit learned from the game's throttle (reset forgets it)" } } },
 
     -- Census.lua
@@ -123,6 +126,8 @@ Cmd.LIST = {
     { id = "groups", words = { "groups", "party", "raid" }, help = {
         { "[now|parties|raids]", "your parties and raids: who, where, how long, chat, loot" } } },
 
+    { id = "changelog", words = { "changelog", "changes", "news" }, help = {
+        { "[version]", "what changed in each version (copyable notes)" } } },
     { id = "credits", words = { "credits", "discord", "donate" }, help = { { "", "credits, the Discord invite, how to send gold" } } },
 }
 

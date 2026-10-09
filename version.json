@@ -1,7 +1,61 @@
 {
-  "version": "0.23.2",
-  "date": "2026-10-08",
+  "version": "0.26.3",
+  "date": "2026-10-09",
   "history": [
+    {
+      "version": "0.26.3",
+      "date": "2026-10-09",
+      "from": "0.26.2",
+      "note": "credits: centered column, fitted cards"
+    },
+    {
+      "version": "0.26.2",
+      "date": "2026-10-09",
+      "from": "0.26.1",
+      "note": "brand header: main crest in place of the graph shield"
+    },
+    {
+      "version": "0.26.1",
+      "date": "2026-10-09",
+      "from": "0.26.0",
+      "note": "brand header: icon + text in place of banner / crest art"
+    },
+    {
+      "version": "0.26.0",
+      "date": "2026-10-09",
+      "from": "0.25.0",
+      "note": "brand art: icon, crest, banner (minimap, TOC, title bars, menu, credits, options, chat)"
+    },
+    {
+      "version": "0.25.0",
+      "date": "2026-10-09",
+      "from": "0.24.0",
+      "note": "Changelog page + per-version summaries in changelogs/"
+    },
+    {
+      "version": "0.24.0",
+      "date": "2026-10-09",
+      "from": "0.23.5",
+      "note": "version check over addon messages + update notice window (Style.Notice)"
+    },
+    {
+      "version": "0.23.5",
+      "date": "2026-10-08",
+      "from": "0.23.4",
+      "note": "optimization pass: desk/market memory, warm-up garbage, cleanup count, invited list age"
+    },
+    {
+      "version": "0.23.4",
+      "date": "2026-10-08",
+      "from": "0.23.3",
+      "note": "guild full: no whisper or invite while the roster is at the full size"
+    },
+    {
+      "version": "0.23.3",
+      "date": "2026-10-08",
+      "from": "0.23.2",
+      "note": "guild full: invitee stays on the recruit list"
+    },
     {
       "version": "0.23.2",
       "date": "2026-10-08",

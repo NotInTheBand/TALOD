@@ -385,6 +385,20 @@ def version_check():
     return version.problems()
 
 
+# The release signing key never sits where git or a package could take it:
+# the working folder (what git could commit) or every file of a built package.
+def key_check():
+    sys.path.insert(0, str(TESTS.parent / "tools"))
+    import release_sign
+    if ROOT == TESTS.parent:
+        return release_sign.guard_tree()
+    found, problems = release_sign.needles(), []
+    for path in ROOT.rglob("*"):
+        if path.is_file():
+            problems += release_sign.scan(path.relative_to(ROOT).as_posix(), path.read_bytes(), found)
+    return problems
+
+
 # Bindings.xml (read by the game from the folder) must match Brand.lua: the
 # binding name, its header and the frame it clicks; the release must pack it.
 def bindings_check():
@@ -402,7 +416,8 @@ def bindings_check():
     for needle, what in want.items():
         if needle not in text:
             problems.append(f"Bindings.xml: {what} should read {needle}")
-    if '"Bindings.xml"' not in (ROOT / "tools" / "build_release.py").read_text(encoding="utf-8"):
+    builder = ROOT / "tools" / "build_release.py"   # absent in a built package (--root dist/...)
+    if builder.exists() and '"Bindings.xml"' not in builder.read_text(encoding="utf-8"):
         problems.append("tools/build_release.py does not pack Bindings.xml")
     return problems
 
@@ -430,6 +445,9 @@ def main():
         failures += 1
     for problem in bindings_check():
         print("BINDINGS FAIL", problem)
+        failures += 1
+    for problem in key_check():
+        print("KEY  FAIL", problem)
         failures += 1
     for problem in version_check():
         print("VERSION FAIL", problem)

@@ -261,6 +261,10 @@ function Pages.Panel(parent)
     y = Checkbox(parent, y, "colorblind", "Colorblind-friendly colors", "Blue / orange / magenta instead of green / yellow / red.")
     y = Checkbox(parent, y, "minimapButton", "Minimap button", "Left-click: character window. Shift: economy. Ctrl: Enemies nearby "
         .. "panel. Right-click: these settings. Drag to move it. Also " .. ns.Cmd.Text("minimap") .. ".")
+    y = Checkbox(parent, y, "versionCheck", "Tell me when a newer " .. ns.NAME .. " exists", "Joins a hidden channel where "
+        .. ns.NAME .. " copies pass on signed release notes (addon messages, never chat; players of your faction can see you in "
+        .. "the channel's member list). A newer version opens a window with how to update, then at every login until you do, "
+        .. "never in combat. Also " .. ns.Cmd.Text("version") .. ".")
     y = y - 6
     y = Header(parent, y, "Enemies nearby panel")
     y = Checkbox(parent, y, "panelShown", "Show the panel")
@@ -719,8 +723,10 @@ local function BuildLauncher()
     launcher = CreateFrame("Frame", ns.FRAME .. "OptionsPanel")
     launcher.name = ns.NAME
     launcher:Hide()
+    launcher.crest = Style.BrandTexture(launcher, ns.TEX.crest, 72)
+    launcher.crest:SetPoint("TOPLEFT", 16, -16)
     local title = launcher:CreateFontString(nil, "ARTWORK", "GameFontNormalHuge")
-    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetPoint("TOPLEFT", launcher.crest, "TOPRIGHT", 14, -8)
     title:SetText(ns.TITLE)
     local text = launcher:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
     text:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)

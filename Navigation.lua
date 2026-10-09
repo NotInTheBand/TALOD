@@ -148,6 +148,8 @@ local PAGES = {
             { "And more", "one tab per page: Character, Fishing, Guild..." },
         },
         open = function() ns.Options.Open() end },
+    { key = "changelog", label = "Changelog", module = "Changelog", icon = "Interface\\Icons\\INV_Misc_Book_09",
+        desc = "What changed in each version, newest first, with the notes ready to copy." },
     { key = "credits", label = "Credits", module = "Credits", icon = "Interface\\Icons\\INV_Misc_Note_01",
         desc = "Who made " .. ns.NAME .. ", the Discord for questions, bug reports and ideas, and how to send gold." },
 }
@@ -383,9 +385,15 @@ local function BuildMenu()
     sub:SetPoint("TOPRIGHT", -40, -16)
     sub:SetText("v" .. tostring(ns.VERSION or "?") .. "  ·  " .. tostring(ns.FLAVOR_NAME or ""))
 
+    local INTRO = "Pick a page. The list on the left switches pages from any " .. ns.NAME .. " window."
+    menu.header = Style.BrandHeader(menu)
+    menu.header:SetPoint("TOPLEFT", 1, -39)
+    menu.header:SetPoint("TOPRIGHT", -1, -39)
+    menu.header.sub:SetText(INTRO)
+    -- Without the header (short window) the intro stands alone.
     local intro = Style.Text(menu, "GameFontHighlight")
     intro:SetPoint("TOPLEFT", PAD, -52)
-    intro:SetText("Pick a page. The list on the left switches pages from any " .. ns.NAME .. " window.")
+    intro:SetText(INTRO)
 
     menu.tiles, menu.order = {}, {}
     for _, page in ipairs(Nav.Pages()) do
@@ -395,14 +403,22 @@ local function BuildMenu()
             menu.order[#menu.order + 1] = t
         end
     end
-    -- Two columns across whatever width the window has.
+    -- Two columns across whatever width the window has. In a short window the
+    -- header goes so the tiles stay clear of the controls below.
     local function LayoutTiles()
         local tileWidth = math.floor(((menu:GetWidth() or 660) - 2 * PAD - TILE_GAP) / 2)
+        local rows = math.ceil(#menu.order / 2)
+        local tilesHeight = rows * (TILE_HEIGHT + TILE_GAP) - TILE_GAP
+        local headerTop = 39 + Style.BRAND_HEADER_HEIGHT + 12
+        local full = (menu:GetHeight() or 620) >= headerTop + tilesHeight + 64
+        menu.header:SetShown(full)
+        intro:SetShown(not full)
+        local top = full and -headerTop or -76
         for n, t in ipairs(menu.order) do
             local col, row = (n - 1) % 2, math.floor((n - 1) / 2)
             t:SetWidth(tileWidth)
             t:ClearAllPoints()
-            t:SetPoint("TOPLEFT", PAD + col * (tileWidth + TILE_GAP), -76 - row * (TILE_HEIGHT + TILE_GAP))
+            t:SetPoint("TOPLEFT", PAD + col * (tileWidth + TILE_GAP), top - row * (TILE_HEIGHT + TILE_GAP))
         end
     end
     LayoutTiles()

@@ -3,7 +3,8 @@
 The zip holds two folders. TALOD/ has only what the game loads (the files
 listed in the TOC) plus README.md, CHANGELOG.md, LICENSE (when present), the
 two SavedVariables viewers (tools/census_viewer.py, tools/fishing_viewer.py:
-the in-game pages tell players to run them) and tools/data_report.py.
+the in-game pages tell players to run them), tools/data_report.py and the
+textures in media/textures/ (the source art in media/branding/ stays out).
 TALOD_Archive/ is the load-on-demand archive addon, kept in the repository
 as a subfolder (the game loads addons only from the top of AddOns), with
 its TOC's @project-version@ set to the version. Tests,
@@ -13,6 +14,13 @@ files kept out of the repository).
 
     python tools/build_release.py          # build
     python tools/build_release.py --check  # build, then run the test suite against the built package
+
+The build never signs: the zip's Release.lua carries no release note, so it
+can be built and tested as often as needed. Signing is a separate step the
+developer runs by hand (SIGN_RELEASE.cmd -> release_sign.py sign-package),
+which writes dist/TALOD-<version>-signed.zip, the one to upload.
+The private key itself is refused everywhere: in the repository before the
+build, and in every file of the finished zip (release_sign.py guard).
 """
 import fnmatch
 import pathlib
@@ -29,6 +37,9 @@ EXTRA_FILES = ["README.md", "CHANGELOG.md", "Bindings.xml", "tools/census_viewer
 # The archive addon: a second folder in the package (Brand.lua ARCHIVE_ADDON).
 ARCHIVE = PACKAGE + "_Archive"
 OPTIONAL_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt"]
+# The textures the addon draws (Brand.lua ns.TEX). Copied as binary files; only their names are scanned.
+MEDIA_DIR = "media/textures"
+MEDIA_SUFFIXES = {".png"}
 # Developer-only paths: never in a release.
 FORBIDDEN = re.compile(r"(^|/)(\.[^/]+|tests|docs|dist|census|fishing|concept\.md|cache|__pycache__)(/|$)")
 
@@ -81,6 +92,12 @@ def main():
     files = [line.strip().replace("\\", "/") for line in toc.splitlines()
              if line.strip() and not line.startswith("#")]
 
+    # The private signing key: never in the repository, the stage or the zip (checked again at the end).
+    import release_sign
+    key_problems = release_sign.guard_tree()
+    if key_problems:
+        sys.exit("REFUSED: the private signing key is in the repository:\n  " + "\n  ".join(key_problems[:40]))
+
     missing = [f for f in files if not (ROOT / f).exists()]
     if missing:
         sys.exit("TOC lists missing files: " + ", ".join(missing))
@@ -92,6 +109,8 @@ def main():
     stage.mkdir(parents=True)
 
     extras = EXTRA_FILES + [f for f in OPTIONAL_FILES if (ROOT / f).exists()]
+    extras += sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / MEDIA_DIR).glob("*")
+                     if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
     blocked = [f for f in files + extras if FORBIDDEN.search(f) or local_only(f)]
     if blocked:
         sys.exit("refusing to package developer files: " + ", ".join(blocked))
@@ -101,6 +120,7 @@ def main():
     for f in files + extras + [PACKAGE + ".toc"]:
         src = ROOT / (toc_path.name if f == PACKAGE + ".toc" else f)
         if src.suffix.lower() in SKIP_SUFFIXES:
+            leaks += leaks_in(f, "")   # binary: the name only
             continue
         leaks += leaks_in(f, src.read_text(encoding="utf-8", errors="replace"))
     if leaks:
@@ -146,11 +166,19 @@ def main():
 
     # Last look at the finished archive itself.
     with zipfile.ZipFile(archive) as z:
-        bad = []
+        bad, key_bad, found = [], [], release_sign.needles()
         for info in z.infolist():
-            if info.is_dir() or pathlib.PurePosixPath(info.filename).suffix.lower() in SKIP_SUFFIXES:
+            if info.is_dir():
                 continue
-            bad += leaks_in(info.filename, z.read(info).decode("utf-8", errors="replace"))
+            data = z.read(info)
+            key_bad += release_sign.scan(info.filename, data, found)   # every file, images too
+            if pathlib.PurePosixPath(info.filename).suffix.lower() in SKIP_SUFFIXES:
+                bad += leaks_in(info.filename, "")   # binary: the name only
+                continue
+            bad += leaks_in(info.filename, data.decode("utf-8", errors="replace"))
+    if key_bad:
+        archive.unlink()
+        sys.exit("archive removed, REFUSED: it carries the private signing key:\n  " + "\n  ".join(key_bad[:40]))
     if bad:
         archive.unlink()
         sys.exit("archive removed, it mentions assistants or developer notes:\n  " + "\n  ".join(bad[:40]))

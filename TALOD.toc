@@ -2,10 +2,10 @@
 ## Title: |cffff7f3fTALOD|r
 ## Notes: World PvP awareness: enemy-spotted alerts, an enemies-nearby panel with distances, nameplate badges, PvP-flag safety for Hardcore, a journal of who you met, a player census for heat maps, a gear ledger, a fishing log, guild recruiting / roster tools and a members' gold and activity audit. WoW Forever and Classic Era.
 ## Author: NotInTheBand
-## Version: 0.23.2
+## Version: 0.26.3
 ## Category: PvP
 ## SavedVariables: TALODDB
-## IconTexture: Interface\Icons\Ability_DualWield
+## IconTexture: Interface\AddOns\TALOD\media\textures\TALOD-icon-128.png
 ## AddonCompartmentFunc: TALOD_OnAddonCompartmentClick
 
 Brand.lua
@@ -65,5 +65,10 @@ Groups.lua
 GroupsUI.lua
 Minimap.lua
 Credits.lua
+ChangelogData.lua
+Changelog.lua
+Release.lua
+Signature.lua
+Version.lua
 Probe.lua
 Main.lua

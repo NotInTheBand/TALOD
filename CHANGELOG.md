@@ -2,6 +2,95 @@
 
 ## Unreleased
 
+## 0.26.3 — 2026-10-09
+
+### Changed
+
+- **Credits page tidied:** one centered column under the crest, so on a wide window each copy button sits next to
+  what it copies; the cards fit their text.
+
+## 0.26.2 — 2026-10-09
+
+### Changed
+
+- The Main menu, the Credits page and the game's Options > AddOns > TALOD page show the full TALOD crest in their
+  header in place of the small shield icon.
+
+## 0.26.1 — 2026-10-09
+
+### Changed
+
+- **Cleaner TALOD header** on the Main menu and the Credits page: the shield icon on a lighter band with the name
+  and "That's A Lot Of Data" in sharp text, in place of the banner and crest pictures whose small lettering could
+  not be read. The game's Options > AddOns > TALOD page shows the icon beside its title.
+
+## 0.26.0 — 2026-10-09
+
+### Changed
+
+- **TALOD crest and icon:** minimap button, addon list, window title bars, home banner, Credits and Options.
+  The minimap button and the addon list (and the addon compartment menu) show the TALOD shield icon, every TALOD
+  window has it in its title bar, the Main menu opens under the TALOD banner, the Credits page under the crest, and
+  the game's Options > AddOns > TALOD page shows the crest beside its title. TALOD's chat messages start with the
+  icon. Needs a game restart (new files).
+
+## 0.25.0 — 2026-10-09
+
+### Added
+
+- **Changelog page.** `/talod changelog` (also `changes` or `news`, or Main menu → Changelog) lists every version,
+  newest first, with what changed in it. "Copy text" shows a version's notes as plain text, ready to copy into a post
+  or a message. `/talod changelog 0.24.0` opens one version. Needs a game restart (new files).
+
+### Changed
+
+- **The update notice now hears about new versions from every TALOD player on your realm**, not only your guild
+  and group. TALOD joins a hidden channel for this (it never shows in your chat windows) and copies pass on a
+  signed note when a new version is out, so nobody can fake an update notice. The window now opens as soon as a
+  newer version is known and at every login after that until you update (never in combat). `/talod version status`
+  shows what the check sees. Turning the setting off leaves the channel. Needs a game restart (new files).
+
+## 0.24.0 — 2026-10-09
+
+### Added
+
+- **Update notice.** TALOD now tells you when a newer version exists. Your copy and the copies of your guild and
+  group swap version numbers quietly (addon messages, never chat). When someone runs a newer one, a window opens at
+  your next login (out of combat) with step-by-step update instructions for the CurseForge app and for a manual
+  download. "Not for this version" keeps it closed until a still newer one appears. `/talod version` opens it any
+  time; the setting is under General. Needs a game restart (new file).
+
+## 0.23.5 — 2026-10-08
+
+### Changed
+
+- **Less memory and less work with a lot of saved data.** Measured on a 16 MB save with a large guild and
+  3,600 auction items:
+  - About 40 MB less memory after the first minute in game. The Auction desk and Market no longer keep every
+    item's whole price history and price ladder unpacked in memory; they keep the numbers their lists show and
+    read the full detail of the one item you select.
+  - About a third less background work in the first minute after login.
+  - Settings, Data, Cleanup opens about five times faster.
+  - Market's Deals tab opens at once (it is prepared after login, like the Prices tab).
+  - The Guild window's Invited tab no longer rebuilds its whole list every 15 seconds while it is open.
+
+## 0.23.4 — 2026-10-08
+
+### Fixed
+
+- **Guild full:** TALOD now remembers how many members your guild had when the game said it was full. While
+  the roster is that size, clicking a name on the recruit list sends no whisper and no invite (after a
+  reload too), and the player stays on the list. It works again as soon as a member leaves.
+
+## 0.23.3 — 2026-10-08
+
+### Fixed
+
+- **Guild full:** when the game refuses an invite because your guild is full, the player no longer moves to the
+  Invited list. They stay on the recruit list with their invite waiting (the row's tooltip says why), and
+  TALOD sends no more messages or invites until a member leaves (or 10 minutes pass), so nobody gets an
+  "I just sent you an invite" whisper that cannot come true.
+
 ## 0.23.2 — 2026-10-08
 
 ### Changed

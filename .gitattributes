@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# The release signing key: never in an archive or a diff, should a copy ever land here.
+*SIGNING_KEY* export-ignore -diff
+*signing_key* export-ignore -diff
+*release_key* export-ignore -diff
+*.pem export-ignore -diff
+*.key export-ignore -diff

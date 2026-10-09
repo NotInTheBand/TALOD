@@ -892,6 +892,7 @@ end
 -- silently and keep nothing that no code reads.
 Store.RETIRED = {
     guildWhoBracket = "the /who level bracket setting was removed",
+    versionAnnounced = "the version check no longer announces a release unprompted",
     -- The whisper limit used to be Guild's own.
     guildWhisperBurst = function(v, d) if d.outboxBurst == nil then d.outboxBurst = v end end,
 }

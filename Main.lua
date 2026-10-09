@@ -64,7 +64,7 @@ end
 -- auto loot values to put back, ...) is runtime data and is kept as well, so
 -- a new data store can never be wiped by a settings reset.
 Main.DATA_KEYS = { "players", "journal", "census", "gear", "skills", "economy", "fishing", "guild", "prices", "ahFullScan", "ladders", "ahOwned", "ahBids",
-    "profPlanTargets", "profPlanFrom", "profPlanExcluded" }
+    "profPlanTargets", "profPlanFrom", "profPlanExcluded", "versionNews", "versionAskedAt" }
 -- Positions saved without a default: a reset moves those frames back too.
 Main.POSITION_KEYS = { fishHudPos = true, fishHudDock = true, guildNoticePos = true, guildMiniPos = true, navPos = true, navSize = true }
 

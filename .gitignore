@@ -7,6 +7,15 @@ census/
 # Fishing viewer output: names of players who attacked you, kept local.
 fishing/
 
+# The release signing key: lives outside the repository (tools/release_sign.py); never here.
+*SIGNING_KEY*
+*signing_key*
+*release_key*
+*.pem
+*.key
+*.p12
+*.pfx
+
 # Generator download cache (tools/gen_enhancements.py)
 tools/cache/
 
