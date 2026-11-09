@@ -1,7 +1,67 @@
 {
-  "version": "0.26.3",
-  "date": "2026-10-09",
+  "version": "0.29.2",
+  "date": "2026-11-08",
   "history": [
+    {
+      "version": "0.29.2",
+      "date": "2026-11-08",
+      "from": "0.29.1",
+      "note": "Planner, crafting profit and AH scan fixes"
+    },
+    {
+      "version": "0.29.1",
+      "date": "2026-11-08",
+      "from": "0.29.0",
+      "note": "Profession data corrected from the WoW Forever client tables"
+    },
+    {
+      "version": "0.29.0",
+      "date": "2026-11-04",
+      "from": "0.28.4",
+      "note": "Whisper-first recruiting on Forever: the game takes only typed guild invites"
+    },
+    {
+      "version": "0.28.4",
+      "date": "2026-11-04",
+      "from": "0.28.3",
+      "note": "Forever guild invites through a secure /ginvite button; invited only once the game confirms"
+    },
+    {
+      "version": "0.28.3",
+      "date": "2026-11-04",
+      "from": "0.28.2",
+      "note": "Guild check opens in a copyable window"
+    },
+    {
+      "version": "0.28.2",
+      "date": "2026-10-21",
+      "from": "0.28.1",
+      "note": "Speed pass: seal text, slim market and desk memos, guild summaries, table-free unit reads"
+    },
+    {
+      "version": "0.28.1",
+      "date": "2026-10-20",
+      "from": "0.28.0",
+      "note": "Recruiting seal windowed to the last 35 days of invites"
+    },
+    {
+      "version": "0.28.0",
+      "date": "2026-10-20",
+      "from": "0.27.1",
+      "note": "Cold recruit records, list draw skipping, short-name index"
+    },
+    {
+      "version": "0.27.1",
+      "date": "2026-10-20",
+      "from": "0.27.0",
+      "note": "Invite / whisper failsafes: no repeated invites after misread refusals"
+    },
+    {
+      "version": "0.27.0",
+      "date": "2026-10-10",
+      "from": "0.26.3",
+      "note": "Color guild join / already-in-guild chat lines"
+    },
     {
       "version": "0.26.3",
       "date": "2026-10-09",

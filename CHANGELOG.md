@@ -2,6 +2,142 @@
 
 ## Unreleased
 
+## 0.29.2 — 2026-11-08
+
+### Fixed
+
+- **Leveling plan at the rank cap:** at 75/75 (150/150, ...) the plan starts with training the next rank and counts
+  its cost, instead of recipes you cannot level on yet.
+- **Shopping list:** says "AH" when the plan priced an item at your Auction House look, not "vendor".
+- **Known recipes:** recipes you know count as known before the profession window is opened (no learning fee).
+- **Crafting profit:** a material nobody has a price for no longer counts as 20s: there is no profit figure, the
+  materials show as "at least" with "plus materials nobody has a price for".
+- **Full scan (Classic Era):** the game's repeated list updates no longer re-read the whole scan at once (a freeze,
+  and a "0 new, 0 changed" result).
+- **Full scan, window closed or list changed during the read:** the scan fails and says so, instead of saving part of
+  the Auction House as all of it and dropping the bids it did not reach.
+- **Searches:** a page holding one item of a broad search no longer gives that item the whole search's count or
+  price ladder; an exact search over several pages builds one ladder from all of them.
+
+## 0.29.1 — 2026-11-08
+
+### Changed
+
+- **Profession data updated for WoW Forever's launch (2026-11-08):** recipe names, reagents, skill-up colors, how
+  many items a craft makes, sell prices and which profession a recipe belongs to now follow Forever's own game
+  data instead of Classic Era's. The healing potion recipes are found again under Forever's recipe numbers.
+- **Enhance tab:** enchants and their reagents use Forever's names (for example Enchant Bracer - Inferior Stamina,
+  made with Mote of Magic).
+- **Mining plan:** smelting recipes no longer start at skill 0.
+- **Audit:** statistics checked against the current Forever build.
+
+## 0.29.0 — 2026-11-04
+
+### Changed
+
+- **Recruiting on WoW Forever is whisper first:** the game no longer accepts guild invites from addons, only ones you
+  type. A click on a player, **Next whisper**, your recruit key or Hands Free sends your message and marks them
+  **asked**. When they answer, the row reads **replied: invite?** at the top of the Invited tab. Click it for the
+  `/ginvite` command in a copy box, or type it yourself.
+- **Invited means the game said so:** only "You have invited ..." counts as an invite, also for players who were
+  never on the list. Recruiters counts real invites, and the guild check shows asked and invited apart.
+- **Replies and answers stay in chat on WoW Forever:** whispers from recruits and the game's answers to your typed
+  invite are no longer hidden. Only the echo of your opener and its "No player named" lines are.
+- **New default message on WoW Forever:** it asks whether they want an invite instead of saying one was sent. A saved
+  copy of the old default is replaced; messages you wrote are not, so check yours does not promise an invite.
+- **Delayed invite** and the invite queue are gone from the WoW Forever windows.
+
+### Fixed
+
+- **Players wrongly marked as invited** in the last 7 days now read **asked**, and no second message goes out.
+- **The Next invite button on the Recruit tab** had no label; it does now.
+
+## 0.28.4 — 2026-11-04
+
+### Fixed
+
+- **Guild invites on WoW Forever now go out:** the game had stopped taking invites from TALOD, while players were
+  still marked as invited. A click on a player's row, the Next invite button, Invite again or your recruit key now
+  sends the game's own `/ginvite` for that one player.
+- **Invited means the game said so:** a player only counts as invited once the game says "You have invited ...". With
+  no answer after a few seconds they turn red on the list again and chat tells you. With Delayed invite off, your
+  message goes out after that line, so nobody is told an invite came when none did.
+- **Invites that never went:** players from the last 7 days who were marked as invited without the game confirming it
+  are back as red rows. A click sends the invite only, since they already had your message.
+- **Typing `/ginvite` yourself** for a player on the list now counts as their invite.
+
+### Changed
+
+- **Hands Free on WoW Forever** whispers and searches only; invites wait for your click or recruit key.
+- **`/talod guild invite <name>`** on WoW Forever puts the player in red on the list, since the game does not take an
+  invite from an addon command. Click their row or type `/ginvite`.
+
+## 0.28.3 — 2026-11-04
+
+### Changed
+
+- **Guild check in a copy box:** the guild check now opens in a window you can copy from, and lists every invite the game never confirmed instead of the first ten.
+
+## 0.28.2 — 2026-10-21
+
+### Changed
+
+- **Faster login and logout with a long recruiting history:** the check of what officers receive is now prepared
+  in the background after login and built much faster at logout, so neither waits on the whole history.
+- **Auction desk and Market after a full scan:** they keep far less per item and rebuild in about a quarter of the
+  time, with no stutter while the desk is open. The Listings tab no longer recomputes on every refresh.
+- **Guild windows with a big history:** Recruiters, memberships, Replies and the first chat line about a recruit
+  after login are much quicker, and the work happens in the background after login instead of on first use.
+- **Less work every second:** reading nearby players creates far less garbage, so fewer collector pauses while
+  recruiting in a busy city.
+
+## 0.28.1 — 2026-10-20
+
+### Changed
+
+- **Faster logout with a long recruiting history:** what officers receive is checked against the last 35 days of
+  invites (they only ever see the last 30), so the check at logout no longer grows with the whole history. The
+  first login after the update reports the check as not done yet; it is made at the next logout.
+
+## 0.28.0 — 2026-10-20
+
+### Changed
+
+- **Much less memory for a long recruiting history:** a settled invite (declined, joined, not found, or answered and
+  then quiet for three days) is now kept as one compact entry instead of a full record, and the texts that repeat are
+  stored once. On a history of 18,000 invites the guild data takes under half the memory it did, and it grows slowly
+  from there. The first login after the update takes a moment longer while the history is converted; everything
+  reads the same afterwards: Invited, Replies, Recruiters, the re-invite days and what officers receive.
+- **Invited tab with thousands of entries:** it lists your recent and waiting invites plus the newest 3,000 older
+  ones; a line at the bottom says how many more there are, and the search box finds anyone by name among all of
+  them. Clicking an older row still works (invite again, send the message, forget).
+- **Smoother windows:** lists only touch the parts of a row that changed, so a window that refreshes every second
+  (the Recruit tab, the Market after a scan) costs far less per refresh.
+- **Chat during a run of declines:** the game's lines about recruits are matched to their records through a name
+  index instead of a walk over every record, so a wall of declines no longer costs more with a longer history.
+
+## 0.27.1 — 2026-10-20
+
+### Fixed
+
+- **A player could get the same guild invite up to three times** with Hands Free on: when the game refused
+  something else during the click, or refused the invite after sending it, the invite was counted as not sent and
+  went again from your next click or key. Now only a refusal of the invite itself counts, an invite that seems
+  refused waits a few seconds for the game's "You have invited ..." line (when it comes, the invite counts as sent),
+  and no player is asked for more than two invites in a minute that the game did not confirm.
+- **Dropped whispers are matched better on a lagging client:** when the game drops a whisper for sending too
+  fast, the one it dropped is looked for among the whispers the game has not shown as sent, over a longer window.
+  The pace report lists whispers of the last 5 minutes the game never showed as sent.
+
+## 0.27.0 — 2026-10-10
+
+### Added
+
+- **Joins and "already in a guild" stand out in chat:** the game's "<name> has joined the guild." line shows in
+  green and "<name> is already in a guild." in orange, so they are easy to spot among the declines. Two settings on
+  the Guild settings page turn each off; a colored line stays in chat even with "Keep recruiting chatter out of
+  chat" on.
+
 ## 0.26.3 — 2026-10-09
 
 ### Changed

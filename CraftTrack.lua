@@ -189,7 +189,7 @@ function Track.Plan(r, count, charKey)
     local plan = { r = r, count = count or 1, done = done, left = left, root = root, steps = ctx.steps, shop = ctx.shop,
         buyCost = ctx.buyCost, unpriced = ctx.unpriced, canCraft = ok, why = why, tracked = tracked }
     local pr = ns.Market.CraftProfit(r)
-    plan.value = pr.priced and pr.value * left or nil
+    plan.value = pr.value and pr.value * left or nil
     -- Each step ready when every material it needs is in your bags.
     for _, step in ipairs(plan.steps) do
         step.ready = true

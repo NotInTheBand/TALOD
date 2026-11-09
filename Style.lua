@@ -591,7 +591,8 @@ end
 --   (when it happened) and search (text to match, else text, label, cols).
 --   opts: labelWidth, colWidths, onClick(item, button, row), menu(item, row)
 --   (a right-click menu, Style.ContextMenu; nil: onClick), fallbackRows,
---   search = true (a search box), time = true (a time range), hint,
+--   search = true (a search box; onSearch(text) after each change, for rows
+--   the view adds only when searched), time = true (a time range), hint,
 --   columns = { name = "Item", label = "When", "Price", ... } (a fixed
 --   title row; [c] titles cols[c]).
 -- A scrollbar shows when the rows do not fit: drag the thumb or click the
@@ -737,6 +738,10 @@ function Style.List(parent, opts)
     list.search, list.range = "", "all"
     list.top = ((opts.search or opts.time) and TOOLBAR or 0) + (opts.columns and ROW or 0)
     list.sorts = {}
+    -- Bumped when anything a row measured at layout is stale (the list was
+    -- resized, new column titles, the scrollbar came or went): every row then
+    -- sends its whole layout to the widgets once more.
+    list.layoutVer = 0
     local built = 0
 
     -- Sorting by a column title (see the header comment).
@@ -780,6 +785,7 @@ function Style.List(parent, opts)
     -- New titles for the fixed title row (a column that changes meaning).
     function list:SetColumns(columns)
         opts.columns = columns
+        self.layoutVer = self.layoutVer + 1
         self:Draw()
     end
 
@@ -857,43 +863,83 @@ function Style.List(parent, opts)
     end
     local function Hide(part) if part then part:Hide() end end
 
+    -- Layout runs for every shown row on every redraw (about 30 rows, at least
+    -- once a second while data changes) and each widget call crosses into the
+    -- game's C side, so a part is touched only when what it shows differs from
+    -- what this row last gave it. The "last" values live in r.st, thrown away
+    -- whenever list.layoutVer moves (the list was resized, new column titles):
+    -- the sizes a row measured then are stale.
+    local function SetRGBA(st, key, tex, cr, cg, cb, ca)
+        local l = st[key]
+        if l and l[1] == cr and l[2] == cg and l[3] == cb and l[4] == ca then return end
+        if not l then l = {} st[key] = l end
+        l[1], l[2], l[3], l[4] = cr, cg, cb, ca
+        tex:SetColorTexture(cr, cg, cb, ca)
+    end
+    local function SetTint(st, key, tex, c, a) SetRGBA(st, key, tex, c[1], c[2], c[3], a or c[4] or 1) end
+    local function SetShownOnce(st, key, region, on)
+        on = on and true or false
+        if st[key] ~= on then st[key] = on region:SetShown(on) end
+    end
+
     local function Layout(r, item, index)
+        local st = r.st
+        if not st or st.ver ~= list.layoutVer then
+            st = { ver = list.layoutVer, cols = {} }
+            r.st = st
+        end
         local x = 6 + (item.indent or 0)
-        r.bg:SetColorTexture(1, 1, 1, 0)
-        if item.tint then Fill(r.bg, item.tint)
-        elseif not item.header and index % 2 == 0 then Fill(r.bg, COLORS.stripe) end
+        if item.tint then SetTint(st, "bg", r.bg, item.tint)
+        elseif not item.header and index % 2 == 0 then SetTint(st, "bg", r.bg, COLORS.stripe)
+        else SetRGBA(st, "bg", r.bg, 1, 1, 1, 0) end
         if item.accent then
-            Accent(r):Show()
-            Fill(r.accent, item.accent)
-        else
-            Hide(r.accent)
+            SetShownOnce(st, "accent", Accent(r), true)
+            SetTint(st, "accentColor", r.accent, item.accent)
+        elseif r.accent then
+            SetShownOnce(st, "accent", r.accent, false)
         end
 
         local titled = Titled(item)
         local useLabel = list.labelWidth > 0 and (not item.header or (titled and item.label ~= nil))
         if useLabel and not r.label then r.label = Text(r, "GameFontDisableSmall", "RIGHT") end
-        if r.label then r.label:SetShown(useLabel) end
+        if r.label then SetShownOnce(st, "label", r.label, useLabel) end
         if useLabel then
-            r.label:ClearAllPoints()
-            r.label:SetPoint("LEFT", x, 0)
-            r.label:SetWidth(list.labelWidth)
-            r.label:SetText(titled and TitleText(item, "label", item.label) or (item.label or ""))
-            x = x + list.labelWidth + 8
+            local label, width = r.label, list.labelWidth
+            if st.labelX ~= x then
+                st.labelX = x
+                label:ClearAllPoints()
+                label:SetPoint("LEFT", x, 0)
+            end
+            if st.labelWidth ~= width then st.labelWidth = width label:SetWidth(width) end
+            local text = titled and TitleText(item, "label", item.label) or (item.label or "")
+            if st.labelText ~= text then st.labelText = text label:SetText(text) end
+            x = x + width + 8
         end
         local hasIcon = item.icon ~= nil
         if hasIcon then Icon(r) end
-        if r.icon then
+        if r.icon and st.icon ~= hasIcon then
+            st.icon = hasIcon
             r.iconBorder:SetShown(hasIcon)
             r.icon:SetShown(hasIcon)
         end
         if hasIcon then
-            r.iconBorder:ClearAllPoints()
-            r.iconBorder:SetPoint("LEFT", x, 0)
-            r.icon:SetTexture(item.icon)
-            if r.icon.SetDesaturated then r.icon:SetDesaturated(item.iconEmpty and true or false) end
-            r.icon:SetAlpha(item.iconEmpty and 0.35 or 1)
-            local qr, qg, qb = Style.QualityColor(item.link)
-            r.iconBorder:SetColorTexture(qr, qg, qb, item.iconEmpty and 0.25 or 0.9)
+            if st.iconX ~= x then
+                st.iconX = x
+                r.iconBorder:ClearAllPoints()
+                r.iconBorder:SetPoint("LEFT", x, 0)
+            end
+            if st.iconTexture ~= item.icon then st.iconTexture = item.icon r.icon:SetTexture(item.icon) end
+            local empty = item.iconEmpty and true or false
+            if st.iconEmpty ~= empty then
+                if r.icon.SetDesaturated then r.icon:SetDesaturated(empty) end
+                r.icon:SetAlpha(empty and 0.35 or 1)
+            end
+            if not st.iconBorderSet or st.iconLink ~= item.link or st.iconEmpty ~= empty then
+                st.iconBorderSet, st.iconLink = true, item.link
+                local qr, qg, qb = Style.QualityColor(item.link)
+                r.iconBorder:SetColorTexture(qr, qg, qb, empty and 0.25 or 0.9)
+            end
+            st.iconEmpty = empty
             x = x + ROW + 4
         end
 
@@ -903,40 +949,60 @@ function Style.List(parent, opts)
             local value = item.cols and item.cols[c]
             local fs = r.cols[c]
             if w and value and not fs then fs = Text(r, "GameFontHighlightSmall", "RIGHT") r.cols[c] = fs end
-            if fs then fs:SetShown(w ~= nil and value ~= nil) end
-            if w and value then
-                fs:ClearAllPoints()
-                fs:SetPoint("RIGHT", -right, 0)
+            local cs = st.cols[c]
+            if not cs and fs then cs = {} st.cols[c] = cs end
+            local on = w ~= nil and value ~= nil
+            if fs then SetShownOnce(cs, "shown", fs, on) end
+            if on then
+                if cs.right ~= right then
+                    cs.right = right
+                    fs:ClearAllPoints()
+                    fs:SetPoint("RIGHT", -right, 0)
+                end
                 -- A title may run a little past a narrow column (0 = its own width).
-                fs:SetWidth(titled and 0 or w)
-                fs:SetText((titled and value ~= "") and TitleText(item, c, value) or value)
+                local width = titled and 0 or w
+                if cs.width ~= width then cs.width = width fs:SetWidth(width) end
+                local text = (titled and value ~= "") and TitleText(item, c, value) or value
+                if cs.text ~= text then cs.text = text fs:SetText(text) end
             end
             if w then right = right + w + 6 end
         end
         local textRight = item.cols and right or 6
-        r.text:ClearAllPoints()
-        r.text:SetPoint("LEFT", x, item.bar and 2 or 0)
-        r.text:SetPoint("RIGHT", -textRight, item.bar and 2 or 0)
-        r.text:SetFontObject(item.header and "GameFontNormalSmall" or "GameFontHighlightSmall")
-        if titled then r.text:SetText(TitleText(item, 0, item.text or ""))
-        else r.text:SetText(item.header and (HEX.gold .. item.text .. "|r") or (item.text or "")) end
+        local textY = item.bar and 2 or 0
+        if st.textX ~= x or st.textRight ~= textRight or st.textY ~= textY then
+            st.textX, st.textRight, st.textY = x, textRight, textY
+            r.text:ClearAllPoints()
+            r.text:SetPoint("LEFT", x, textY)
+            r.text:SetPoint("RIGHT", -textRight, textY)
+        end
+        local font = item.header and "GameFontNormalSmall" or "GameFontHighlightSmall"
+        if st.font ~= font then st.font = font r.text:SetFontObject(font) end
+        local text
+        if titled then text = TitleText(item, 0, item.text or "")
+        else text = item.header and (HEX.gold .. item.text .. "|r") or (item.text or "") end
+        if st.text ~= text then st.text = text r.text:SetText(text) end
 
         local bar = item.bar
         if bar then Bar(r) end
         if r.barBg then
-            r.barBg:SetShown(bar ~= nil)
-            r.barFill:SetShown(bar ~= nil and (bar[1] or 0) > 0)
+            SetShownOnce(st, "barBg", r.barBg, bar ~= nil)
+            SetShownOnce(st, "barFill", r.barFill, bar ~= nil and (bar[1] or 0) > 0)
         end
         if bar then
-            r.barBg:ClearAllPoints()
-            r.barBg:SetPoint("BOTTOMLEFT", x, 2)
-            r.barBg:SetPoint("BOTTOMRIGHT", -textRight, 2)
+            if st.barX ~= x or st.barRight ~= textRight then
+                st.barX, st.barRight = x, textRight
+                r.barBg:ClearAllPoints()
+                r.barBg:SetPoint("BOTTOMLEFT", x, 2)
+                r.barBg:SetPoint("BOTTOMRIGHT", -textRight, 2)
+                r.barFill:ClearAllPoints()
+                r.barFill:SetPoint("BOTTOMLEFT", x, 2)
+            end
+            -- Measured every time: the row's width moves with the window and the scrollbar.
             local width = math.max(1, (r:GetWidth() or 200) - x - textRight)
             local frac = (bar[2] and bar[2] > 0) and math.min(1, (bar[1] or 0) / bar[2]) or 0
-            r.barFill:ClearAllPoints()
-            r.barFill:SetPoint("BOTTOMLEFT", x, 2)
-            r.barFill:SetWidth(math.max(1, width * frac))
-            Fill(r.barFill, bar.color or COLORS.bar)
+            local fill = math.max(1, width * frac)
+            if st.fillWidth ~= fill then st.fillWidth = fill r.barFill:SetWidth(fill) end
+            SetTint(st, "barColor", r.barFill, bar.color or COLORS.bar)
         end
     end
 
@@ -983,16 +1049,23 @@ function Style.List(parent, opts)
         if off then list.offset = off list:Draw() end
     end)
 
+    -- Redraws repeat with the same scroll position far more often than it
+    -- moves: the track and thumb are only touched when their numbers changed.
+    local barShown, barThumbH, barY
     local function PlaceBar(count)
         local total = #list.items
         local show = total > count and count > 0
-        track:SetShown(show)
+        if barShown ~= show then barShown = show track:SetShown(show) end
         if not show then return false end
         local height = (list:GetHeight() or 0) - list.top
         local thumbH = math.max(16, height * count / total)
-        thumb:SetHeight(thumbH)
-        thumb:ClearAllPoints()
-        thumb:SetPoint("TOPRIGHT", track, "TOPRIGHT", 0, -(height - thumbH) * (list.offset / math.max(1, total - count)))
+        local y = -(height - thumbH) * (list.offset / math.max(1, total - count))
+        if barThumbH ~= thumbH then barThumbH = thumbH thumb:SetHeight(thumbH) end
+        if barY ~= y then
+            barY = y
+            thumb:ClearAllPoints()
+            thumb:SetPoint("TOPRIGHT", track, "TOPRIGHT", 0, y)
+        end
         return true
     end
 
@@ -1010,6 +1083,12 @@ function Style.List(parent, opts)
         self.visible = count
         self.offset = math.max(0, math.min(self.offset, #self.items - count))
         local bar = PlaceBar(count)
+        -- The rows' width changes with the scrollbar: bar widths are measured again.
+        if self.barOn ~= bar then
+            self.barOn = bar
+            self.layoutVer = self.layoutVer + 1
+        end
+        local right = bar and -BAR_WIDTH - 2 or 0
         if opts.columns then
             if not self.head then
                 self.headItem = { header = true, sticky = true, cols = {}, tint = { 1, 1, 1, 0.04 } }
@@ -1019,23 +1098,33 @@ function Style.List(parent, opts)
             local h = self.headItem
             h.text, h.label = opts.columns.name or "", opts.columns.label
             for c = 1, 3 do h.cols[c] = opts.columns[c] end
+            local head = self.head
             local y = -(self.top - ROW)
-            self.head:ClearAllPoints()
-            self.head:SetPoint("TOPLEFT", 0, y)
-            self.head:SetPoint("TOPRIGHT", bar and -BAR_WIDTH - 2 or 0, y)
-            self.head:Show()
-            Layout(self.head, self.headItem, 0)
+            if head.anchorTop ~= self.top or head.anchorRight ~= right then
+                head.anchorTop, head.anchorRight = self.top, right
+                head:ClearAllPoints()
+                head:SetPoint("TOPLEFT", 0, y)
+                head:SetPoint("TOPRIGHT", right, y)
+            end
+            if not head.drawn then head.drawn = true head:Show() end
+            Layout(head, self.headItem, 0)
         end
         for i, r in ipairs(self.rows) do
             local item = i <= count and self.items[i + self.offset] or nil
             r.item = item
             if item then
-                r:ClearAllPoints()
-                r:SetPoint("TOPLEFT", 0, -self.top - (i - 1) * ROW)
-                r:SetPoint("TOPRIGHT", bar and -BAR_WIDTH - 2 or 0, -self.top - (i - 1) * ROW)
-                r:Show()
+                -- A row keeps its slot (index i): re-anchored only when the top
+                -- or the scrollbar's side moved.
+                if r.anchorTop ~= self.top or r.anchorRight ~= right then
+                    r.anchorTop, r.anchorRight = self.top, right
+                    r:ClearAllPoints()
+                    r:SetPoint("TOPLEFT", 0, -self.top - (i - 1) * ROW)
+                    r:SetPoint("TOPRIGHT", right, -self.top - (i - 1) * ROW)
+                end
+                if not r.drawn then r.drawn = true r:Show() end
                 Layout(r, Ready(item), i + self.offset)
-            else
+            elseif r.drawn ~= false then
+                r.drawn = false
                 r:Hide()
             end
         end
@@ -1176,13 +1265,25 @@ function Style.List(parent, opts)
         return out
     end
 
+    -- The inputs of the last full pass (sort, filter, count). Handed the same
+    -- table again with the same search, sort and a range that keeps everything
+    -- (a range with a start moves with the clock), the result stands: only the
+    -- rows are drawn again.
+    local passItems, passSearch, passRange, passSortVer
     function list:SetItems(items)
+        if items == self.all and items == passItems and passSearch == self.search and passRange == self.range
+            and passSortVer == self.sortVer and not Style.RangeStart(self.range) then
+            self.offset = math.min(self.offset, math.max(0, #self.items - (self.visible or 1)))
+            self:Draw()
+            return
+        end
         self.all = items
         local filtered, active = Filter(Sorted(items))
         if active and #filtered == 0 then
             filtered = { { text = HEX.muted .. "Nothing matches the search / time range.|r" } }
         end
         self.items = filtered
+        passItems, passSearch, passRange, passSortVer = items, self.search, self.range, self.sortVer
         self.offset = math.min(self.offset, math.max(0, #self.items - (self.visible or 1)))
         UpdateCount(active)
         self:Draw()
@@ -1215,6 +1316,7 @@ function Style.List(parent, opts)
         if opts.search then
             list.searchBox = Style.SearchBox(bar, function(text)
                 list.search = Plain(text)
+                if opts.onSearch then opts.onSearch(list.search) end
                 list.offset = 0
                 list:SetItems(list.all)
             end, opts.hint)
@@ -1238,7 +1340,10 @@ function Style.List(parent, opts)
         self.offset = math.max(0, math.min(MaxOffset(), self.offset - delta * 3))
         self:Draw()
     end)
-    list:SetScript("OnSizeChanged", function(self) self:Draw() end)
+    list:SetScript("OnSizeChanged", function(self)
+        self.layoutVer = self.layoutVer + 1
+        self:Draw()
+    end)
     list:SetScript("OnShow", function(self) self:Draw() end)
     if list.SetClipsChildren then list:SetClipsChildren(true) end
     return list

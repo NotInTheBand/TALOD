@@ -30,7 +30,7 @@ scenarios.market_outliers = function()
     check(s.looks == 6 and s.over == 2 and s.usual == 100 and s.high == 110 and s.highAll == 1000 and not s.overNow,
         "two overpriced looks marked, usual stays 100: " .. tostring(s.usual) .. " over " .. tostring(s.over))
     local marked = 0
-    for _, pt in ipairs(s.points) do if pt.over then marked = marked + 1 check(pt.p == 1000, "only the 1000c looks marked") end end
+    for _, pt in ipairs(M.Points(2589)) do if pt.over then marked = marked + 1 check(pt.p == 1000, "only the 1000c looks marked") end end
     check(marked == 2, "marks kept on the points")
     check(math.abs(s.trend) < 1e-9, "trend against the usual, not the inflated average")
 
@@ -86,7 +86,7 @@ scenarios.market_outliers_desk = function()
     -- Ladder: 30 at 80c, one troll listing at 5000c.
     Pr.RecordLadder(2589, { { 80, 10, "A" }, { 80, 20, "B" }, { 5000, 1, "C" } }, false, now)
     Desk.Invalidate()
-    local plan = Desk.Plan(2589)
+    local plan = Desk.Detail(2589)
     check(plan and plan.usual == 100, "desk usual leaves the 2000c look out: " .. tostring(plan and plan.usual))
     check(plan.all.relist == 100, "own-it-all relists at usual, not the 5000c tier: " .. tostring(plan.all.relist))
     check(#plan.steps == 1 and plan.steps[1].over and plan.best == nil, "a reset under a troll listing is marked, never best")

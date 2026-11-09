@@ -349,6 +349,8 @@ scenarios.guild_hands_free = function()
     resetOutput()
     MOCK.MouseDown("LeftButton")
     check(tries == 1 and printed("blocked the guild invite to Stuck") and printed("click their red row"), "blocked, told once")
+    check(G.InviteWhy("Stuck-Mockrealm") == "blocked" and not G.InviteReady("Stuck-Mockrealm"), "waits for a late confirmation first")
+    wait(3)
     local back = G.Candidates()
     check(#back >= 1 and back[#back].full == "Stuck-Mockrealm" and back[#back].ready, "still a red row")
     check(G.HandsFreeBlockedFor("Stuck-Mockrealm"), "marked for your click")
@@ -750,13 +752,297 @@ scenarios.guild_forever_secrets = function()
     wait(6)
     check(names(G.Candidates()) == "Plain", "secret guild / faction never listed: " .. names(G.Candidates()))
     G.Invite("Plain-Mockrealm")
-    wait(10.5)
-    G.Invite("Plain-Mockrealm")  -- second click: the invite
+    wait(2)
     local r = data().recruits["Plain-Mockrealm"]
+    check(r.status == "asked" and #MOCK.guildInvites == 0, "asked, nothing invited")
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "You have invited Plain to join your guild.")
     MOCK.FireEvent("CHAT_MSG_SYSTEM", MOCK.Secret("Plain declines your guild invitation."))
     check(r.status == "invited", "secret message ignored")
     MOCK.FireEvent("CHAT_MSG_WHISPER", MOCK.Secret("hi"), MOCK.Secret("Plain"))
     check(r.replied == nil, "secret sender ignored")
+end
+
+-- Forever: a typed invite's answers are shown; re-offered players can be asked again.
+scenarios.guild_whisper_first_answers = function()
+    local ns = setup(16001)
+    local G = ns.Guild
+    TALODDB.guildHideChat = true
+    TALODDB.guildColorGuilded = false
+    G.Invite("Asked-Mockrealm")
+    local r = data().recruits["Asked-Mockrealm"]
+    check(r.status == "asked", "asked")
+    local hidden = function(line) return (G.FilterSystem(nil, "CHAT_MSG_SYSTEM", line)) end
+    check(hidden("\"Asked\" not found.") == false, "typed invite's not found is shown")
+    check(hidden("Asked is already in a guild.") == false, "already in a guild is shown")
+    check(hidden("Asked declines your guild invitation.") == false, "decline is shown")
+    check(hidden("No player named 'Asked' is currently playing.") == true, "opener's no player stays hidden")
+    -- Past the re-invite days a click whispers them again; before that it does nothing.
+    wait(70)
+    local before = #MOCK.whispers
+    check(G.Invite("Asked-Mockrealm") == false and #MOCK.whispers == before, "too soon: nothing")
+    r.t = time() - 8 * 86400
+    r.invited = r.t
+    check(G.Invite("Asked-Mockrealm") == true, "after the re-invite days: asked again")
+    wait(2)
+    check(#MOCK.whispers == before + 1, "second whisper went: " .. #MOCK.whispers)
+end
+
+-- Classic Era keeps the plain call in the click.
+scenarios.guild_invite_era_direct = function()
+    local ns = setup(11509)
+    check(ns.Guild.WhisperFirst == false, "Era is not whisper-first")
+    TALODDB.guildDelayedInvite = false
+    ns.Guild.Invite("Plain-Mockrealm")
+    check(#MOCK.guildInvites == 1 and #MOCK.whispers == 1, "whisper and invite in one click")
+    local root = { guilds = { g = { recruits = { X = { status = "invited", ack = false, invited = time(), invites = 1 } } } } }
+    ns.Guild.AskedFromSent(root)
+    check(root.guilds.g.recruits.X.status == "invited", "no migration off Forever")
+end
+
+-- Forever: the game takes no guild invite from addons. A click whispers
+-- ("asked"); the invite is the /ginvite you type, counted when the game says so.
+scenarios.guild_whisper_first = function()
+    local ns = setup(16001)
+    local G, O = ns.Guild, ns.Outbox
+    local rec = function(full) return data().recruits[full] end
+    check(G.WhisperFirst == true, "Forever is whisper-first")
+    C_GuildInfo.Invite = function() error("the invite call must not be made on Forever") end
+    local ok, why = O.GuildInvite("Anyone")
+    check(ok == false and why == "typed", "Outbox never invites on Forever")
+    for i, n in ipairs({ "Alpha", "Beta", "Gamma", "Delta" }) do
+        plateAdd("nameplate" .. i, MOCK.Friend({ name = n, guid = "Player-1-" .. n, level = 12 }))
+    end
+    wait(6)
+    check(#G.Candidates() == 4, "four candidates")
+    local msg = G.CurrentMessage()
+    check(msg:find("Want an invite", 1, true) and not msg:find("sent you an invite", 1, true), "the new default message")
+
+    -- One click: one opener, "asked", no invite.
+    check(G.Invite("Alpha-Mockrealm") == true, "click goes")
+    local a = rec("Alpha-Mockrealm")
+    check(#MOCK.whispers == 1 and MOCK.whispers[1].target == "Alpha" and #MOCK.guildInvites == 0, "one whisper, no invite")
+    check(a.status == "asked" and (a.invites or 0) == 0 and a.ack == nil and a.invited, "asked, not invited")
+    check(not names(G.Candidates()):find("Alpha"), "off the list")
+    check(G.Invite("Alpha-Mockrealm") == false and #MOCK.whispers == 1, "a second click does nothing")
+    local sent = MOCK.whispers[1].text
+
+    -- The answer shows in chat; the echo of the opener does not.
+    MOCK.FireEvent("CHAT_MSG_WHISPER", "yes please", "Alpha-Mockrealm")
+    check(a.replied and a.unread == 1 and a.status == "asked", "reply kept")
+    check(not MOCK.ChatHidden("CHAT_MSG_WHISPER", "yes please", "Alpha-Mockrealm"), "their answer is never hidden")
+    check(G.FilterWhisper(nil, "CHAT_MSG_WHISPER", "again", "Alpha-Mockrealm") == false, "filter: incoming shown")
+    check(MOCK.ChatHidden("CHAT_MSG_WHISPER_INFORM", sent, "Alpha-Mockrealm"), "the opener's echo is hidden")
+    check(G.InviteCommand("Alpha-Mockrealm") == "/ginvite Alpha", "what to type")
+
+    -- The game's line for the typed invite.
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "You have invited Alpha to join your guild.")
+    check(a.status == "invited" and a.ack and a.invites == 1 and TALODDB.guildAckSeen == true, "typed invite counted")
+    check(not MOCK.ChatHidden("CHAT_MSG_SYSTEM", "You have invited Alpha to join your guild."), "the line stays in chat")
+    check(G.FilterSystem(nil, nil, "You have invited Alpha to join your guild.") == false, "filter: invite line shown")
+
+    -- A player never on the list gets a record.
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "You have invited Zed to join your guild.")
+    local z = rec("Zed-Mockrealm")
+    check(z and z.status == "invited" and z.ack and z.invites == 1 and z.src == "typed" and z.by == G.Me(), "unknown player: record made")
+
+    -- Their answer to the invite.
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "Alpha declines your guild invitation.")
+    check(a.status == "declined", "declined after the typed invite")
+
+    -- The recruit key: next whisper, then /who, never an invite.
+    wait(2)
+    local before = #MOCK.whispers
+    local what, who = G.RecruitStep("bind")
+    check(what == "whisper" and who == "Beta-Mockrealm", "step whispers: " .. tostring(what) .. " " .. tostring(who))
+    wait(2)
+    check(#MOCK.whispers == before + 1 and rec("Beta-Mockrealm").status == "asked" and #MOCK.guildInvites == 0, "step: a whisper, no invite")
+    _G.TALODRecruitStep:Click()
+    wait(2)
+    local function askedAmong(list)
+        local n = 0
+        for _, full in ipairs(list) do if rec(full) and rec(full).status == "asked" then n = n + 1 end end
+        return n
+    end
+    check(askedAmong({ "Gamma-Mockrealm", "Delta-Mockrealm" }) == 1, "second step: one more player")
+
+    -- Next whisper (the button's job): the last one.
+    local last = G.AskNext()
+    check(last and rec(last).status == "asked" and askedAmong({ "Gamma-Mockrealm", "Delta-Mockrealm" }) == 2, "AskNext whispers the next candidate")
+    wait(2)
+    check(G.AskNext() == nil, "AskNext: nobody left")
+    check(#G.Candidates() == 0, "asked players are not offered again")
+    what = G.RecruitStep("bind")
+    check(what == "who", "nobody to whisper: a /who")
+    check(#MOCK.guildInvites == 0 and #MOCK.blocked == 0, "no invite in the whole flow")
+
+    -- No message to send: nothing recorded, told to type.
+    TALODDB.guildWhisper = false
+    resetOutput()
+    check(G.Invite("Eps-Mockrealm") == false and rec("Eps-Mockrealm") == nil, "no message: no record")
+    check(printed("/ginvite Eps"), "told to type the invite")
+    TALODDB.guildWhisper = true
+
+    -- The check counts asked apart from sent.
+    local c = G.Check()
+    check(c.asked == 3 and c.sent == 2, "check: asked " .. c.asked .. ", sent " .. c.sent)
+    check(table.concat(G.CheckLines(), "\n"):find("3 asked"), "check lines show asked")
+
+    -- Recruiters count real invites only, live and packed.
+    local g = data()
+    local me = G.Me()
+    local function invitedCount()
+        for _, st in ipairs(G.BuildRecruiters(g)) do if st.by == me then return st.invitedCount end end
+        return 0
+    end
+    check(invitedCount() == 2, "recruiters: live, only Alpha and Zed: " .. invitedCount())
+    local old = MOCK.now - 4 * 86400
+    for _, full in ipairs({ "Beta-Mockrealm", "Gamma-Mockrealm", "Delta-Mockrealm", "Zed-Mockrealm" }) do
+        rec(full).t, rec(full).invited = old, old
+    end
+    G.PackAll(g, MOCK.now)
+    check(G.IsCold("Beta-Mockrealm") and G.IsCold("Zed-Mockrealm"), "settled records packed")
+    check(G.Recruit("Beta-Mockrealm").status == "asked" and (G.Recruit("Beta-Mockrealm").whisper or ""):find("Hi Beta!", 1, true), "an asked record survives packing")
+    check(G.ColdStats(g).status.asked == 3, "cold stats know asked")
+    check(invitedCount() == 2, "recruiters: packed, still only the real invites: " .. invitedCount())
+    check(G.Blocked("Beta-Mockrealm") == "asked", "a packed asked player is not offered again")
+
+    -- Store migration to v6.
+    local now = time()
+    local root = { guilds = { g = { recruits = {
+        Owed = { status = "inviting", invited = now - 60, whisper = "hi" },
+        Unsent = { status = "uninvited", invited = now - 60, whisper = "hi" },
+        Plain = { status = "uninvited", invited = now - 60 },
+        Refused = { status = "invited", ack = false, invited = now - 3600, invites = 1, whisper = "hi" },
+        Old = { status = "invited", ack = false, invited = now - 30 * 86400, invites = 1 },
+        Good = { status = "invited", ack = now, invited = now - 3600, invites = 1 },
+        Joined = { status = "joined", ack = false, invited = now - 3600, invites = 1 },
+        Declined = { status = "declined", ack = false, invited = now - 3600, invites = 1 },
+    } } } }
+    G.AskedFromSent(root)
+    local rs = root.guilds.g.recruits
+    check(rs.Owed.status == "asked" and rs.Unsent.status == "asked" and rs.Owed.whisper == "hi", "owed and unsent: asked, whisper kept")
+    check(rs.Refused.status == "asked" and rs.Refused.invites == 0 and rs.Refused.ack == nil, "refused: asked, not counted")
+    check(rs.Plain.status == "uninvited" and rs.Old.status == "invited" and rs.Good.status == "invited"
+        and rs.Joined.status == "joined" and rs.Declined.status == "declined" and rs.Declined.invites == 1, "the rest untouched")
+
+    -- The old default message is replaced once per session; your own is kept.
+    TALODDB.guildMessages = { G.ERA_MESSAGES[1], "my own words" }
+    G.messagesChecked = nil
+    local list = G.Messages()
+    check(list[1] == G.DEFAULT_MESSAGES[1] and list[2] == "my own words" and #list == 2, "old default replaced, custom kept")
+    TALODDB.guildMessages = { "only mine" }
+    G.messagesChecked = nil
+    check(G.Messages()[1] == "only mine", "custom list untouched")
+end
+
+-- Whisper-first windows (Forever): no delayed toggle, Next whisper, rows that
+-- give the /ginvite command instead of inviting; Era keeps its buttons.
+scenarios.guild_whisper_first_ui = function()
+    local ns = setup(16001)
+    local G, UI = ns.Guild, ns.GuildUI
+    for i, n in ipairs({ "Alpha", "Beta", "Gamma" }) do
+        plateAdd("nameplate" .. i, MOCK.Friend({ name = n, guid = "Player-1-" .. n, level = 12 }))
+    end
+    wait(6)
+    UI.Show("recruit")
+    local v = UI.views.recruit
+    check(v.delayed == nil, "no Delayed toggle on Forever")
+    check(v.nextStep.label:GetText() == "Next whisper", "Next whisper: " .. tostring(v.nextStep.label:GetText()))
+    check(v.card.sub:GetText():find("whisper your message", 1, true) and not v.card.sub:GetText():find("red row", 1, true), "sub text")
+    check(v.handsFree:IsShown(), "Hands Free still shown")
+
+    -- Next whisper: one player.
+    v.nextStep:Fire("OnClick", "LeftButton")
+    wait(2)
+    check(#MOCK.whispers == 1 and #MOCK.guildInvites == 0, "Next whisper: one whisper")
+    resetOutput()
+    -- A row click whispers.
+    v.list._height = 200
+    v.list:Draw()
+    local function rowFor(list, full)
+        for _, r in ipairs(list.rows) do
+            if r.item and r.item.full == full and r:IsShown() then return r end
+        end
+    end
+    local target
+    for _, c in ipairs(G.Candidates()) do target = c.full break end
+    check(target and rowFor(v.list, target), "a candidate row is drawn")
+    rowFor(v.list, target):Fire("OnClick", "LeftButton")
+    wait(2)
+    check(#MOCK.whispers == 2 and #MOCK.guildInvites == 0, "row click: a whisper")
+    G.AskNext()
+    wait(2)
+    check(G.AskNext() == nil, "nobody left")
+    local before = #MOCK.whispers
+    v.nextStep:Fire("OnClick", "LeftButton")
+    check(#MOCK.whispers == before and not T.printed("nobody"), "Next with nobody: nothing sent, nothing printed")
+
+    -- Invited tab: asked, then replied first.
+    UI.Show("invited")
+    local iv = UI.views.invited
+    iv.list._height = 400
+    iv.list:Draw()
+    local function textOf(list, full)
+        local r = rowFor(list, full)
+        return r and r.item and r.item.cols and r.item.cols[1] or ""
+    end
+    check(textOf(iv.list, "Alpha-Mockrealm"):find("asked", 1, true), "Alpha reads asked")
+    check(iv.card.title:GetText():find("3 asked", 1, true), "title counts asked: " .. iv.card.title:GetText())
+    MOCK.FireEvent("CHAT_MSG_WHISPER", "yes please", "Gamma-Mockrealm")
+    iv.list._height = 400
+    UI.Refresh()
+    iv.list:Draw()
+    check(iv.list.all[1].full == "Gamma-Mockrealm", "replied row first: " .. tostring(iv.list.all[1].full))
+    check(textOf(iv.list, "Gamma-Mockrealm"):find("replied: invite?", 1, true), "Gamma reads replied: invite?")
+    check(iv.card.title:GetText():find("1 replied", 1, true) and iv.card.title:GetText():find("2 asked", 1, true), "title: " .. iv.card.title:GetText())
+
+    -- The click gives the command and sends nothing.
+    local sentBefore = #MOCK.whispers
+    MOCK.popup, MOCK.popupData = nil, nil
+    rowFor(iv.list, "Gamma-Mockrealm"):Fire("OnClick", "LeftButton")
+    check(MOCK.popup == "TALOD_COPY" and MOCK.popupData == "/ginvite Gamma", "copy box with the command: " .. tostring(MOCK.popupData))
+    check(#MOCK.whispers == sentBefore and #MOCK.guildInvites == 0, "nothing sent")
+    rowFor(iv.list, "Gamma-Mockrealm"):GetScript("OnEnter")(rowFor(iv.list, "Gamma-Mockrealm"))
+
+    -- Replies: the same command from the button.
+    UI.Show("replies")
+    local rv = UI.views.replies
+    check(UI.state.chat == "Gamma-Mockrealm", "conversation selected")
+    check(rv.invite.label:GetText() == "/ginvite", "button reads /ginvite")
+    MOCK.popup, MOCK.popupData = nil, nil
+    rv.invite:Fire("OnClick", "LeftButton")
+    check(MOCK.popupData == "/ginvite Gamma" and #MOCK.guildInvites == 0, "Replies button: the same command")
+    check(rv.status:GetText():find("replied: invite?", 1, true), "header status: " .. rv.status:GetText())
+
+    -- The game's line: invited for real.
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "You have invited Gamma to join your guild.")
+    UI.Show("invited")
+    iv.list._height = 400
+    iv.list:Draw()
+    check(textOf(iv.list, "Gamma-Mockrealm"):find("invited", 1, true) and not textOf(iv.list, "Gamma-Mockrealm"):find("replied", 1, true),
+        "Gamma reads invited: " .. textOf(iv.list, "Gamma-Mockrealm"))
+    check(iv.card.title:GetText():find("1 invited", 1, true), "title: " .. iv.card.title:GetText())
+    MOCK.popup = nil
+    rowFor(iv.list, "Gamma-Mockrealm"):Fire("OnClick", "LeftButton")
+    check(MOCK.popup == nil, "a confirmed invite gives no command")
+    -- Right-click still forgets.
+    rowFor(iv.list, "Alpha-Mockrealm"):Fire("OnClick", "RightButton")
+    check(G.Recruit("Alpha-Mockrealm") == nil, "right-click forgets")
+
+    -- Mini window: no delayed toggle either.
+    TALODDB.guildMiniShown = true
+    ns.Refresh()
+    check(UI.mini and UI.mini.delayed == nil and UI.mini.next.label:GetText() == "Next", "mini: no delay, Next")
+end
+
+-- Classic Era keeps the Delayed invite toggle and the Next invite button.
+scenarios.guild_era_buttons_kept = function()
+    local ns = setup(11509)
+    local UI = ns.GuildUI
+    UI.Show("recruit")
+    local v = UI.views.recruit
+    check(v.delayed and v.delayed:IsShown(), "Era: Delayed toggle")
+    check(v.nextStep.label:GetText():find("Next invite", 1, true), "Era: Next invite: " .. tostring(v.nextStep.label:GetText()))
 end
 
 scenarios.guild_replies = function()
@@ -862,6 +1148,19 @@ scenarios.guild_replies = function()
     TALODDB.guildHideChat = false
     check(not MOCK.ChatHidden("CHAT_MSG_WHISPER", "ok", "Newbie-Mockrealm"), "hide off")
     TALODDB.guildHideChat = true
+
+    -- Joins and "already in a guild" stand out in color; a colored line is
+    -- shown even for an invited player; the other arguments pass through.
+    local joined, args = MOCK.ChatText("CHAT_MSG_SYSTEM", "Someone Else has joined the guild.", "", "", 7)
+    check(joined == ns.ColorCode("safe") .. "Someone Else has joined the guild.|r" and args[4] == 7, "join colored: " .. tostring(joined))
+    local guilded = MOCK.ChatText("CHAT_MSG_SYSTEM", "Newbie is already in a guild.")
+    check(guilded == ns.ColorCode("title") .. "Newbie is already in a guild.|r", "guilded colored: " .. tostring(guilded))
+    TALODDB.guildColorGuilded = false
+    check(MOCK.ChatText("CHAT_MSG_SYSTEM", "Newbie is already in a guild.") == nil, "guilded hidden when not colored")
+    TALODDB.guildColorJoin = false
+    check(MOCK.ChatText("CHAT_MSG_SYSTEM", "Someone Else has joined the guild.") == "Someone Else has joined the guild.", "join plain")
+    check(MOCK.ChatText("CHAT_MSG_SYSTEM", "Newbie declines your guild invitation.") == nil, "declines still hidden")
+    TALODDB.guildColorJoin, TALODDB.guildColorGuilded = true, true
 
     -- Notice setting off; new reply while the tab is closed.
     TALODGuildWindow:Hide()
@@ -1201,12 +1500,13 @@ scenarios.guild_forever_split_names = function()
 
     -- One click: whisper and invite to "First Surname" (no realm); a second click does nothing.
     G.Invite("Faladorian Dawnsight-Mockrealm")
-    wait(10.5)
-    G.Invite("Faladorian Dawnsight-Mockrealm")  -- second click: the invite
-    check(MOCK.guildInvites[1] == "Faladorian Dawnsight" and MOCK.whispers[1].target == "Faladorian Dawnsight", "sent to First Surname")
+    wait(2)
+    check(#MOCK.guildInvites == 0 and MOCK.whispers[1].target == "Faladorian Dawnsight", "whispered to First Surname, no invite")
     check(#G.Candidates() == 0, "off the list")
     G.Invite("Faladorian Dawnsight-Mockrealm")
-    check(#MOCK.guildInvites == 1, "no second invite")
+    check(#MOCK.whispers == 1, "no second whisper")
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "You have invited Faladorian Dawnsight to join your guild.")
+    check(g.recruits["Faladorian Dawnsight-Mockrealm"].status == "invited", "the typed invite is matched")
 
     -- The game's answers and their whispers find the same record.
     MOCK.FireEvent("CHAT_MSG_SYSTEM", "Faladorian Dawnsight declines your guild invitation.")
@@ -1618,8 +1918,22 @@ scenarios.guild_invite_check = function()
     MOCK.FireEvent("CHAT_MSG_SYSTEM", "Something new the server says.")
     check(G.Check().unmatched[1].text == "Something new the server says.", "unmatched line kept")
     resetOutput()
+    local shown, realShow = nil, ns.Probe.ShowText
+    ns.Probe.ShowText = function(text) shown = text end
     slash("guild check")
-    check(printed("invites in the last hour") and printed("Something new the server says"), "check printed")
+    check(shown and shown:find("invites in the last hour", 1, true) and shown:find("Something new the server says", 1, true), "check in the copy window")
+    check(not printed("invites in the last hour"), "check not printed to chat")
+    -- Every unconfirmed name is listed, not just ten.
+    local c = G.Check()
+    for i = 1, 14 do c.unconfirmed[i] = "Lost" .. i .. "-Mockrealm" end
+    c.ackSeen = true
+    local realCheck = G.Check
+    G.Check = function() return c end
+    shown = nil
+    slash("guild check")
+    G.Check = realCheck
+    check(shown and shown:find("Lost14", 1, true) and not shown:find("more", 1, true), "all unconfirmed names listed")
+    ns.Probe.ShowText = realShow
     -- Old records (sent before this check existed) are never called unconfirmed.
     data().recruits["Old-Mockrealm"] = { name = "Old", status = "invited", invited = time() - 3000, t = time() - 3000, invites = 1 }
     check(G.InviteCheck(rec("Old-Mockrealm")) == nil, "old record: unknown")
@@ -1685,10 +1999,10 @@ scenarios.guild_delayed_off = function()
     UI.Show("recruit")
     ns.Refresh()
     local rv = UI.views.recruit
-    check(rv.next.label:GetText():find("Next invite %(2%)"), "Next invite (2): " .. tostring(rv.next.label:GetText()))
+    check(rv.nextStep.label:GetText():find("Next invite %(2%)"), "Next invite (2): " .. tostring(rv.nextStep.label:GetText()))
     local rows = UI.CandidateRows()
     rows[2].tooltip(UIParent)
-    rv.next:Fire("OnEnter")
+    rv.nextStep:Fire("OnEnter")
     rv.handsFree:Fire("OnEnter")
     local tip = table.concat(UI.NextTip(), " | ")
     check(tip:find("Early") and tip:find("Ready: 2") and tip:find("Waiting for their message to go out first: 1"), "Next tip: " .. tip)
@@ -1712,6 +2026,7 @@ scenarios.guild_delayed_off = function()
     r = data().recruits["Held-Mockrealm"]
     check(r and r.status == "inviting", "blocked invite: queued: " .. tostring(r and r.status))
     check(G.InviteWhy("Held-Mockrealm") == "blocked" and G.HandsFreeBlockedFor("Held-Mockrealm") == "mouse", "why blocked, from world clicks")
+    wait(3)
     invites = #MOCK.guildInvites
     MOCK.MouseDown("LeftButton")
     check(#MOCK.guildInvites == invites, "world clicks do not try it again")
@@ -2012,4 +2327,90 @@ scenarios.guild_rank_menu = function()
     local n = #MOCK.promoted + #MOCK.demoted + #MOCK.rankSets
     wait(60)
     check(#MOCK.promoted + #MOCK.demoted + #MOCK.rankSets == n, "nothing from the tick")
+end
+
+-- Invites the game seemed to refuse but may have sent: a refusal of another
+-- call in the same click leaves the invite counted; a late "You have invited
+-- X" takes a blocked one out of the queue; no player gets a third
+-- unconfirmed call within a minute.
+scenarios.guild_invite_failsafes = function()
+    local ns = setup()
+    local G = ns.Guild
+    local realInvite = C_GuildInfo.Invite
+    local calls = {}
+    local blockName
+    C_GuildInfo.Invite = function(name)
+        calls[#calls + 1] = name
+        if blockName then MOCK.FireEvent("ADDON_ACTION_BLOCKED", "TALOD", blockName) end
+    end
+    TALODDB.guildHandsFree = true
+    local function redRow(name, guid)
+        plateAdd("nameplate1", MOCK.Friend({ name = name, guid = guid, level = 12 }))
+        wait(5)
+        G.Who()
+        MOCK.MouseDown("LeftButton")   -- the whisper
+        check(data().recruits[name .. "-Mockrealm"].status == "inviting", name .. ": whispered")
+        wait(11)
+        G.Who()
+        plateRemove("nameplate1")
+    end
+
+    -- Another call refused inside the click: the invite went.
+    redRow("Other", "Player-1-O")
+    blockName = "SomeFrame:Show()"
+    MOCK.MouseDown("LeftButton")
+    local r = data().recruits["Other-Mockrealm"]
+    check(#calls == 1 and r.status == "invited" and r.invites == 1, "counted as sent: " .. tostring(r.status))
+    check(G.InviteWhy("Other-Mockrealm") == nil, "not queued again")
+
+    -- The invite itself refused, then the game says it went after all.
+    redRow("Late", "Player-1-L")
+    blockName = "C_GuildInfo.Invite()"
+    MOCK.MouseDown("LeftButton")
+    r = data().recruits["Late-Mockrealm"]
+    check(#calls == 2 and r.status == "inviting" and G.InviteWhy("Late-Mockrealm") == "blocked", "blocked: waits")
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "You have invited Late to join your guild.")
+    check(r.status == "invited" and r.ack and r.invites == 1, "the late line: it went")
+    wait(5)
+    G.Who()
+    _G["TALODRecruitStep"]:Click()
+    check(#calls == 2, "never sent again")
+
+    -- Refused twice without a confirmation: the second counts as sent, no third.
+    redRow("Thrice", "Player-1-T")
+    resetOutput()
+    MOCK.MouseDown("LeftButton")
+    check(#calls == 3 and data().recruits["Thrice-Mockrealm"].status == "inviting", "first refusal: queued")
+    wait(3)
+    G.Who()
+    _G["TALODRecruitStep"]:Click()
+    r = data().recruits["Thrice-Mockrealm"]
+    check(#calls == 4 and r.status == "invited" and printed("counted as sent"), "second refusal: counted as sent")
+    check(G.UnconfirmedCalls("Thrice-Mockrealm") == 2, "two calls unconfirmed")
+    wait(5)
+    G.Who()
+    _G["TALODRecruitStep"]:Click()
+    check(G.Invite("Thrice-Mockrealm") == false and #calls == 4, "no third invite")
+    wait(60)
+    check(G.UnconfirmedCalls("Thrice-Mockrealm") == 0, "forgotten after a minute")
+    C_GuildInfo.Invite = realInvite
+end
+
+-- The throttle's dropped line is matched to a whisper the game did not echo;
+-- whispers never echoed are listed by the pace report.
+scenarios.outbox_echo = function()
+    local ns = setup()
+    local O = ns.Outbox
+    check(O.Whisper("hello a", "Alpha One") and O.Whisper("hello b", "Beta Two"), "two whispers")
+    MOCK.FireEvent("CHAT_MSG_WHISPER_INFORM", "hello b", "Beta Two-Mockrealm")
+    resetOutput()
+    MOCK.FireEvent("CHAT_MSG_SYSTEM", "The number of messages that can be sent is limited, please wait to send another message.")
+    check(printed("dropped your whisper to Alpha One"), "the echoed one is not the dropped one")
+    check(#O.Unechoed() == 0, "too soon to call unconfirmed")
+    wait(31)
+    local list = O.Unechoed()
+    check(#list == 1 and list[1].target == "Alpha One", "Alpha never echoed")
+    resetOutput()
+    slash("pace")
+    check(printed("never showed as sent") and printed("Alpha One"), "pace lists it")
 end

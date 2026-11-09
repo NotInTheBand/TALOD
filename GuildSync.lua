@@ -260,6 +260,22 @@ local function Payload(key)
                 out[#out + 1] = Clean(x.full) .. ":" .. r.invited .. ":" .. Clean(r.status or "?") .. ":" .. (r.replied and "1" or "0")
             end
         end
+        -- Then the cold records, newest first: t is never older than the invite,
+        -- so the walk ends at the first one older than the window.
+        local g = Guild.Data()
+        if g then
+            for _, full in ipairs(Guild.ColdNames()) do
+                if #out >= 100 then break end
+                local s = g.cold[full]
+                if s then
+                    local status, at, invited, _, _, _, replied = Guild.ColdHot(s, g)
+                    if (tonumber(at) or 0) < since then break end
+                    if invited and invited >= since then
+                        out[#out + 1] = Clean(full) .. ":" .. invited .. ":" .. Clean(status or "?") .. ":" .. (replied and "1" or "0")
+                    end
+                end
+            end
+        end
         return table.concat(out, ";")
     elseif key == "alts" then
         local g = Guild.Data()
@@ -415,7 +431,7 @@ local SKILL_CAP = 300
 -- Profession ranks need a character level to train ([VERIFY] on Forever):
 -- Journeyman 10, Expert 20, Artisan 35.
 local RANK_LEVEL = { { 75, 10 }, { 150, 20 }, { 225, 35 } }
-local RECRUIT_STATUS = { invited = true, inviting = true, uninvited = true, joined = true, declined = true, guilded = true,
+local RECRUIT_STATUS = { invited = true, asked = true, inviting = true, uninvited = true, joined = true, declined = true, guilded = true,
     pending = true, notfound = true, skipped = true, ["?"] = true }
 local SEAL_STATES = { ok = true, edited = true, new = true, unknown = true }
 Sync.SKILL_CAP = SKILL_CAP
@@ -499,7 +515,9 @@ function Sync.Check(key, v, sender, g)
             elseif not RECRUIT_STATUS[r.status] then
                 Bad(Guild.Short(r.full) .. ": unknown status " .. tostring(r.status))
             else
-                local invited = GuildSaw(g, "invite", r.full, sender, r.t)
+                -- Only asked (messaged, no invite sent): the guild's log has no invite to find.
+                local invited
+                if r.status ~= "asked" then invited = GuildSaw(g, "invite", r.full, sender, r.t) end
                 if r.status == "joined" then
                     local member = g.members[r.full]
                     local joined = GuildSaw(g, "join", r.full, nil, r.t)

@@ -73,3 +73,42 @@ scenarios.ah_scan_robust = function()
     check(not Pr.Bulk(), "stalled read cleared")
     C_AuctionHouse = nil
 end
+
+-- The Auction House closes (or the list changes) while a full scan is read:
+-- failed and logged, the partial read never recorded as the whole AH.
+scenarios.ah_scan_closed_midread = function()
+    local ns = boot(16001)
+    MOCK.FireEvent("PLAYER_ENTERING_WORLD")
+    MOCK.Tick(3.2) MOCK.Tick(0.3)
+    local H, Pr = ns.AHHelper, ns.Prices
+    local rows = {}
+    modernAH(rows)
+    AuctionHouseFrame = CreateFrame("Frame", "AuctionHouseFrame", UIParent)
+    MOCK.FireEvent("AUCTION_HOUSE_SHOW")
+    MOCK.RunTimers()
+    local panel = H.Panel()
+    local log = function() return TALODDB.ahScanLog[#TALODDB.ahScanLog] end
+    for i = 1, 1200 do rows[i] = { "Salt", 1, 50, i <= 600 and 4289 or 2589 } end
+
+    TALODDB.ahFullScan = {}
+    panel.scanButton:Fire("OnClick", "LeftButton")
+    MOCK.Tick(2.5)
+    check(H.state.scan and H.state.scan.reading and Pr.Bulk(), "reading")
+    MOCK.FireEvent("AUCTION_HOUSE_CLOSED")
+    MOCK.RunTimers() MOCK.RunTimers() MOCK.RunTimers()
+    check(not H.state.scan and log().ok == false and log().result:find("closed during the read"), "closed: " .. tostring(log().result))
+    check(not Pr.Bulk() and not Pr.Entry(2589), "nothing recorded from the rows never read")
+
+    -- The list shrinks under the read (a new query): stopped, not counted as done.
+    MOCK.FireEvent("AUCTION_HOUSE_SHOW")
+    MOCK.RunTimers()
+    TALODDB.ahFullScan = {}
+    H.Panel().scanButton:Fire("OnClick", "LeftButton")
+    MOCK.Tick(2.5)
+    check(H.state.scan and H.state.scan.reading, "reading again")
+    rows.extra = -700
+    MOCK.RunTimers() MOCK.RunTimers() MOCK.RunTimers()
+    check(not H.state.scan and log().ok == false and log().result:find("list changed"), "list changed: " .. tostring(log().result))
+    check(not Pr.Entry(2589), "still nothing recorded for the unread item")
+    C_AuctionHouse = nil
+end

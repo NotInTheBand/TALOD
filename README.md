@@ -159,22 +159,28 @@ click by you.
   your target and mouseover, and from `/who` searches (one per click, at most one every 5 seconds). A search covers your whole
   level range; only when the game's answer is full (about 50 players) do the next clicks search smaller
   level ranges to reach the rest. Levels go up to the top level the game reports (read live, so they follow when Forever raises its cap).
-  One click whispers your message and sends the guild invite. Right-click: never offer them again.
+  One click whispers your message and sends the guild invite (on WoW Forever: whispers only, see below). Right-click: never offer them again.
   Filter by name, level range, class and name alphabet (hide names written in alphabets you can't
   read). A **mini recruit window** with the same list can stay on
   your screen while you play (off by default: turn it on from the Recruit tab or `/talod guild mini`).
-- **Delayed invite** (on by default): the first click sends your message, the second click, once the
+- **On WoW Forever you invite, TALOD whispers.** The game accepts a guild invite only when you type it, so a
+  click on a player sends your message and puts them in the Invited tab as *asked*. When they answer, the row
+  turns *replied: invite?* and goes to the top; click it (or the **/ginvite** button in Replies) and TALOD shows
+  `/ginvite First Surname` to copy: press Enter, paste, press Enter. TALOD counts the player as invited when the
+  game says "You have invited...". The **Next whisper** button and the recruit key send the next message.
+- **Delayed invite** (Classic Era, on by default): the first click sends your message, the second click, once the
   row turns red 10 seconds later, sends the invite, so they have read it first. Invites still owed wait
   in one queue, oldest first; the **Next invite** button sends the next one.
-- **Recruit key:** right-click Next invite (or `/talod guild key`) and press any key or mouse button.
-  One press = one step: the next queued invite, else a /who, else the next whisper.
+- **Recruit key:** right-click Next invite (Next whisper on Forever; or `/talod guild key`) and press any key or mouse button.
+  One press = one step: the next queued invite, else a /who, else the next whisper (Forever: the next whisper, else a /who).
 - **Hands Free** (off by default): a click on the open world, or a press of your move and jump keys,
   counts as one click on the list, at most one step a second and never in combat. The keys still move
-  you. `/talod guild handsfree why` shows what it did with your last clicks.
+  you. On WoW Forever it whispers and searches only.
+  `/talod guild handsfree why` shows what it did with your last clicks.
 - Write your own whisper messages, or use the default. `{name}`, `{guild}`, `{class}`, `{level}`,
   `{zone}` and `{me}` are filled in.
 - **Invited:** who you invited and what happened: joined, declined, offline, already in a guild,
-  replied to your whisper. Nobody is offered twice within a week (you can change that).
+  replied to your whisper (on Forever: asked, replied, invited, joined). Nobody is offered twice within a week (you can change that).
 - **Replies:** whispers with the players you invited, in one place, with a reply box. A small notice
   shows when one answers. Your opening whispers, the "You have invited..." lines and answers you
   haven't written back to stay out of your chat window, so mass recruiting doesn't flood it. Once you
@@ -182,7 +188,7 @@ click by you.
   conversation is tagged Joined, Declined, Invited or Blocked, a search box finds words said in them, and
   buttons send a party invite, a Battle.net friend request or open the game's report window for that player.
 - **Recruiters:** who invited whom, from the game's guild log: how many joined, are still here, left
-  within a week, or joined more than once. Hover a name for the list.
+  within a week, or joined more than once. Hover a name for the list. Players you only whispered are not counted as invited.
 - **Roster:** members by rank with last online, and who has been offline long enough to count as inactive.
   Right-click a member to move them to another rank (one pick, one change; a rank that gives new rights
   says so in red).
@@ -299,7 +305,7 @@ Every option is in the settings window; slash commands are a shortcut.
 | `/talod fish goals` · `zone` · `gear` · `safety [on\|off]` | Goals tab, zone fishing level, your gear and lures, fishing safety |
 | `/talod guild [recruit\|invited\|replies\|roster\|recruiters\|promote\|log\|members\|sharing]` | Guild window |
 | `/talod guild mini` | Show / hide the mini recruit window |
-| `/talod guild who` · `/talod guild invite [name]` | One /who search for players without a guild · whisper + invite one player (or your target) |
+| `/talod guild who` · `/talod guild invite [name]` | One /who search for players without a guild · whisper + invite one player (or your target); on Forever the whisper only |
 | `/talod guild next` · `/talod guild key` | One recruit step (for macros) · set your recruit key |
 | `/talod guild handsfree [why]` | Hands Free on / off · what it did with your last clicks |
 | `/talod guild check` · `/talod pace [reset]` | Your invites of the last hour · the whisper limit learned from the game |

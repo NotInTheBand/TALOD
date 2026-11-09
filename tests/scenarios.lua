@@ -749,7 +749,8 @@ scenarios.enhance_view = function()
     local bracer = ns.Enhance.ForSlot(9)
     local minor
     for _, e in ipairs(bracer) do if e.spell == 7418 then minor = e end end
-    check(minor and minor.name == "Bracer - Minor Health", "bracer enchant listed")
+    -- Forever's name for Classic's "Minor Health" (and its reagent, Mote of Magic).
+    check(minor and minor.name == "Bracer - Inferior Stamina", "bracer enchant listed")
     check(ns.Enhance.Fits(minor, 9, MOCK.equipped[9], 20, 20), "fits bracers")
     local spike
     for _, e in ipairs(ns.Enhance.ForSlot(17)) do if e.name == "Iron Shield Spike" then spike = e end end
@@ -2600,7 +2601,10 @@ scenarios.data_integrity = function()
             if r.creates and not (type(r.makes) == "number" and r.makes >= 1) then Bad(sid .. " makes " .. tostring(r.makes)) end
             local c = r.colors
             if c and not (c[1] <= c[2] and c[2] <= c[3] and c[3] <= c[4]) then Bad(sid .. " colors") end
-            if sid >= 40000 then Bad(sid .. " is not a vanilla spell ID") end
+            -- Forever re-numbered a few recipes; each still names its vanilla ID.
+            local vanilla = r.forever and r.classic or sid
+            if vanilla >= 40000 then Bad(sid .. " is not a vanilla spell ID") end
+            if r.forever and data.recipes[r.classic] then Bad(sid .. " and its vanilla ID " .. r.classic .. " both listed") end
             for _, rg in ipairs(r.reagents or {}) do
                 if not (type(rg[2]) == "number" and rg[2] > 0) then Bad(sid .. " reagent count") end
             end

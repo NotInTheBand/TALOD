@@ -43,7 +43,7 @@ local JUMP_DAYS = 14          -- two looks this close: a jump between them count
 local SELF_EVERY = 6 * 3600   -- an unchanged self look is saved again after this
 local GOLD = 10000
 
-Audit.DATA_BUILD = "1.60.1.70124"
+Audit.DATA_BUILD = "1.60.1.70862"
 Audit.DISCLAIMER = "Figures may be incomplete or out of date, and counters can reset. A flag is a reason to look, not proof of anything."
 
 -- Statistic IDs by section. Audit.FIELDS lists them as { key, statistic ID,

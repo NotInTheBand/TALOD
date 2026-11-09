@@ -98,7 +98,7 @@ function Market.MarkOverpriced(points)
 end
 
 -- { p, t, n, a, looks, usual, usualBefore, low, high, highAll, over, overNow,
---   prev, trend, avgN, supplyTrend, points }
+--   prev, trend, avgN, supplyTrend }
 -- usual: median of the looks not marked overpriced; usualBefore: the same
 -- from the looks before the latest (today's price must not set the yardstick
 -- it is measured with; nil with one look); low / high: of the kept looks
@@ -107,6 +107,8 @@ end
 -- Memoized per item on what the entry holds (a look in the same session
 -- changes p / t / n / a in place; a new look adds to h): the Prices and
 -- Deals tabs ask for every item on each redraw. Callers must not change it.
+-- No looks are kept here (a full scan is thousands of items, up to 31 looks
+-- each): Market.Points(id) decodes one item's.
 function Market.Stats(id)
     local e = ns.Prices.Entry(id)
     if not e then return nil end
@@ -116,39 +118,96 @@ function Market.Stats(id)
     return ns.Data.Memo("market:stats:" .. id, key, function() return Market.BuildStats(e) end)
 end
 
-function Market.BuildStats(e)
-    -- Prices.Looks hands out new tables: they are the points (the warm-up
-    -- builds this for every item seen, so no copies).
-    local points = ns.Prices.Looks(e)
-    for _, x in ipairs(points) do x.c, x.b = nil, x.b and true or nil end
-    points[#points + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, b = e.b and true or nil }
-    -- The earlier looks on their own first (MarkOverpriced clears and redoes
-    -- the marks, so the same tables serve both).
-    local usualBefore
-    if #points > 1 then
-        local before = {}
-        for i = 1, #points - 1 do before[i] = points[i] end
-        usualBefore = Market.MarkOverpriced(before)
+-- Scratch arrays for the walk over every item: the looks as columns and the
+-- lists the medians sort. Nothing here yields (no Data.Step between fill and
+-- use), so one set serves every build.
+local cols = { t = {}, p = {}, n = {}, a = {}, b = {} }
+local over = {}
+local pool = { all = { len = 0 }, exact = { len = 0 }, kept = { len = 0 } }
+
+local function Clear(list)
+    for i = list.len, 1, -1 do list[i] = nil end
+    list.len = 0
+end
+
+local function Push(list, v)
+    local n = list.len + 1
+    list[n], list.len = v, n
+end
+
+-- Median of a scratch list (sorted in place), as Median above.
+local function MedianOfList(list)
+    local n = list.len
+    if n == 0 then return nil end
+    table.sort(list)
+    local m = math.floor((n + 1) / 2)
+    return n % 2 == 1 and list[m] or (list[m] + list[m + 1]) / 2
+end
+
+-- MarkOverpriced over the first n entries of the columns: over[i] = true for
+-- an overpriced look; returns the usual price of the rest, the yardstick and
+-- how many were marked.
+local function MarkColumns(P, B, n)
+    local all, exact, kept = pool.all, pool.exact, pool.kept
+    Clear(all) Clear(exact) Clear(kept)
+    for i = 1, n do
+        Push(all, P[i])
+        if not B[i] then Push(exact, P[i]) end
     end
-    local usual, _, over = Market.MarkOverpriced(points)
-    local low, high, highAll, sumN, countN = nil, nil, nil, 0, 0
-    for _, pt in ipairs(points) do
-        if not pt.over then
-            low = (not low or pt.p < low) and pt.p or low
-            high = (not high or pt.p > high) and pt.p or high
+    local base = MedianOfList(exact.len >= 2 and exact or all)
+    local marked = 0
+    for i = 1, n do
+        if n >= OUTLIER_LOOKS and base and P[i] > base * OUTLIER_FACTOR then
+            over[i], marked = true, marked + 1
+        else
+            over[i] = false
+            Push(kept, P[i])
         end
-        highAll = (not highAll or pt.p > highAll) and pt.p or highAll
-        if type(pt.n) == "number" and pt.n > 0 then sumN, countN = sumN + pt.n, countN + 1 end
+    end
+    return MedianOfList(kept), base, marked
+end
+
+function Market.BuildStats(e)
+    local c = ns.Prices.LookColumns(e, cols)
+    local T, P, N, A, B = c.t, c.p, c.n, c.a, c.b
+    local n = c.count + 1
+    T[n], P[n], N[n], A[n], B[n] = e.t, e.p, e.n, e.a, e.b and true or false
+    -- The earlier looks on their own first (the marks are redone for all of them).
+    local usualBefore
+    if n > 1 then usualBefore = MarkColumns(P, B, n - 1) end
+    local usual, _, overCount = MarkColumns(P, B, n)
+    local low, high, highAll, sumN, countN = nil, nil, nil, 0, 0
+    for i = 1, n do
+        local p = P[i]
+        if not over[i] then
+            low = (not low or p < low) and p or low
+            high = (not high or p > high) and p or high
+        end
+        highAll = (not highAll or p > highAll) and p or highAll
+        local x = N[i]
+        if type(x) == "number" and x > 0 then sumN, countN = sumN + x, countN + 1 end
     end
     local avgN = countN > 0 and sumN / countN or nil
     return {
-        p = e.p, t = e.t, n = e.n, a = e.a, looks = #points, usual = usual, usualBefore = usualBefore,
-        low = low, high = high, highAll = highAll, over = over, overNow = points[#points].over or false,
-        prev = #points > 1 and points[#points - 1].p or nil,
-        trend = (#points > 1 and usual and usual > 0) and (e.p - usual) / usual or nil,
+        p = e.p, t = e.t, n = e.n, a = e.a, looks = n, usual = usual, usualBefore = usualBefore,
+        low = low, high = high, highAll = highAll, over = overCount, overNow = over[n] or false,
+        prev = n > 1 and P[n - 1] or nil,
+        trend = (n > 1 and usual and usual > 0) and (e.p - usual) / usual or nil,
         avgN = avgN, supplyTrend = (countN > 1 and avgN and avgN > 0 and e.n) and (e.n - avgN) / avgN or nil,
-        points = points,
     }
+end
+
+-- One item's looks, the latest included, as tables with the overpriced ones
+-- marked (pt.over): { t, p, n, a, b } oldest first. New tables each call
+-- (the Market window's "Every look" rows); nil without an entry.
+function Market.Points(id)
+    local e = ns.Prices.Entry(id)
+    if not e then return nil end
+    local points = ns.Prices.Looks(e)
+    for _, x in ipairs(points) do x.c, x.b = nil, x.b and true or nil end
+    points[#points + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, b = e.b and true or nil }
+    Market.MarkOverpriced(points)
+    return points
 end
 
 -- The price to reckon with when selling: the lowest at your last look,
@@ -238,6 +297,8 @@ end
 local function SalesIndex()
     return ns.Data.Memo("market:sales", ns.Data.Key("economy"), Market.BuildSalesIndex)
 end
+
+function Market.SalesIndex() return SalesIndex() end
 
 function Market.BuildSalesIndex()
     local salesIndex = { byID = {}, byName = {} }
@@ -465,6 +526,134 @@ function Market.Movement(id)
     return { key = key, label = m.label, r = m.r, g = m.g, b = m.b, hex = m.hex, source = source, sales = sales, market = market }
 end
 
+-- Shared { key, hex, label } per verdict: what a list keeps of a movement.
+local MOVE_BRIEF = {}
+for key, m in pairs(MOVE) do MOVE_BRIEF[key] = { key = key, hex = m.hex, label = m.label } end
+Market.MOVE_BRIEF = MOVE_BRIEF
+
+-- Your sell rate, the way AddSale / FinishSales count it, without the tables:
+-- returns auctions ended, auctions sold, weighted rate (nil under
+-- SELL_MIN_ENDED ended).
+local NO_SALES = {}
+local function SaleTally(byID, byName, now)
+    local sold, failed, wSold, wEnded = 0, 0, 0, 0
+    for pass = 1, 2 do
+        local list
+        if pass == 1 then list = byID else list = byName end
+        for _, a in ipairs(list or NO_SALES) do
+            local status = a.status
+            if status == "sold" or status == "expired" or status == "cancelled" then
+                local days = math.max(0, (now - (a.closedAt or a.ended or a.t or now)) / 86400)
+                local w = 0.5 ^ (days / HALF_LIFE_DAYS)
+                wEnded = wEnded + w
+                if status == "sold" then wSold = wSold + w sold = sold + 1 else failed = failed + 1 end
+            end
+        end
+    end
+    local ended = sold + failed
+    return ended, sold, (ended >= SELL_MIN_ENDED and wEnded > 0) and wSold / wEnded or nil
+end
+
+local dayList, dayN = {}, {}
+
+-- Auctions ended, sold and the weighted sell rate of one item (the numbers of
+-- Market.MySales without its tables); `index` as for MoveKey.
+function Market.SaleCounts(id, index)
+    index = index or SalesIndex()
+    local byName
+    if next(index.byName) then
+        local name = Market.ItemInfo(id)
+        byName = name and index.byName[name] or nil
+    end
+    return SaleTally(index.byID[id], byName, time())
+end
+
+-- Market.MarketMovement's turnover / stuck from the looks as columns:
+-- returns turnover (nil: no evidence at all), stuck. Same pairs, same daily
+-- fallback, no tables per look or per day.
+local function MarketTurnover(e)
+    local c = ns.Prices.LookColumns(e, cols)
+    local T, N = c.t, c.n
+    local n = c.count + 1
+    T[n], N[n] = e.t, e.n
+    local gone, span, pairsN = 0, 0, 0
+    for i = 2, n do
+        local dt = T[i] - T[i - 1]
+        if dt >= PAIR_MIN and dt <= PAIR_MAX and type(N[i - 1]) == "number" and type(N[i]) == "number" then
+            gone = gone + math.max(0, N[i - 1] - N[i])
+            span, pairsN = span + dt, pairsN + 1
+        end
+    end
+    if span < MOVE_MIN_SPAN then
+        -- The daily summary merged with the looks: most units listed per day.
+        local days = 0
+        if type(e.d) == "string" then
+            for day, _, _, units in e.d:gmatch("(%d+):(%d+):(%d+):(%d+)") do
+                day = tonumber(day)
+                if dayN[day] == nil then days = days + 1 dayList[days] = day end
+                dayN[day] = tonumber(units)
+            end
+        end
+        for i = 1, n do
+            local day = math.floor(T[i] / 86400)
+            local x = dayN[day]
+            if x == nil then days = days + 1 dayList[days] = day dayN[day] = N[i] or 0
+            else dayN[day] = math.max(x, N[i] or 0) end
+        end
+        for i = #dayList, days + 1, -1 do dayList[i] = nil end
+        table.sort(dayList)
+        gone, span, pairsN = 0, 0, 0
+        for i = 2, days do
+            if dayList[i] - dayList[i - 1] == 1 then
+                gone = gone + math.max(0, (dayN[dayList[i - 1]] or 0) - (dayN[dayList[i]] or 0))
+                span, pairsN = span + 86400, pairsN + 1
+            end
+        end
+        for i = 1, days do dayN[dayList[i]] = nil end
+    end
+    if pairsN == 0 or span < MOVE_MIN_SPAN then return nil end
+    local listed, nListed = 0, 0
+    for i = 1, n do
+        local x = N[i]
+        if type(x) == "number" and x > 0 then listed, nListed = listed + x, nListed + 1 end
+    end
+    local avgListed = nListed > 0 and listed / nListed or 0
+    local gonePerDay = gone / (span / 86400)
+    return avgListed > 0 and gonePerDay / avgListed or false, gone == 0 and span >= MOVE_DEAD_SPAN
+end
+
+-- Market.Movement(id)'s verdict (key, hex, label) without its sales and
+-- market tables: what a list of thousands keeps. `index` (optional) is the
+-- sales index when the caller has it (a walk reads it once).
+function Market.MoveKey(id, index)
+    local A = ns.Archive
+    if A and A.Loaded and A.Loaded() then
+        -- Archived looks join the history (sorted by time): the full path.
+        local mv = Market.Movement(id)
+        local m = MOVE_BRIEF[mv.key]
+        return m.key, m.hex, m.label
+    end
+    local ended, sold, rate = Market.SaleCounts(id, index)
+    local key
+    if ended >= SELL_MIN_ENDED then
+        if sold == 0 then key = "dead"
+        elseif (rate or 0) >= 0.75 then key = "fast"
+        elseif (rate or 0) >= 0.4 then key = "moves"
+        else key = "slow" end
+    else
+        local e = ns.Prices.Entry(id)
+        local turnover, stuck
+        if e then turnover, stuck = MarketTurnover(e) end
+        if turnover == nil then key = "unknown"
+        elseif stuck then key = "dead"
+        elseif (turnover or 0) >= MOVE_FAST then key = "fast"
+        elseif (turnover or 0) >= MOVE_SLOW then key = "moves"
+        else key = "slow" end
+    end
+    local m = MOVE_BRIEF[key]
+    return m.key, m.hex, m.label
+end
+
 -- "  · slow" / "  · doesn't sell" for lists; "" when it moves or is unknown.
 function Market.MoveTag(id)
     local mv = Market.Movement(id)
@@ -537,23 +726,31 @@ end
 
 -- Materials (bought at the best known prices) against what the product
 -- sells for on the AH after the cut. { cost, value, profit, priced, seen }:
--- priced false when the product has no auction price; seen = its look's time.
+-- value nil when the product has no auction price; seen = its look's time.
+-- A material nobody has a price for makes the cost unknown: cost is then the
+-- priced part only, unknown = true, and there is no profit (priced false),
+-- never a guess shown as a number.
 function Market.CraftProfit(r)
     local P = ns.Professions
-    local cost, guessed = 0, false
+    local cost, guessed, unknown = 0, false, false
     for _, rg in ipairs(r.reagents or {}) do
         local unit, src = P.ItemPrice(rg[1])
-        if src == "ah" or src == "unknown" then guessed = true end
-        cost = cost + rg[2] * unit
+        if src == "unknown" then
+            unknown = true
+        else
+            if src == "ah" then guessed = true end
+            cost = cost + rg[2] * unit
+        end
     end
-    local out = { cost = cost, guessed = guessed }
+    local out = { cost = cost, guessed = guessed, unknown = unknown or nil }
     if r.creates then
         local p, t, src = ns.Prices.Get(r.creates)
         if p then
             -- After the cut and your sell rate for it (Market.SaleValue).
             local _, _, info = Market.SaleValue(r.creates)
             out.value = (info.expected or Market.Net(p)) * (r.makes or 1)
-            out.profit, out.priced, out.seen, out.seenSrc, out.rate, out.hard = out.value - cost, true, t, src, info.rate, info.hard
+            out.seen, out.seenSrc, out.rate, out.hard = t, src, info.rate, info.hard
+            if not unknown then out.profit, out.priced = out.value - cost, true end
         end
         local _, _, _, sell = Market.ItemInfo(r.creates)
         out.vendor = sell and sell * (r.makes or 1) or nil
@@ -685,8 +882,12 @@ end
 -- { id, s (stats), gain } where gain = resell at the usual price after the
 -- cut, minus the price now, per unit.
 function Market.Deals()
-    local out = {}
-    for id in pairs(ns.Prices.All()) do
+    local out, ids = {}, {}
+    -- The keys first: a paused walk (Data.Step) must not be inside `pairs`.
+    for id in pairs(ns.Prices.All()) do ids[#ids + 1] = id end
+    for i = 1, #ids do
+        if i % 64 == 0 then ns.Data.Step() end
+        local id = ids[i]
         local s = Market.Stats(id)
         -- "Usual" from the earlier looks: today's low price must not drag
         -- down the yardstick it is compared with.

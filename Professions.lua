@@ -192,7 +192,10 @@ end
 function Prof.HowToGet(id)
     local it = DATA.items[id]
     if not it then return "drop or Auction House" end
-    if it.vendor then return "vendor " .. Prof.Money(it.vendor) end
+    -- Say what the plan priced: a vendor item seen cheaper at the Auction
+    -- House is costed (and so shown) at the AH.
+    local _, priced = Prof.ItemPrice(id)
+    if it.vendor and priced == "vendor" then return "vendor " .. Prof.Money(it.vendor) end
     if it.made and it.made[1] then
         local r = DATA.recipes[it.made[1]]
         if r then return string.format("made: %s %d", r.prof, r.skill) end
@@ -692,9 +695,10 @@ function Prof.PlanFor(charKey, prof, target)
     local from, source = Prof.Start(charKey, prof)
     target = target or Prof.Target(prof, from)
     -- Your trained maximum only counts from your read rank; a hand start
-    -- past it means you trained since.
+    -- past it means you trained since. At the cap (75 / 75) the next step is
+    -- training: the maximum stays.
     local max = cur and cur.max or nil
-    if max and from >= max then max = nil end
+    if max and from > max then max = nil end
     local opts = {
         max = max,
         known = Prof.Known(charKey, prof),
@@ -715,6 +719,16 @@ function Prof.PlanFor(charKey, prof, target)
         from, source, target, tostring(max), tostring(opts.patterns), tostring(opts.resale), tostring(opts.level),
         table.concat(excluded, ",") }, "|")
     return ns.Data.Memo("prof:plan:" .. tostring(charKey) .. ":" .. prof, key, function()
+        -- The window list is only filled once the profession window was read:
+        -- for you, the game's own spell list counts too (CraftTrack does the same).
+        if charKey == me then
+            local known = {}
+            for name, on in pairs(opts.known or {}) do known[name] = on end
+            for _, r in pairs(DATA.recipes) do
+                if r.prof == prof and not known[r.name] and Prof.KnowsSpell(r) then known[r.name] = true end
+            end
+            opts.known = known
+        end
         local plan = Prof.Plan(prof, from, target, opts)
         plan.source, plan.rank, plan.max = source, cur and cur.rank or nil, cur and cur.max or nil
         return plan

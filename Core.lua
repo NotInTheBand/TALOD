@@ -422,18 +422,21 @@ end
 -- tick only (and only in the same frame, should EndTickReads ever be
 -- skipped), never across events, where the target or a plate can change.
 local tickActive, tickSerial, tickAt = false, 0, nil
-local factsCache, unitCache = {}, {}
+-- Per unit: the facts (false = none) and the reasons, in flat maps (a table
+-- per unit per tick was garbage four times a second).
+local factsCache, factsWhy, unitCache, unitWhy, unitKey = {}, {}, {}, {}, {}
+local function WipeReads()
+    wipe(factsCache) wipe(factsWhy) wipe(unitCache) wipe(unitWhy) wipe(unitKey)
+end
 
 function ns.BeginTickReads()
     tickSerial, tickActive, tickAt = tickSerial + 1, true, GetTime()
-    wipe(factsCache)
-    wipe(unitCache)
+    WipeReads()
 end
 
 function ns.EndTickReads()
     tickActive = false
-    wipe(factsCache)
-    wipe(unitCache)
+    WipeReads()
 end
 
 -- The running tick's number while its reads are shared, else nil.
@@ -500,12 +503,13 @@ end
 
 function ns.ReadPlayerFacts(unit, known)
     if not ns.TickReads() then return ReadFacts(unit, known) end
-    local c = factsCache[unit]
-    if not c then
-        c = { ReadFacts(unit, known) }
-        factsCache[unit] = c
+    local f = factsCache[unit]
+    if f == nil then
+        local why
+        f, why = ReadFacts(unit, known)
+        factsCache[unit], factsWhy[unit] = f or false, why
     end
-    return c[1], c[2]
+    return f or nil, factsWhy[unit]
 end
 
 -- Reads a unit as an enemy player. Returns facts, or nil and a reason (those
@@ -529,12 +533,13 @@ end
 
 function ns.ReadPlayerUnit(unit, known)
     if not ns.TickReads() then return ReadUnit(unit, known) end
-    local c = unitCache[unit]
-    if not c then
-        c = { ReadUnit(unit, known) }
-        unitCache[unit] = c
+    local f = unitCache[unit]
+    if f == nil then
+        local why, key
+        f, why, key = ReadUnit(unit, known)
+        unitCache[unit], unitWhy[unit], unitKey[unit] = f or false, why, key
     end
-    return c[1], c[2], c[3]
+    return f or nil, unitWhy[unit], unitKey[unit]
 end
 
 ---------------------------------------------------------------------------

@@ -392,7 +392,8 @@ local function OnScanData(kind)
             return v[3], v[10], v[17], v[1], v[14], Bid(v, type(band) == "number" and band + 1 or nil, "modern")
         end, 0, ScanDone, ReadFailed)
     else
-        Prices.fullScanPending = nil
+        -- fullScanPending stays set until ScanDone / ReadFailed: the game fires
+        -- the list event again while this read runs (Prices must not read it).
         Prices.ReadBulk(function() return S.Call(GetNumAuctionItems, "list") end, function(i)
             local v = { S.CallMulti(17, GetAuctionItemInfo, "list", i) }
             local band = type(GetAuctionItemTimeLeft) == "function" and S.Call(GetAuctionItemTimeLeft, "list", i) or nil
@@ -624,6 +625,13 @@ local function OnEvent(event, ...)
             Helper.LogScan(false, "the Auction House window closed before the answer")
             Unmute()
             Prices.fullScanPending, state.scan = nil, nil
+        end
+        -- Closed while the answer was being read: the rest of the list is gone,
+        -- so what was read is not the whole Auction House (no supply, no bids).
+        if state.scan and state.scan.reading then
+            local done, total = Prices.BulkProgress()
+            Prices.CancelBulk()
+            ReadFailed(string.format("the Auction House window closed during the read (%d / %d)", done or 0, total or 0))
         end
     elseif event == "AUCTION_ITEM_LIST_UPDATE" then
         OnScanData("legacy")

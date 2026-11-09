@@ -173,6 +173,14 @@ local function RunSlice()
             elseif coroutine.status(job.thread) == "dead" then
                 Finish(job)
                 if job.done then ns.SafeCall(job.done) end
+                -- The last one: redraw now. Waiting for the next frame's
+                -- slice left a moment where nothing was busy and the rebuilt
+                -- data not yet shown.
+                if not jobs[1] then
+                    driver:Hide()
+                    Landed()
+                    return
+                end
             end
         end
         local t = Clock()

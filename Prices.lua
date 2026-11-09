@@ -42,6 +42,7 @@ ns.Prices = Prices
 local SESSION = 600          -- sightings this close are one look at the AH: keep the lowest
 local MAX_HISTORY = 30
 local MAX_DAYS = 60          -- days kept in an entry's daily summary
+local find, byte = string.find, string.byte
 local MAX_TIERS = 30         -- price tiers kept per ladder (a full scan writes thousands of ladders)
 
 local function db() return ns.DB() end
@@ -134,6 +135,49 @@ function Prices.Looks(e)
         end
     end
     return out
+end
+
+-- The looks of an entry as parallel arrays, no table per look (a walk over
+-- thousands of items reads them all): { t, p, n, a, b, count }; b[i] is true
+-- for a browse-only look, n / a hold nil where the look did not say. Same
+-- looks, same order, same skipping of broken ones as Prices.Looks. `into`
+-- (optional) is refilled in place: a caller reading item after item keeps one
+-- and must finish with the result before the next call.
+function Prices.LookColumns(e, into)
+    local c = into or {}
+    local T, P, N, A, B = c.t or {}, c.p or {}, c.n or {}, c.a or {}, c.b or {}
+    c.t, c.p, c.n, c.a, c.b = T, P, N, A, B
+    local count = 0
+    local h = e and e.h
+    if type(h) == "string" then
+        -- One find per look, anchored where the last one ended; a segment that
+        -- is not exactly six fields is skipped to the next comma.
+        local pos, len = 1, #h
+        while pos <= len do
+            local first, last, t, p, n, a, _, b = find(h, "^([^:,]*):([^:,]*):([^:,]*):([^:,]*):([^:,]*):([^:,]*)", pos)
+            if first and (last == len or byte(h, last + 1) == 44) then
+                t, p = tonumber(t), tonumber(p)
+                if t and p then
+                    count = count + 1
+                    T[count], P[count], N[count], A[count], B[count] = t, p, tonumber(n), tonumber(a), tonumber(b) ~= nil
+                end
+                pos = last + 2
+            else
+                local comma = find(h, ",", pos, true)
+                if not comma then break end
+                pos = comma + 1
+            end
+        end
+    elseif type(h) == "table" then
+        for _, x in ipairs(h) do
+            if type(x) == "table" and x[1] and x[2] then
+                count = count + 1
+                T[count], P[count], N[count], A[count], B[count] = x[1], x[2], x[3], x[4], x[6] and true or false
+            end
+        end
+    end
+    c.count = count
+    return c
 end
 
 -- The string form of a list of looks (nil when empty).
@@ -394,6 +438,30 @@ function Prices.Ladder(id)
     return out
 end
 
+-- Prices.Ladder as columns, no table per tier (the desk reads thousands of
+-- ladders): { t, u, q, m, count (tiers), units, auctions, sellers, top,
+-- topName, mine, partial, bidOnly, more } or nil. `into` is refilled in place
+-- like Prices.LookColumns': finish with the result before the next call.
+function Prices.LadderColumns(id, into)
+    local store = Ladders(false)
+    local e = store and store[id]
+    if type(e) ~= "table" or type(e.l) ~= "string" then return nil end
+    local c = into or { u = {}, q = {}, m = {} }
+    local U, Q, M = c.u, c.q, c.m
+    local count, units = 0, 0
+    for u, q, m in e.l:gmatch("(%d+):(%d+):?(%d*)") do
+        count = count + 1
+        q = tonumber(q)
+        U[count], Q[count], M[count] = tonumber(u), q, tonumber(m) or 0
+        units = units + q
+    end
+    c.count = count
+    c.t, c.auctions, c.sellers, c.top, c.topName = e.t, e.a, e.s, e.top, e.tn
+    c.mine, c.partial, c.bidOnly, c.more = e.my or 0, e.part and true or false, e.bid or 0, e.more or 0
+    c.units = units + c.more
+    return c
+end
+
 function Prices.AllLadders() return Ladders(false) or {} end
 
 ---------------------------------------------------------------------------
@@ -573,12 +641,31 @@ end
 ---------------------------------------------------------------------------
 -- Reading the Auction House
 ---------------------------------------------------------------------------
+-- The last legacy query (any sender: the game's window, the AH helper, another
+-- addon), from a hook on QueryAuctionItems: { text, page, exact, all, at }.
+-- Pages of one exact search add up to one ladder: { text, id, rows, at }.
+local PAGE_SIZE = 50
+local lastQuery, pages
+local function HookQueries()
+    if type(QueryAuctionItems) ~= "function" or type(hooksecurefunc) ~= "function" then return end
+    hooksecurefunc("QueryAuctionItems", function(text, _, _, page, _, _, getAll, exact)
+        lastQuery = { text = type(text) == "string" and text or "", page = type(page) == "number" and page or 0,
+            exact = exact and true or false, all = getAll and true or false, at = GetTime() }
+    end)
+end
+Prices.HookQueries = HookQueries
+function Prices.LastQuery() return lastQuery end
+
 -- Legacy list: up to 50 auctions per page; the lowest buyout per unit for
 -- each item on the page.
 local function ReadLegacyList()
     if type(GetNumAuctionItems) ~= "function" or type(GetAuctionItemInfo) ~= "function" then return 0 end
     local n, total = S.CallMulti(2, GetNumAuctionItems, "list")
     if type(n) ~= "number" or n <= 0 then return 0 end
+    -- A full scan's list (getAll): the AH helper reads it in chunks, and the
+    -- game fires this event again for it as item info loads, during and after
+    -- that read. Reading it here would read every row at once.
+    if (lastQuery and lastQuery.all) or n > PAGE_SIZE or Prices.Bulk() then return 0 end
     local low, qty, auctions, names, rows, bids = {}, {}, {}, {}, {}, {}
     local only
     local me = Prices.PlayerName()
@@ -607,10 +694,24 @@ local function ReadLegacyList()
             end
         end
     end
-    -- A search for one item: the total covers every page (the units only this one).
-    if only and type(total) == "number" and total > n then auctions[only] = total end
-    -- One item on the page (an exact search): its ladder; more pages = partial.
-    if only then Prices.RecordLadder(only, rows, type(total) == "number" and total > n) end
+    -- One item on the page is that item's whole search only when the search
+    -- had a single page or asked for that item by name: a broad search ("cloth")
+    -- can have a page of Linen Cloth alone, and its total counts every item.
+    local more = type(total) == "number" and total > n
+    local q = lastQuery
+    local named = q and only and (q.exact or (names[only] and q.text:lower() == tostring(names[only]):lower()))
+    if only and (named or not more) then
+        if more then auctions[only] = total end
+        -- Page by page: the ladder adds this page to the earlier ones of the same search.
+        local page = q and q.page or 0
+        if page > 0 and pages and pages.id == only and pages.text == (q and q.text) and GetTime() - pages.at < 300 then
+            for _, r in ipairs(rows) do pages.rows[#pages.rows + 1] = r end
+            pages.at = GetTime()
+        else
+            pages = { id = only, text = q and q.text, rows = rows, at = GetTime() }
+        end
+        Prices.RecordLadder(only, pages.rows, more and #pages.rows < total)
+    end
     -- Every item on the page: its bids (the next page of the search adds to them).
     local now = time()
     for id, b in pairs(bids) do Prices.RecordBids(id, b, "legacy", now, true) end
@@ -646,6 +747,14 @@ function Prices.ReadBulk(count, row, first, onDone, onFail)
         local b = bulk
         if not b then return end
         b.clock = GetTime()
+        -- The list changed under the read (window closed, a new query): what
+        -- was read is not the whole Auction House. Stop; never record it as one.
+        local still = count()
+        if still ~= b.total then
+            bulk = nil
+            if onFail then onFail(string.format("the list changed during the read (%d / %d)", b.i - first, b.total)) end
+            return
+        end
         local stop = math.min(b.last, b.i + BULK_STEP - 1)
         for i = b.i, stop do
             local cnt, buyout, id, name, owner, bid = row(i)
@@ -1001,7 +1110,7 @@ ns.Cleanup.Add({ id = "priceUnseen", label = "Items not seen on the Auction Hous
 
 ns.RegisterModule("Prices", {
     defaults = { auctionPrices = true, prices = {}, ladders = {}, ahOwned = {}, ahBids = {} },
-    init = function() Prices.PruneBids() end,
+    init = function() Prices.PruneBids() HookQueries() end,
     events = { "AUCTION_ITEM_LIST_UPDATE", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
         "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED", "AUCTION_OWNED_LIST_UPDATE", "OWNED_AUCTIONS_UPDATED" },
     onEvent = OnEvent,

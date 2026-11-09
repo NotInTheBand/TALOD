@@ -181,13 +181,12 @@ def report(db, archive, path):
     lines.append(f"Saved data, largest first (about {sum(r[0] for r in rows):.1f} MB of game memory):")
     for mb, key, tables in rows[:15]:
         lines.append(f"  {mb:7.2f} MB  {100 * mb / total:4.0f}%  {key}  ({tables} tables)")
-    packed = plain = 0
+    cold = live = 0
     for g in ((db.get("guild") or {}).get("guilds") or {}).values():
-        for r in (g.get("recruits") or {}).values():
-            if isinstance(r, dict):
-                packed, plain = (packed + 1, plain) if "x" in r else (packed, plain + 1)
-    if packed or plain:
-        lines.append(f"  recruit records: {packed} packed, {plain} plain")
+        cold += sum(1 for s in (g.get("cold") or {}).values() if isinstance(s, str))
+        live += sum(1 for r in (g.get("recruits") or {}).values() if isinstance(r, dict))
+    if cold or live:
+        lines.append(f"  recruit records: {cold} cold, {live} live")
     lines.append("")
     if archive is None:
         lines.append(f"Archive: no {ARCHIVE_ADDON}.lua next to it (not installed, or never loaded).")

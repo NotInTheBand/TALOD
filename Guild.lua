@@ -50,11 +50,17 @@ local MAX_LOG = 2000
 local MAX_WHISPER = 255
 
 
-Guild.DEFAULT_MESSAGES = {
+-- Classic Era sends the invite with the message; on Forever the message asks
+-- and the invite follows the answer (you type it), so it must not say one came.
+Guild.ERA_MESSAGES = {
     "Hi {name}! <{guild}> is recruiting: friendly people, help with quests and dungeons, all levels welcome. "
         .. "I just sent you an invite. Questions? Whisper me!",
     "Hey {name}, looking for a guild? <{guild}> would be glad to have you. Invite sent, accept if you like. No pressure!",
 }
+Guild.DEFAULT_MESSAGES = ns.IS_FOREVER == true and {
+    "Hi {name}! <{guild}> is recruiting: friendly people, help with quests and dungeons, all levels welcome. "
+        .. "Want an invite? Just reply and I'll send one!",
+} or Guild.ERA_MESSAGES
 
 local candidates = {}          -- [full name] = { name, full, classFile, level, race, zone, src, first, last, nilSince, nilReads, confirmed }
 local hints = {}               -- [full name] = { kind, by, rank, t } from system messages
@@ -64,6 +70,11 @@ local lastSend = -math.huge    -- GetTime of the last opener or invite that went
 local unmatched = {}           -- system lines right after a send that matched nothing (session only)
 
 local function db() return ns.DB() end
+
+-- Forever refuses every guild invite an addon sends (Outbox.GuildInvite says
+-- "typed"): there a click whispers the player, and the invite is the /ginvite
+-- you type once they answer. Classic Era keeps the one-click invite.
+Guild.WhisperFirst = ns.IS_FOREVER == true
 
 ---------------------------------------------------------------------------
 -- API lookups (C_GuildInfo on the newer engine, globals on Classic Era)
@@ -131,6 +142,29 @@ local function IsRealm(r)
     return REALM_GROUP[MyRealm()] == true and REALM_GROUP[r] == true
 end
 Guild.IsRealm = IsRealm
+
+-- Store migration (guild store v6), Forever only: the game refuses invites
+-- from addons, so a recruit whose invite was only "sent" (or still owed after
+-- its opener) was asked, not invited. Their opener stays; an invite counted
+-- but never confirmed within 7 days is taken back. Joined, declined and
+-- confirmed recruits are left alone.
+function Guild.AskedFromSent(root)
+    if not ns.IS_FOREVER or type(root) ~= "table" or type(root.guilds) ~= "table" then return end
+    local cutoff = time() - 7 * 86400
+    for _, g in pairs(root.guilds) do
+        for _, r in pairs(type(g.recruits) == "table" and g.recruits or {}) do
+            if type(r) == "table" then
+                if r.status == "inviting" or (r.status == "uninvited" and r.whisper) then
+                    r.status = "asked"
+                elseif r.status == "invited" and r.ack == false and type(r.invited) == "number" and r.invited >= cutoff then
+                    r.status = "asked"
+                    r.invites = math.max(0, (r.invites or 1) - 1)
+                    r.ack = nil
+                end
+            end
+        end
+    end
+end
 
 -- Name and realm of "Name-Realm" (realm nil when there is none).
 function Guild.Split(full)
@@ -246,9 +280,11 @@ function Guild.Data()
     root.guilds = root.guilds or {}
     local g = root.guilds[key]
     if not g then
-        g = { members = {}, log = {}, recruits = {}, rules = {}, ranks = {}, namesV = 2, chatV = 2 }
+        g = { members = {}, log = {}, recruits = {}, cold = {}, dict = {}, rules = {}, ranks = {}, namesV = 2, chatV = 2 }
         root.guilds[key] = g
     end
+    if type(g.cold) ~= "table" then g.cold = {} end
+    if type(g.dict) ~= "table" then g.dict = {} end
     if g.namesV ~= 2 then Guild.MigrateNames(g) end
     if (g.chatV or 0) < 2 then Guild.BackfillOpeners(g) end
     if not settled[key] then
@@ -267,32 +303,64 @@ function Guild.Data()
 end
 
 ---------------------------------------------------------------------------
--- Packed recruit records
+-- Cold recruit records
 ---------------------------------------------------------------------------
 -- A long recruiting run keeps every player ever invited (so they are not
--- offered again): thousands of records of about 17 fields each, the largest
--- part of the saved data. A settled record (no reply, nothing unread, not
--- touched for PACK_AFTER) keeps as real fields only what the lists, the
--- recruiter stats, re-invite days and the shared seal read (HOT); the rest
--- goes into one string `x` (Store.PackList). A metatable gives the packed
--- fields back on read, so every reader sees the same record. Writing a
--- packed field unpacks the record first (Thaw), so writes and deletions
--- always land. Unpacked again at the next login once it is settled again.
-local PACK_AFTER = 3 * 86400
-local HOT = { status = true, t = true, invited = true, by = true, level = true, classFile = true, replied = true, ignoring = true, x = true }
-local COLD = { "name", "race", "zone", "src", "first", "invites", "seq", "ack", "guid", "saidNo", "noFrom",
-    "whisper", "echo", "echoT", "unsent", "last", "chat" }
-local COLD_AT = {}
-for i, k in ipairs(COLD) do COLD_AT[k] = i end
-local CHAT_AT, ECHO_AT = COLD_AT.chat, COLD_AT.echo
-local LINE_KEY = { t = true, me = true, text = true, c = true }
-local SAME = "W"        -- a text equal to the opener (no tag starts with W)
-
+-- offered again): thousands of records, the largest part of the saved data
+-- (a busy recruiter adds about 5,000 a day). A Lua table costs ~700 bytes
+-- with this many fields whatever the text in it, so a record nobody is
+-- working on (settled: PACK_AFTER without a change, nothing unread, no
+-- invite waiting) is kept as one string in g.cold[full] (Store.PackList of
+-- Guild.COLD_FIELDS, "|" between the fields): one hash slot instead of a
+-- table. Texts that repeat (who invited, the opener) are stored once in
+-- g.dict and written as a "d<index>" tag. Readers see the same record either
+-- way: Guild.Recruit(full) hands out the live table, or a view of the cold
+-- string (decoded once, shared while in use). A write through a view first
+-- makes the record live (Thaw), so writes and deletions always land; it is
+-- packed again at a later login. Everything that changes g.cold goes through
+-- Cold.Set (counts, views and indexes stay in step).
 local St = ns.Store
 -- Long walks pause here when they run as background work (Data.lua). Only
 -- over arrays and tables the walk built itself: a pause inside pairs() over
 -- saved data could meet a key added meanwhile.
 local function Step(i) if i % 64 == 0 then ns.Data.Step() end end
+
+local WEAK_K, WEAK_V = { __mode = "k" }, { __mode = "v" }
+local SAME = "W"        -- a text equal to the opener (no tag starts with W)
+local B_D = ("d"):byte()
+local LINE_KEY = { t = true, me = true, text = true, c = true }
+-- One table: this file is near Lua 5.1's 200 locals.
+local Cold = {
+    AFTER = 3 * 86400,      -- a record untouched this long is settled
+    DICT_MAX = 200,
+    SHORT_INDEX_MAX = 20000,    -- more cold records than this: lookups by short name scan the keys
+    at = {},                -- field name -> position in the string
+    text = { by = true, whisper = true, unsent = true },    -- fields written as dictionary tags
+    -- Per guild (weak): counters, shared views, decoded dictionaries, counts.
+    ver = setmetatable({}, WEAK_K),        -- every change to g.cold
+    added = setmetatable({}, WEAK_K),      -- every string put in g.cold (ColdNames)
+    views = setmetatable({}, WEAK_K),      -- [g] = weak { [full] = view }
+    info = setmetatable({}, WEAK_K),       -- [view] = { g, full, s (string it shows), d (table it reads) }
+    dix = setmetatable({}, WEAK_K),        -- [g] = { n, map = { [text] = index } }
+    state = setmetatable({}, WEAK_K),      -- [g] = counts over g.cold, kept up to date by Set
+}
+
+-- The order of the fields in a cold string: what the lists, the recruiter
+-- stats, re-invite days and the shared seal read first, then the rest.
+Guild.COLD_FIELDS = { "status", "t", "invited", "by", "level", "classFile", "replied", "ignoring",
+    "name", "race", "zone", "src", "first", "invites", "seq", "ack", "guid", "saidNo", "noFrom",
+    "whisper", "echo", "echoT", "unsent", "last", "chat" }
+for i, k in ipairs(Guild.COLD_FIELDS) do Cold.at[k] = i end
+Cold.COUNT, Cold.ECHO, Cold.CHAT = #Guild.COLD_FIELDS, Cold.at.echo, Cold.at.chat
+
+local function Captures(n)
+    local p = {}
+    for i = 1, n do p[i] = "([^|]*)" end
+    return table.concat(p, "|")
+end
+Cold.hotPattern = "^" .. Captures(8)                -- the first eight fields in one call
+Cold.statPattern = "^([^|]*)|[^|]*|([^|]*)|([^|]*)|[^|]*|[^|]*|([^|]*)"   -- status, invited, by, replied
+Cold.allPattern = "^" .. Captures(Cold.COUNT) .. "$"
 
 local function PackChat(chat, whisper)
     if chat == nil then return "" end
@@ -323,128 +391,480 @@ local function UnpackChat(s, whisper)
     return chat
 end
 
-local function Decode(x)
-    local f = St.SplitList(x, "|")
-    local out = {}
-    for i, k in ipairs(COLD) do
-        if i ~= CHAT_AT and i ~= ECHO_AT then out[k] = St.UnpackValue(f[i] or "") end
+-- A packed value; a "d<index>" tag reads the guild's dictionary.
+local function Unp(raw, dict)
+    if raw:byte(1) == B_D then
+        local v = dict and dict[tonumber(raw:sub(2))]
+        return type(v) == "string" and v or nil
     end
-    out.echo = f[ECHO_AT] == SAME and out.whisper or St.UnpackValue(f[ECHO_AT] or "")
-    out.chat = UnpackChat(f[CHAT_AT] or "", out.whisper)
-    return out
+    return St.UnpackValue(raw)
 end
 
--- Decoded records, dropped by the next garbage collection (a list walk that
--- reads several packed fields decodes each record once, nothing is kept).
-local decoded = setmetatable({}, { __mode = "kv" })
-local function Cold(r)
-    local d = decoded[r]
-    if not d then d = Decode(rawget(r, "x")) decoded[r] = d end
-    return d
+-- The raw (still tagged) fields of a cold string, one call.
+function Cold.Fields(s)
+    local f = { s:match(Cold.allPattern) }
+    if #f == 0 then f = St.SplitList(s, "|") end
+    return f
 end
 
-local function CopyChat(chat)
-    if not chat then return nil end
+-- The whole record as a plain table.
+function Cold.Decode(s, g)
+    local f, dict = Cold.Fields(s), g and g.dict
     local out = {}
-    for i, line in ipairs(chat) do out[i] = { t = line.t, me = line.me, text = line.text, c = line.c } end
+    for i, k in ipairs(Guild.COLD_FIELDS) do
+        if i ~= Cold.ECHO and i ~= Cold.CHAT then out[k] = Unp(f[i] or "", dict) end
+    end
+    local e = f[Cold.ECHO] or ""
+    out.echo = e == SAME and out.whisper or Unp(e, dict)
+    out.chat = UnpackChat(f[Cold.CHAT] or "", out.whisper)
     return out
 end
 
--- One plain field of a packed record without decoding the rest: a list
--- reads one packed field (ack, last) of thousands of records.
-local function ColdField(x, i)
+-- status, t, invited, by, level, classFile, replied, ignoring of a cold
+-- string (nil when it is malformed): one match, no table.
+function Cold.Hot(s, g)
+    local a, b, c, d, e, f, h, i = s:match(Cold.hotPattern)
+    if not a then return nil end
+    return Unp(a), Unp(b), Unp(c), Unp(d, g and g.dict), Unp(e), Unp(f), Unp(h), Unp(i)
+end
+Guild.ColdHot = Cold.Hot
+
+-- One field of a cold string without decoding the rest (g only for the
+-- dictionary fields; the current guild when left out).
+-- The raw (tagged) field i of a cold string, by plain finds (no table).
+function Cold.Raw(s, i)
     local pos = 1
     for _ = 2, i do
-        local bar = x:find("|", pos, true)
-        if not bar then return "" end
+        local bar = s:find("|", pos, true)
+        if not bar then return nil end
         pos = bar + 1
     end
-    local stop = x:find("|", pos, true)
-    return x:sub(pos, stop and stop - 1 or -1)
+    local stop = s:find("|", pos, true)
+    return s:sub(pos, stop and stop - 1 or -1)
 end
 
-local Thaw
-local PACKED = {
-    __index = function(r, k)
-        local i = COLD_AT[k]
-        if not i then return nil end
-        if i ~= CHAT_AT and i ~= ECHO_AT and not decoded[r] then return St.UnpackValue(ColdField(rawget(r, "x"), i)) end
-        local v = Cold(r)[k]
-        -- The caller may change the list it gets: never the shared copy.
-        if k == "chat" then return CopyChat(v) end
-        return v
-    end,
-    __newindex = function(r, k, v)
-        if COLD_AT[k] then Thaw(r) end
-        rawset(r, k, v)
-    end,
+-- What the recruiting seal reads of a cold string, in as few string
+-- operations as possible (the logout seal reads every recent invite):
+-- t (number), invited as its packed digits (nil when not a plain number;
+-- the caller then takes the slow path), status, replied (boolean), by.
+-- dict: the guild's dictionary. nil when malformed.
+Cold.sealPattern = "^([^|]*)|n([^|]*)|([^|]*)|([^|]*)|[^|]*|[^|]*|([^|]*)"
+function Guild.ColdSealFields(s, dict)
+    local st, t, inv, by, rep = s:match(Cold.sealPattern)
+    if not st then return nil end
+    t = tonumber(t)
+    if inv:byte(1) == 110 then inv = inv:sub(2) else inv = nil end        -- "n<digits>"
+    local status = st ~= "" and Unp(st) or nil
+    local who = by ~= "" and Unp(by, dict) or nil
+    return t, inv, status, rep ~= "" and rep ~= "F", who
+end
+
+-- status, invited, by, replied of a cold string: what the counts, the
+-- memberships and the recruiter stats read of every record (one match,
+-- four fields unpacked).
+function Cold.Stat(s, g)
+    local a, c, d, h = s:match(Cold.statPattern)
+    if not a then return nil end
+    return Unp(a), Unp(c), Unp(d, g and g.dict), Unp(h)
+end
+
+function Guild.ColdField(s, name, g)
+    local i = Cold.at[name]
+    if not i or type(s) ~= "string" then return nil end
+    local raw = Cold.Raw(s, i)
+    if not raw then return nil end
+    if i == Cold.CHAT then return UnpackChat(raw, Guild.ColdField(s, "whisper", g)) end
+    if i == Cold.ECHO and raw == SAME then return Guild.ColdField(s, "whisper", g) end
+    if raw:byte(1) == B_D then
+        g = g or Guild.Data()
+        return Unp(raw, g and g.dict)
+    end
+    return St.UnpackValue(raw)
+end
+
+---------------------------------------------------------------------------
+-- The dictionary (g.dict: append-only, DICT_MAX texts)
+---------------------------------------------------------------------------
+local function DictMap(g)
+    local m = Cold.dix[g]
+    if not m or m.n ~= #g.dict then
+        m = { n = #g.dict, map = {} }
+        for i, t in ipairs(g.dict) do if m.map[t] == nil then m.map[t] = i end end
+        Cold.dix[g] = m
+    end
+    return m
+end
+
+-- The tag of a text ("d<index>"), or nil when it is not in the dictionary
+-- and `add` is off or the dictionary is full.
+function Cold.DictTag(g, text, add)
+    local m = DictMap(g)
+    local i = m.map[text]
+    if not i and add and #g.dict < Cold.DICT_MAX then
+        i = #g.dict + 1
+        g.dict[i], m.map[text], m.n = text, i, i
+    end
+    return i and ("d" .. i) or nil
+end
+
+-- A text earns a place by repeating: the most used texts of the records about
+-- to be packed (counts[text] = how many) go in first. A one-off opener (it
+-- names the player) would only fill the dictionary.
+function Cold.Seed(g, counts)
+    local keys = {}
+    for text, n in pairs(counts) do
+        if n >= 2 then keys[#keys + 1] = string.format("%09d", 999999999 - n) .. text end
+    end
+    table.sort(keys)
+    for _, key in ipairs(keys) do
+        if #g.dict >= Cold.DICT_MAX then break end
+        Cold.DictTag(g, key:sub(10), true)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Counts over g.cold (Guild.ColdStats) and the names of the records that
+-- replied: built once, then Cold.Set keeps them. (The short-name index below
+-- costs a string per record, so it is built when a lookup first needs it.)
+---------------------------------------------------------------------------
+function Cold.AddShort(map, full)
+    local k = Guild.Short(full):lower()
+    local cur = map[k]
+    if cur == nil then map[k] = full elseif cur ~= full then map[k] = false end     -- false: two of that name
+end
+
+function Cold.Count(st, g, full, s, sign)
+    st.n = st.n + sign
+    local status, invited, by, replied = Cold.Stat(s, g)
+    local inv = tonumber(invited)
+    if inv and by then st.sum = st.sum + sign * inv end
+    local key = status or "?"
+    if status == "invited" then
+        -- Sent, and the game never said "You have invited" (Guild.InviteCheck once the wait is over).
+        if Unp(Cold.Raw(s, Cold.at.ack) or "") == false then
+            key = nil
+            st.unconfirmed = st.unconfirmed + sign
+        end
+    end
+    if key then st.status[key] = (st.status[key] or 0) + sign end
+    st.replied[full] = (sign > 0 and replied) and true or nil
+    if invited and st.short then
+        if sign > 0 then
+            Cold.AddShort(st.short, full)
+        elseif st.short[Guild.Short(full):lower()] == full then
+            st.short[Guild.Short(full):lower()] = nil
+        end
+    end
+end
+
+function Cold.State(g)
+    local st = Cold.state[g]
+    if st then return st end
+    st = { n = 0, sum = 0, status = {}, unconfirmed = 0, replied = {} }
+    Cold.state[g] = st
+    -- Over an array: the warm-up builds this in the background and may pause.
+    for i, full in ipairs(Cold.Names(g)) do
+        Step(i)
+        local s = g.cold[full]
+        if type(s) == "string" then Cold.Count(st, g, full, s, 1) end
+    end
+    return st
+end
+
+-- { n = records, sum = their invite times added up (only those with a
+-- recruiter), status = { [status] = n } (an unconfirmed invite is not in
+-- "invited"), unconfirmed = n }. Callers must not change it.
+function Guild.ColdStats(g) return Cold.State(g) end
+
+-- Changes to the cold records: a counter for caches (DataKey).
+function Guild.ColdVersion(g) return Cold.ver[g] or 0 end
+
+-- The one place that changes g.cold (s nil removes the record).
+function Cold.Set(g, full, s)
+    local old = g.cold[full]
+    local st = Cold.state[g]
+    if st then
+        if type(old) == "string" then Cold.Count(st, g, full, old, -1) end
+        if s then Cold.Count(st, g, full, s, 1) end
+    end
+    g.cold[full] = s
+    local vs = Cold.views[g]
+    if vs then vs[full] = nil end
+    Cold.ver[g] = (Cold.ver[g] or 0) + 1
+    if s and old == nil then Cold.added[g] = (Cold.added[g] or 0) + 1 end
+end
+
+function Guild.IsCold(full, g)
+    g = g or Guild.Data()
+    return g ~= nil and g.cold[full] ~= nil
+end
+
+-- Test hook: the bound above (drops the indexes built so far).
+function Guild.SetShortIndexMax(n)
+    Cold.SHORT_INDEX_MAX = n
+    for _, st in pairs(Cold.state) do st.short = nil end
+end
+
+-- The names in g.cold, as an array to walk with Step.
+function Cold.Names(g)
+    local names = {}
+    for full in pairs(g.cold) do names[#names + 1] = full end
+    return names
+end
+
+-- Lower-case short name -> full name (false: two of that name) over the
+-- records that were invited. The cold half is kept up to date by Set; the
+-- live half is rebuilt when the guild data changed, at most every 2 seconds
+-- (a record made in between is found by its own name, which is tried first).
+function Cold.LiveIndex(g)
+    local c, now, ver = Cold.lix, GetTime(), ns.Data.Version("guild")
+    if c and c.g == g and (c.ver == ver or now - c.at < 2) then return c.map end
+    local map = {}
+    for full, r in pairs(g.recruits) do
+        if r.invited then Cold.AddShort(map, full) end
+    end
+    Cold.lix = { g = g, ver = ver, at = now, map = map }
+    return map
+end
+
+-- The cold half of the lookup past SHORT_INDEX_MAX records (the index costs a
+-- string per record): a scan of the keys for the short name as given (the
+-- server's own casing, so the keys are not lowercased), each hit confirmed.
+-- Nothing new is made per key but the hits' lowercase names.
+function Cold.ScanShort(g, given, short)
+    local found
+    for full, s in pairs(g.cold) do
+        if full:find(given, 1, true) and Guild.Short(full):lower() == short and s:find("^[^|]*|[^|]*|[^|]") then
+            if found then return false end
+            found = full
+        end
+    end
+    return found
+end
+
+-- The one invited player of that short name (as given: "Mira Stone"): their
+-- full name, false when two share it, nil when none.
+function Cold.FindShort(g, given)
+    local st, short = Cold.State(g), given:lower()
+    local a
+    if st.n <= Cold.SHORT_INDEX_MAX then
+        if not st.short then
+            -- Over an array with Step: the warm-up builds it in the background.
+            local short = {}
+            for i, full in ipairs(Cold.Names(g)) do
+                Step(i)
+                local s = g.cold[full]
+                if s and s:find("^[^|]*|[^|]*|[^|]") then Cold.AddShort(short, full) end      -- invited is set
+            end
+            st.short = short
+        end
+        a = st.short[short]
+    else
+        st.short = nil
+        a = Cold.ScanShort(g, given, short)
+    end
+    local b = Cold.LiveIndex(g)[short]
+    if a == false or b == false then return false end
+    if a and b and a ~= b then return false end
+    return a or b
+end
+
+---------------------------------------------------------------------------
+-- Views and promotion
+---------------------------------------------------------------------------
+-- A view is an empty table: reads go to the decoded record, a write makes
+-- the record live first. (pairs() on a view sees nothing: a record is read
+-- by field.)
+local VIEW = {
+    __index = function(v, k) return Cold.info[v].d[k] end,
+    __newindex = function(v, k, val) Cold.Promote(v)[k] = val end,
 }
 
--- Back to a plain record (before a change to a packed field).
-function Thaw(r)
-    if getmetatable(r) ~= PACKED then return r end
-    local d = Decode(rawget(r, "x"))
-    setmetatable(r, nil)
-    decoded[r] = nil
-    r.x = nil
-    for _, k in ipairs(COLD) do r[k] = d[k] end
+function Cold.View(g, full)
+    local s = g.cold[full]
+    if not s then return nil end
+    local vs = Cold.views[g]
+    if not vs then vs = setmetatable({}, WEAK_V) Cold.views[g] = vs end
+    local v = vs[full]
+    if v and Cold.info[v] and Cold.info[v].s == s then return v end
+    v = setmetatable({}, VIEW)
+    Cold.info[v] = { g = g, full = full, s = s, d = Cold.Decode(s, g) }
+    vs[full] = v
+    return v
+end
+
+-- The record becomes the live one (a fresh decode of its string). Returns
+-- the live table; every view of it reads that table from now on.
+function Cold.Promote(v)
+    local i = Cold.info[v]
+    if not i then return v end
+    local g, full = i.g, i.full
+    local live = g.recruits[full]
+    if live then i.d = live return live end             -- another handle made it live
+    local s = g.cold[full]
+    if s == nil then return i.d end                     -- forgotten meanwhile: a write goes nowhere, as for any dropped record
+    -- Decoded again: a change made to a nested table of the view (a chat list
+    -- read without Thaw) must not reach the saved record.
+    i.d, i.s = Cold.Decode(s, g), s
+    g.recruits[full] = i.d
+    Cold.Set(g, full, nil)
+    local lx = Cold.lix
+    if lx and lx.g == g and i.d.invited then Cold.AddShort(lx.map, full) end
+    return i.d
+end
+
+-- Back to a live record (before a change to a nested table such as the chat
+-- list). A view of a cold record is promoted; the caller keeps using r.
+local function Thaw(r)
+    if Cold.info[r] then Cold.Promote(r) end
     return r
 end
 Guild.Thaw = Thaw
 
-function Guild.IsPacked(r) return getmetatable(r) == PACKED end
-function Guild.Attach(r) if rawget(r, "x") ~= nil then setmetatable(r, PACKED) end return r end
-
-local function Settled(full, r, cutoff)
-    if r.status == "inviting" or waiting[full] or r.unread then return false end
-    if math.max(tonumber(r.t) or 0, tonumber(r.invited) or 0, tonumber(r.last) or 0) >= cutoff then return false end
-    for _, line in ipairs(type(r.chat) == "table" and r.chat or {}) do
-        if type(line) == "table" and not line.me then return false end
-    end
-    return true
+-- The live record of a cold player (nil when there is no such record).
+function Guild.MakeLive(full)
+    local g = Guild.Data()
+    if not g then return nil end
+    local r = g.recruits[full]
+    if r then return r end
+    local v = Cold.View(g, full)
+    return v and Cold.Promote(v) or nil
 end
 
--- The packed form of a plain record, as a new table: Lua 5.1 never shrinks
--- a table whose fields are set to nil, so packing in place would keep the
--- old size until the next login. nil when a field cannot be packed (the
--- record is left as it is). The caller puts the new table in its place.
-local function Pack(r)
-    for k in pairs(r) do
-        if not HOT[k] and not COLD_AT[k] then return nil end
+function Cold.PromoteAll(g)
+    for _, full in ipairs(Cold.Names(g)) do
+        local s = g.cold[full]
+        if s and not g.recruits[full] then g.recruits[full] = Cold.Decode(s, g) end
+        Cold.Set(g, full, nil)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Packing
+---------------------------------------------------------------------------
+function Cold.Settled(full, r, cutoff)
+    if r.status == "inviting" or waiting[full] or r.unread then return false end
+    return math.max(tonumber(r.t) or 0, tonumber(r.invited) or 0, tonumber(r.last) or 0) < cutoff
+end
+
+-- The cold string of a plain record, or nil when a field cannot be packed
+-- (the record is left as it is). add: new texts may go in the dictionary.
+function Cold.Pack(g, r, add)
+    local rec = Cold.info[r] and Cold.info[r].d or r
+    for k in pairs(rec) do
+        if not Cold.at[k] then return nil end
     end
     local values = {}
-    for i, k in ipairs(COLD) do
-        if i ~= CHAT_AT and i ~= ECHO_AT then
-            values[i] = St.PackValue(r[k])
-            if not values[i] then return nil end
+    for i, k in ipairs(Guild.COLD_FIELDS) do
+        local v, packed = rec[k], nil
+        if i == Cold.ECHO then
+            packed = (v ~= nil and v == rec.whisper) and SAME or St.PackValue(v)
+        elseif i == Cold.CHAT then
+            packed = PackChat(v, rec.whisper)
+        elseif Cold.text[k] and type(v) == "string" then
+            packed = Cold.DictTag(g, v, add) or St.PackValue(v)
+        else
+            packed = St.PackValue(v)
         end
+        if not packed then return nil end
+        values[i] = packed
     end
-    values[ECHO_AT] = (r.echo ~= nil and r.echo == r.whisper) and SAME or St.PackValue(r.echo)
-    values[CHAT_AT] = PackChat(r.chat, r.whisper)
-    if not values[ECHO_AT] or not values[CHAT_AT] then return nil end
-    local out = {}
-    for k in pairs(HOT) do out[k] = r[k] end
-    out.x = table.concat(values, "|", 1, #COLD)
-    return setmetatable(out, PACKED)
+    return table.concat(values, "|", 1, Cold.COUNT)
 end
-Guild.PackRecruit = Pack
 
--- Once per session per guild: records saved packed get their metatable,
--- settled plain ones are packed. Returns how many were packed now.
+-- add: texts may be added to the dictionary (default on).
+function Guild.PackRecruit(r, g, add)
+    g = g or Guild.Data()
+    if not g then return nil end
+    return Cold.Pack(g, r, add ~= false)
+end
+
+-- Once per session per guild: settled live records become cold strings.
+-- Returns how many were packed now.
 function Guild.PackAll(g, now)
-    local cutoff = (now or time()) - PACK_AFTER
-    local n = 0
+    if type(g.cold) ~= "table" then g.cold = {} end
+    if type(g.dict) ~= "table" then g.dict = {} end
+    local cutoff = (now or time()) - Cold.AFTER
+    local names, counts = {}, {}
     for full, r in pairs(g.recruits) do
-        if type(r) == "table" and getmetatable(r) ~= PACKED then
-            if rawget(r, "x") ~= nil then
-                setmetatable(r, PACKED)
-            elseif Settled(full, r, cutoff) then
-                local packed = Pack(r)
-                if packed then g.recruits[full], n = packed, n + 1 end
+        if type(r) == "table" and Cold.Settled(full, r, cutoff) then
+            names[#names + 1] = full
+            for k in pairs(Cold.text) do
+                local v = r[k]
+                if type(v) == "string" then counts[v] = (counts[v] or 0) + 1 end
             end
         end
     end
+    Cold.Seed(g, counts)
+    local n = 0
+    for _, full in ipairs(names) do
+        local s = Cold.Pack(g, g.recruits[full], false)
+        if s then
+            g.recruits[full] = nil
+            Cold.Set(g, full, s)
+            n = n + 1
+        end
+    end
+    if n > 0 then
+        -- Lists kept from before hold the live tables that are gone.
+        ns.Data.Bump("guild")
+        ns.Data.Bump("guild.replies")
+    end
     return n
+end
+
+-- Store migration (guild v4): the records packed with a table and an `x`
+-- string become cold strings. The layout of `x` is read here only.
+local OLD_COLD = { "name", "race", "zone", "src", "first", "invites", "seq", "ack", "guid", "saidNo", "noFrom",
+    "whisper", "echo", "echoT", "unsent", "last", "chat" }
+local OLD_PATTERN = "^" .. Captures(#OLD_COLD) .. "$"
+local function OldFields(x)
+    local f = { x:match(OLD_PATTERN) }
+    if #f == 0 then f = St.SplitList(x, "|") end
+    return f
+end
+local function OldDecode(r)
+    local f = OldFields(r.x)
+    local out = {}
+    for k, v in pairs(r) do if k ~= "x" then out[k] = v end end
+    for i, k in ipairs(OLD_COLD) do
+        if k ~= "echo" and k ~= "chat" then out[k] = St.UnpackValue(f[i] or "") end
+    end
+    out.echo = f[13] == SAME and out.whisper or St.UnpackValue(f[13] or "")
+    out.chat = UnpackChat(f[17] or "", out.whisper)
+    return out
+end
+
+function Guild.MigrateCold(root)
+    for _, g in pairs(type(root) == "table" and type(root.guilds) == "table" and root.guilds or {}) do
+        if type(g) == "table" and type(g.recruits) == "table" then
+            g.cold = type(g.cold) == "table" and g.cold or {}
+            g.dict = type(g.dict) == "table" and g.dict or {}
+            local names, counts = {}, {}
+            for full, r in pairs(g.recruits) do
+                if type(r) == "table" and type(r.x) == "string" then
+                    names[#names + 1] = full
+                    local f = OldFields(r.x)
+                    local texts = { r.by, St.UnpackValue(f[12] or ""), St.UnpackValue(f[15] or "") }
+                    for i = 1, 3 do
+                        local v = texts[i]
+                        if type(v) == "string" then counts[v] = (counts[v] or 0) + 1 end
+                    end
+                end
+            end
+            Cold.Seed(g, counts)
+            for _, full in ipairs(names) do
+                local d = OldDecode(g.recruits[full])
+                local s = Cold.Pack(g, d, false)
+                if s then
+                    g.recruits[full] = nil
+                    g.cold[full] = s
+                else
+                    g.recruits[full] = d
+                end
+            end
+        end
+    end
 end
 
 local MyCharName = function() return Guild.Me() end
@@ -465,29 +885,55 @@ local function Answered(r)
     return false
 end
 
+-- Is a line in this packed chat ("#line~line", each "t;me;text;c") from them?
+function Cold.ChatAnswered(chat)
+    if chat == "" or chat == "#" then return false end
+    for _, raw in ipairs(St.SplitList(chat:sub(2), "~")) do
+        if (St.SplitList(raw, ";")[2] or "") ~= "T" then return true end
+    end
+    return false
+end
+
 -- keep (archive): key "Guild-Realm/Name-Realm", value the removed fields
--- packed (whisper; echo; unsent; chat; echoT).
+-- packed (whisper; echo; unsent; chat; echoT), the real texts (a dictionary
+-- tag means nothing outside this save).
 function Guild.StripOldOpeners(cutoff, apply, keep)
     local root = db().guild
     local n = 0
+    local w, e, et, u, c = Cold.at.whisper, Cold.at.echo, Cold.at.echoT, Cold.at.unsent, Cold.CHAT
     for gkey, g in pairs(type(root) == "table" and type(root.guilds) == "table" and root.guilds or {}) do
         for full, r in pairs(type(g.recruits) == "table" and g.recruits or {}) do
-            -- Another guild's records were never opened this session: packed ones get their metatable here.
-            if type(r) == "table" and rawget(r, "x") ~= nil and not Guild.IsPacked(r) then Guild.Attach(r) end
             if type(r) == "table" and not KEEP_TEXT[r.status] and not r.unread
                 and math.max(tonumber(r.t) or 0, tonumber(r.invited) or 0) < cutoff
                 and (r.chat or r.whisper or r.echo or r.unsent) and not Answered(r) then
                 n = n + 1
                 if apply then
-                    local packed = Guild.IsPacked(r)
-                    Guild.Thaw(r)
                     if keep then
                         keep(gkey .. "/" .. full, St.PackList({ r.whisper, r.echo, r.unsent, PackChat(r.chat, r.whisper),
                             r.echoT }, 5, ";"))
                     end
                     r.chat, r.whisper, r.echo, r.echoT, r.unsent = nil, nil, nil, nil, nil
-                    -- Assigning an existing key during the walk is allowed.
-                    if packed then g.recruits[full] = Guild.PackRecruit(r) or r end
+                end
+            end
+        end
+        -- Cold records: the text fields are blanked in the string, nothing is made live.
+        -- (Assigning an existing key during the walk is allowed.)
+        for full, s in pairs(type(g.cold) == "table" and g.cold or {}) do
+            local f = type(s) == "string" and Cold.Fields(s) or {}
+            if #f == Cold.COUNT then
+                local status = St.UnpackValue(f[1])
+                if not KEEP_TEXT[status] and math.max(tonumber(St.UnpackValue(f[2])) or 0, tonumber(St.UnpackValue(f[3])) or 0) < cutoff
+                    and (f[w] ~= "" or f[e] ~= "" or f[u] ~= "" or f[c] ~= "") and not Cold.ChatAnswered(f[c]) then
+                    n = n + 1
+                    if apply then
+                        if keep then
+                            local d = Cold.Decode(s, g)
+                            keep(gkey .. "/" .. full, St.PackList({ d.whisper, d.echo, d.unsent, PackChat(d.chat, d.whisper),
+                                d.echoT }, 5, ";"))
+                        end
+                        f[w], f[e], f[et], f[u], f[c] = "", "", "", "", ""
+                        Cold.Set(g, full, table.concat(f, "|"))
+                    end
                 end
             end
         end
@@ -518,6 +964,7 @@ ns.Cleanup.Add({ id = "recruitText", label = "Recruit messages", source = "guild
 local ECHO_SECONDS = 900      -- the game's echo of the opening whisper, kept when sent
 
 function Guild.BackfillOpeners(g)
+    Cold.PromoteAll(g)      -- a save that old holds no cold records; kept simple
     for _, r in pairs(g.recruits) do
         if r.whisper and r.chat then
             local first
@@ -551,9 +998,10 @@ function Guild.BackfillOpeners(g)
 end
 
 local STATUS_RANK = { joined = 7, declined = 6, guilded = 5, pending = 4, notfound = 3, invited = 2, inviting = 2,
-    uninvited = 1, skipped = 1 }
+    asked = 1.5, uninvited = 1, skipped = 1 }
 function Guild.MigrateNames(g)
     if not Guild.SplitNames() then return end
+    Cold.PromoteAll(g)      -- a save that old holds no cold records; kept simple
     local me = Guild.Me()
     local oldMe = me and ((Guild.Short(me):match("^(%S+)") or "") .. "-" .. MyRealm())
     local merged = {}
@@ -597,6 +1045,23 @@ function Guild.Messages()
     if type(d.guildMessages) ~= "table" then
         d.guildMessages = {}
         for i, m in ipairs(Guild.DEFAULT_MESSAGES) do d.guildMessages[i] = m end
+        Guild.messagesChecked = true
+    elseif ns.IS_FOREVER == true and not Guild.messagesChecked then
+        -- Once per session: a saved message that is still an old default
+        -- (it says an invite was sent) becomes the new default; your own
+        -- wording is left alone.
+        Guild.messagesChecked = true
+        local list, new = d.guildMessages, Guild.DEFAULT_MESSAGES[1]
+        for i = #list, 1, -1 do
+            for _, old in ipairs(Guild.ERA_MESSAGES) do
+                if list[i] == old then
+                    local dup = false
+                    for j, m in ipairs(list) do if j ~= i and m == new then dup = true end end
+                    if dup then table.remove(list, i) else list[i] = new end
+                    break
+                end
+            end
+        end
     end
     return d.guildMessages
 end
@@ -641,25 +1106,31 @@ end
 ---------------------------------------------------------------------------
 -- Recruits: candidates near you and from /who
 ---------------------------------------------------------------------------
+-- Fields a scan or /who answer keeps current (set only when they differ: a
+-- write to a cold record's view makes it live).
+local FROM_FIELDS = { "classFile", "level", "race", "zone", "src" }
+-- The live record, or a view of the cold one (see "Cold recruit records").
 local function Recruit(full, create, from)
     local g = Guild.Data()
     if not g then return nil end
-    local r = g.recruits[full]
+    local r = g.recruits[full] or Cold.View(g, full)
     if not r and create then
         r = {}
         g.recruits[full] = r
     end
     if r and from then
-        r.name = from.name or r.name or Guild.Short(full)
-        r.classFile = from.classFile or r.classFile
-        r.level = from.level or r.level
-        r.race = from.race or r.race
-        r.zone = from.zone or r.zone
-        r.src = from.src or r.src
+        local name = from.name or r.name or Guild.Short(full)
+        if r.name ~= name then r.name = name end
+        for _, k in ipairs(FROM_FIELDS) do
+            local v = from[k]
+            if v and r[k] ~= v then r[k] = v end
+        end
     end
     return r
 end
 Guild.Recruit = Recruit
+-- A list row { full, ... } whose record (x.r) is read when asked, not kept.
+Guild.ROW = { __index = function(x, k) if k == "r" then return Recruit(rawget(x, "full")) end end }
 
 local function MemberOfMine(full)
     local g = Guild.Data()
@@ -736,16 +1207,24 @@ function Guild.Scan(now)
 end
 
 -- Why a player is not offered again, or nil when they can be invited.
-local BLOCKING = { inviting = true, invited = true, declined = true, guilded = true, pending = true, notfound = true }
+local BLOCKING = { inviting = true, invited = true, asked = true, declined = true, guilded = true, pending = true, notfound = true }
 -- g: the guild's data when the caller has it (Candidates: one read, not two per player).
 function Guild.Blocked(full, g)
     g = g or Guild.Data()
     if not g then return nil end
     if g.members[full] then return "member" end
+    local status, at
     local r = g.recruits[full]
-    if not r then return nil end
-    if r.status == "skipped" or r.status == "joined" then return r.status end
-    if BLOCKING[r.status] and r.t and time() - r.t < (db().guildReinviteDays or 7) * 86400 then return r.status end
+    if r then
+        status, at = r.status, r.t
+    else
+        -- A cold record: status and time alone, no decoding.
+        local s = g.cold[full]
+        if not s then return nil end
+        status, at = Guild.ColdField(s, "status"), Guild.ColdField(s, "t")
+    end
+    if status == "skipped" or status == "joined" then return status end
+    if BLOCKING[status] and at and time() - at < (db().guildReinviteDays or 7) * 86400 then return status end
     return nil
 end
 
@@ -1008,6 +1487,14 @@ end
 -- The game takes a guild invite only inside a click or key press, so a
 -- queued invite never goes on its own: each accepted input sends one.
 local inviteWhy = {}   -- [full] = why, for an invite that waits for its queued opener (session only)
+-- A refused invite call may still have reached the player (a refusal of
+-- another call in the same click, or one the game raised after sending):
+-- one that seems blocked waits BLOCK_ACK_WAIT for the game's "You have
+-- invited X" before it is ready again, and no player gets more than
+-- MAX_UNCONFIRMED calls within ACK_WAIT without that line.
+-- One table: the file's chunk is near Lua 5.1's 200 locals.
+local Calls = { BLOCK_ACK_WAIT = 3, MAX_UNCONFIRMED = 2,
+    list = {} }        -- [full] = { GetTime of each invite call the game did not confirm yet } (session only)
 
 local function MarkReady(full, delay, why)
     local r = Recruit(full)
@@ -1017,19 +1504,51 @@ local function MarkReady(full, delay, why)
 end
 
 -- The invite did not go in this click: it waits in the queue, ready once
--- the opener is out (at once when it already is or there is none).
-local function InviteLater(full, why)
+-- the opener is out (at once when it already is or there is none; delay:
+-- not before then).
+local function InviteLater(full, why, delay)
     local r = Recruit(full)
     if not r then return end
     r.status, r.t = "inviting", time()
     local w = waiting[full]
     if w then
         w.why, w.since = why, GetTime()
+        if delay then w.at, w.shown = math.max(w.at, GetTime() + delay), nil end
     elseif type(r.unsent) == "string" and Outbox.IsQueued(Target(full), r.unsent) then
         inviteWhy[full] = why
     else
-        MarkReady(full, 0, why)
+        MarkReady(full, delay or 0, why)
     end
+end
+
+-- Invite calls to this player within ACK_WAIT that the game has not confirmed.
+function Calls.Unconfirmed(full)
+    local list = Calls.list[full]
+    if not list then return 0 end
+    local now = GetTime()
+    for i = #list, 1, -1 do
+        if now - list[i] >= ACK_WAIT then table.remove(list, i) end
+    end
+    if #list == 0 then Calls.list[full] = nil return 0 end
+    return #list
+end
+Guild.UnconfirmedCalls = Calls.Unconfirmed
+
+function Calls.Add(full)
+    Calls.list[full] = Calls.list[full] or {}
+    table.insert(Calls.list[full], GetTime())
+end
+
+-- The game confirmed an invite this session counted as not sent (blocked,
+-- or not taken): it went. Out of the queue and counted once, never sent again.
+function Calls.Went(full)
+    local r = Recruit(full)
+    if not r or r.status ~= "inviting" then return false end
+    waiting[full], inviteWhy[full] = nil, nil
+    local now = time()
+    r.invited, r.t, r.status = now, now, "invited"
+    r.invites = (r.invites or 0) + 1
+    return true
 end
 
 -- Why this player's invite waits: why, seconds since, seconds until ready
@@ -1105,13 +1624,15 @@ function Guild.Check(since)
     since = since or (time() - 3600)
     local me = MyCharName()
     local out = { sent = 0, confirmed = 0, waiting = 0, unconfirmed = {}, answered = 0, joined = 0, open = 0,
-        inviting = 0, ackSeen = db().guildAckSeen == true, unmatched = unmatched,
+        inviting = 0, asked = 0, ackSeen = db().guildAckSeen == true, unmatched = unmatched,
         queued = Outbox.Pending(), invitesReady = Guild.InvitesReady() }
     for _, x in ipairs(Guild.Recruits()) do
         local r = x.r
         if r.invited and r.invited >= since and (r.by == nil or r.by == me) then
             if r.status == "inviting" then
                 out.inviting = out.inviting + 1
+            elseif r.status == "asked" then
+                out.asked = out.asked + 1
             elseif r.status ~= "uninvited" and r.status ~= "skipped" then
                 out.sent = out.sent + 1
                 local check = Guild.InviteCheck(r)
@@ -1127,29 +1648,40 @@ function Guild.Check(since)
     return out
 end
 
-local function PrintCheck()
+-- The lines of the invite check, plain text: the report window shows them all.
+function Guild.CheckLines()
     local c = Guild.Check()
-    ns.Print(string.format("invites in the last hour: %d sent, %d confirmed by the game, %d answered (declined / offline / in a guild), %d joined, %d still open.",
-        c.sent, c.confirmed, c.answered, c.joined, c.open))
+    local lines = { ns.TITLE .. " guild check, " .. tostring(ns.VERSION) .. ", " .. date("%Y-%m-%d %H:%M:%S", time()), "" }
+    lines[#lines + 1] = string.format("invites in the last hour: %d sent, %d confirmed by the game, %d answered (declined / offline / in a guild), %d joined, %d still open.",
+        c.sent, c.confirmed, c.answered, c.joined, c.open)
+    if Guild.WhisperFirst or c.asked > 0 then
+        lines[#lines + 1] = string.format("%d asked in the last hour (messaged, waiting for you to type /ginvite once they answer).", c.asked)
+    end
     if c.inviting > 0 or c.queued > 0 or c.invitesReady > 0 then
-        ns.Print(string.format("on the way: %d messages waiting, %d invites ready for your click.", c.queued, c.invitesReady))
+        lines[#lines + 1] = string.format("on the way: %d messages waiting, %d invites ready for your click.", c.queued, c.invitesReady)
     end
     if not c.ackSeen then
-        ns.Print("the game has not shown " .. ns.NAME .. " a \"You have invited ...\" line yet, so delivery cannot be checked on this client.")
+        lines[#lines + 1] = "the game has not shown " .. ns.NAME .. " a \"You have invited ...\" line yet, so delivery cannot be checked on this client."
     elseif #c.unconfirmed > 0 then
-        local names = {}
-        for i, full in ipairs(c.unconfirmed) do
-            if i > 10 then names[#names + 1] = "+" .. (#c.unconfirmed - 10) .. " more" break end
-            names[#names + 1] = Guild.Short(full)
-        end
-        ns.Print(string.format("%d invites the game never confirmed (may not have reached them; click their row in Invited to invite again): %s",
-            #c.unconfirmed, table.concat(names, ", ")))
+        lines[#lines + 1] = string.format("%d invites the game never confirmed (may not have reached them; click their row in Invited to invite again):", #c.unconfirmed)
+        for _, full in ipairs(c.unconfirmed) do lines[#lines + 1] = "  " .. Guild.Short(full) end
     elseif c.sent > 0 then
-        ns.Print("every invite the game could confirm was confirmed.")
+        lines[#lines + 1] = "every invite the game could confirm was confirmed."
     end
     if #c.unmatched > 0 then
-        ns.Print("game lines right after a send that " .. ns.NAME .. " did not recognize (please report them):")
-        for _, e in ipairs(c.unmatched) do ns.Print("  " .. date("%H:%M:%S", e.t) .. "  " .. e.text) end
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "game lines right after a send that " .. ns.NAME .. " did not recognize (please report them):"
+        for _, e in ipairs(c.unmatched) do lines[#lines + 1] = "  " .. date("%H:%M:%S", e.t) .. "  " .. e.text end
+    end
+    return lines
+end
+
+local function PrintCheck()
+    local lines = Guild.CheckLines()
+    if ns.Probe and ns.Probe.ShowText then
+        ns.Probe.ShowText(table.concat(lines, "\n"))
+    else
+        for _, line in ipairs(lines) do if line ~= "" then ns.Print(line) end end
     end
 end
 
@@ -1157,6 +1689,21 @@ end
 -- later: when the game does not take it, it waits in the invite queue
 -- instead of the player counting as not invited. Returns sent, why.
 local function InviteNow(full, target, info, later)
+    -- Calls that may have reached them already (the game confirmed none):
+    -- one more would be the third invite they see. Counted as sent instead.
+    if Calls.Unconfirmed(full) >= Calls.MAX_UNCONFIRMED then
+        local r = Recruit(full)
+        if r and r.status == "inviting" then
+            waiting[full], inviteWhy[full] = nil, nil
+            r.status, r.t, r.ack = "invited", time(), false
+            r.invites = math.max(r.invites or 0, 1)
+        end
+        ns.Print(string.format("the game was asked to invite %s %d times in the last minute and confirmed none, so it is not asked again "
+            .. "(the invite may have reached them). If they did not get it, invite again from the Invited tab in a minute.",
+            Guild.Short(full), Calls.MAX_UNCONFIRMED))
+        if not inInvite then Guild.Changed() end
+        return false, "limit"
+    end
     local invited, why = Outbox.GuildInvite(target)
     if not invited then
         -- A double click while the client lags: the first one went.
@@ -1164,6 +1711,7 @@ local function InviteNow(full, target, info, later)
         if later then InviteLater(full, "failed") else InviteFailed(full) end
         return false, why
     end
+    Calls.Add(full)
     local r = Recruit(full, true, info)
     r.by = MyCharName()
     r.first = r.first or time()
@@ -1201,6 +1749,7 @@ function Guild.Invite(full, info, noWhisper)
     info = info or candidates[full]
     local old = Recruit(full)
     local target = Target(full)
+    if Guild.WhisperFirst then return Guild.AskOnly(full, info, old, target, noWhisper) end
     -- The second click of a delayed invite: the invite alone, once its time came.
     if old and old.status == "inviting" then
         if not Guild.InviteReady(full) then return false end
@@ -1245,6 +1794,10 @@ function Guild.Invite(full, info, noWhisper)
         -- game does not take it, it waits in the queue and is ready once the
         -- opener is out; the next accepted click or key sends it.
         local sent, why = InviteNow(full, target, info, true)
+        if why == "limit" then
+            Guild.Changed()
+            return true
+        end
         if not sent and why == "repeat" then
             -- The same invite went seconds ago (a double click): it counts.
             inInvite = true
@@ -1259,6 +1812,64 @@ function Guild.Invite(full, info, noWhisper)
     if not ok and not Outbox.IsQueued(target, text) then MarkReady(full, how == "repeat" and INVITE_DELAY or 0) end
     Guild.Changed()
     return true
+end
+
+-- Whisper-first (Forever): the click sends the opener only and the player is
+-- "asked": off the list like an invited one, the invite is the /ginvite the
+-- player types once they answer. invited keeps "when they were first
+-- contacted" (replies, recruiters and the seal read it); invites is not
+-- raised and ack stays nil until the game says "You have invited X".
+-- With no message to send nothing is recorded: there is nothing to ask with.
+function Guild.AskOnly(full, info, old, target, noWhisper)
+    if old and old.status == "joined" then return false end
+    -- Back on the list after the re-invite days: they may be asked again.
+    if old and (old.status == "asked" or old.status == "invited")
+        and time() - (tonumber(old.t) or 0) < (db().guildReinviteDays or 7) * 86400 then
+        return false
+    end
+    if old and old.invited and old.status ~= "uninvited" and time() - old.invited < INVITE_GUARD then return false end
+    local text = (db().guildWhisper and not noWhisper)
+        and Guild.FormatMessage(Guild.CurrentMessage(), info or old or { full = full }) or ""
+    if text == "" then
+        ns.Print(string.format("this client takes a guild invite only typed: type %s.", Guild.InviteCommand(full)))
+        return false
+    end
+    local now = time()
+    local r = Recruit(full, true, info)
+    r.invited, r.t, r.status, r.ack = now, now, "asked", nil
+    r.whisper, r.unsent = nil, text
+    r.by = MyCharName()
+    r.first = r.first or now
+    inInvite = true
+    local ok, how = QueueOpener(full, target, text, false)
+    inInvite = false
+    if ok and how == "queued" and GetTime() - queueNoticed > 30 then
+        queueNoticed = GetTime()
+        ns.Print(string.format("your messages are queued (%d waiting, the game sends about one a second).", Outbox.Pending()))
+    elseif not ok and how == "repeat" and not Outbox.IsQueued(target, text) then
+        -- The same opener went out seconds ago.
+        r.whisper, r.unsent = text, nil
+    end
+    Guild.Changed()
+    return true
+end
+
+-- What to type to invite this player (the game takes no invite from addons).
+function Guild.InviteCommand(full)
+    return "/ginvite " .. Target(full)
+end
+
+-- Whisper-first: one opener to the next player on the list. Called only from a
+-- click or key press (the Next whisper button, the recruit key, Hands Free).
+-- Returns who, or nil.
+function Guild.AskNext()
+    if not (Guild.Mine() and Guild.Can("invite")) then return nil end
+    local tries = 0
+    for _, c in ipairs(Guild.Candidates()) do
+        tries = tries + 1
+        if Guild.Invite(c.full, c) then return c.full end
+        if tries >= 3 then break end
+    end
 end
 
 -- Called only from a click on a "no message" / "message queued" row in the
@@ -1326,12 +1937,16 @@ end
 -- Drops a recruit record, so the player can show up as a candidate again.
 function Guild.Forget(full)
     local g = Guild.Data()
-    if g then g.recruits[full] = nil end
+    if g then
+        g.recruits[full] = nil
+        if g.cold[full] ~= nil then Cold.Set(g, full, nil) end
+    end
     ns.Data.Bump("guild.replies")
     Guild.Changed()
 end
 
--- Every recruit record, newest first. A long recruiting run keeps thousands
+-- Every live recruit record (the cold ones are Guild.ColdNames), newest first.
+-- A long recruiting run keeps thousands
 -- (every player ever invited, so they are not offered again), and sorting
 -- them all is one step the background work cannot pause in. Kept until the
 -- guild data changes, then put in order starting from the last order: a
@@ -1403,6 +2018,31 @@ function Guild.Recruits()
     return ns.Data.Memo("guild:recruits", ns.Data.Key("guild") .. "|" .. tostring(g), function()
         return BuildRecruits(g)
     end, RECRUITS_MAX_AGE)
+end
+
+-- The names of the cold records, newest first (by t): kept until a record
+-- goes cold. A record made live or forgotten since stays in the array:
+-- readers skip a name that is no longer in g.cold. Callers must not change it.
+function Guild.ColdNames()
+    local g = Guild.Data()
+    if not g then return {} end
+    return ns.Data.Memo("guild:coldnames", tostring(g) .. "|" .. (Cold.added[g] or 0), function()
+        local names = Cold.Names(g)
+        -- Sorted as numbers (newest first, ties in array order): a number per
+        -- record sorts in a few milliseconds where a text key took tens, and
+        -- the sort itself cannot pause. 4e9 - t keeps the key under 2^53 with
+        -- the index in the low digits.
+        local keys, byKey = {}, {}
+        for i, full in ipairs(names) do
+            Step(i)
+            local t = tonumber(Unp(Cold.Raw(g.cold[full], 2) or "")) or 0
+            local k = (4e9 - math.min(t, 4e9)) * 1e6 + i
+            keys[i], byKey[k] = k, full
+        end
+        table.sort(keys)
+        for i, k in ipairs(keys) do names[i] = byKey[k] end
+        return names
+    end)
 end
 
 ---------------------------------------------------------------------------
@@ -1685,20 +2325,45 @@ local function OnSystem(text)
     -- The game may write the name in another form than the key (no realm, a
     -- realm of the group): the one invited player of that name, as the chat
     -- filter finds them (it hides these lines, so a miss here was invisible).
-    local r = Recruit(FullName(a)) or (Guild.InvitedRecruit(a))
+    local full = FullName(a)
+    local r = Recruit(full)
+    if not r then r, full = Guild.InvitedRecruit(a) end
+    -- Forever: an invite you typed is counted even for a player who was never
+    -- on the list (typed from chat, or from before this record existed).
+    if not r and kind == "invite" and Guild.WhisperFirst and Guild.Mine() then
+        full = FullName(a)
+        r = full and Recruit(full, true, { src = "typed" }) or nil
+        if r then
+            r.by, r.first = MyCharName(), time()
+            r.status, r.t = "uninvited", time()
+        end
+    end
     if r then
         local now = time()
         local since = r.invited and now - r.invited
-        -- "inviting" too: the opener's "No player named..." comes before the
-        -- invite, which then does not go (Guild.Invite's still()).
-        local open = since and (r.status == "invited" or r.status == "inviting")
+        -- "inviting" and "asked" too: the opener's "No player named..." comes
+        -- before the invite, which then does not go (Guild.Invite's still()).
+        local open = since and (r.status == "invited" or r.status == "inviting" or r.status == "asked")
         if kind == "ignoring" or kind == "notfound" then Guild.Undelivered(a, kind) end
         if kind == "join" then
             r.status, r.t = "joined", now
+        elseif kind == "invite" and Guild.WhisperFirst then
+            -- The /ginvite you typed, at any time after the opener: the invite
+            -- is out. invited moves to now so a quick decline counts as its answer.
+            if r.status ~= "joined" then
+                waiting[full] = nil
+                r.status, r.t, r.invited, r.ack = "invited", now, now, now
+                r.invites = (r.invites or 0) + 1
+                db().guildAckSeen = true
+            end
         elseif kind == "invite" then
-            if r.status == "invited" and since < QUICK_ANSWER then
+            -- "inviting" after a call this session: the game counted as
+            -- blocked or not taken what it sent. It went: never sent again.
+            local went = r.status == "inviting" and full and Calls.Unconfirmed(full) > 0 and Calls.Went(full)
+            if went or (r.status == "invited" and since < QUICK_ANSWER) then
                 r.ack = now
                 db().guildAckSeen = true
+                if full then Calls.list[full] = nil end
             end
         elseif ANSWERS[kind] and open and since < (kind == "declined" and DECLINE_ANSWER or QUICK_ANSWER) then
             r.status, r.t = kind, now
@@ -1720,17 +2385,14 @@ local function InvitedRecruit(name)
     local r = Recruit(full)
     if r and r.invited then return r, full end
     -- The chat name may come in another form than the one kept (realm left
-    -- out or a different one): the one invited player of that name.
-    local short = Guild.Short(full):lower()
+    -- out or a different one): the one invited player of that name, from an
+    -- index over every record (a wall of declines asks for each of them).
     local g = Guild.Data()
-    local found, foundFull
-    for key, rec in pairs(g and g.recruits or {}) do
-        if rec.invited and Guild.Short(key):lower() == short then
-            if found then return nil end   -- two of that name: not guessed
-            found, foundFull = rec, key
-        end
-    end
-    return found, foundFull
+    if not g then return nil end
+    local foundFull = Cold.FindShort(g, Guild.Short(full))
+    local found = foundFull and Recruit(foundFull)
+    if found and found.invited then return found, foundFull end
+    return nil
 end
 Guild.InvitedRecruit = InvitedRecruit
 
@@ -1811,13 +2473,24 @@ function Guild.Conversations()
         local out = {}
         for full, r in pairs(g.recruits) do
             local theirs = false
-            -- A packed record never holds a reply (Settled): not decoded.
-            if getmetatable(r) ~= PACKED then
-                for _, line in ipairs(r.chat or {}) do if not line.me then theirs = true break end end
-            end
+            for _, line in ipairs(r.chat or {}) do if not line.me then theirs = true break end end
             if theirs then out[#out + 1] = { full = full, r = r } end
         end
-        table.sort(out, function(a, b) return (a.r.last or 0) > (b.r.last or 0) end)
+        -- Cold records that replied: only the names are kept (x.r reads the record
+        -- when asked, so thousands of conversations do not stay decoded in memory).
+        local names = {}
+        for full in pairs(Cold.State(g).replied) do names[#names + 1] = full end
+        for i, full in ipairs(names) do
+            Step(i)
+            local s = g.cold[full]
+            -- A line of theirs in the packed chat ("t;me;text;c" lines after # or ~: me is F or empty), read
+            -- from the string: decoding hundreds of conversations held them all in memory.
+            local chat = s and Cold.Raw(s, Cold.CHAT)
+            if chat and chat:find("[#~][^;]*;F?;") then
+                out[#out + 1] = setmetatable({ full = full, last = tonumber(Unp(Cold.Raw(s, Cold.at.last) or "")) or 0 }, Guild.ROW)
+            end
+        end
+        table.sort(out, function(a, b) return (a.last or a.r.last or 0) > (b.last or b.r.last or 0) end)
         return out
     end, RECRUITS_MAX_AGE)
 end
@@ -1831,6 +2504,31 @@ function Guild.ReplyGroup(r)
     if r.status == "joined" then return "joined" end
     if r.status == "declined" or r.saidNo then return "declined" end
     return "invited"
+end
+
+-- The same for a record by name: a cold one is read from its string (the
+-- Replies list tags hundreds of conversations per build).
+function Guild.ReplyGroupOf(full)
+    local g = Guild.Data()
+    local s = g and g.cold[full]
+    if not s then
+        local r = Recruit(full)
+        return r and Guild.ReplyGroup(r) or "invited"
+    end
+    if (Cold.Raw(s, Cold.at.ignoring) or "") ~= "" then return "blocked" end
+    local status = Unp(Cold.Raw(s, 1) or "")
+    if status == "joined" then return "joined" end
+    if status == "declined" or (Cold.Raw(s, Cold.at.saidNo) or "") ~= "" then return "declined" end
+    return "invited"
+end
+
+-- The warm-up builds what the first chat line or redraw would otherwise
+-- build in place: the cold counts and the short-name index (both pause).
+function Guild.WarmCold()
+    local g = Guild.Data()
+    if not g then return end
+    local st = Cold.State(g)
+    if st.n <= Cold.SHORT_INDEX_MAX then Cold.FindShort(g, "") end
 end
 
 -- The newest line of the conversation holding needle (plain lowercase),
@@ -2104,15 +2802,33 @@ local function FilterWhisper(_, event, text, name)
     text = S.Value(text)
     if not r or type(text) ~= "string" then return false end
     if event == "CHAT_MSG_WHISPER_INFORM" then return text == r.whisper end
+    -- Forever: their answer is what you type the invite on: always shown.
+    if Guild.WhisperFirst then return false end
     return not Talking(r)
 end
 
 -- The game's lines about an invite you sent ("You have invited...",
 -- "... declines", offline, already in a guild) for players you invited.
 local RECRUIT_LINES = { invite = true, declined = true, guilded = true, pending = true, notfound = true }
-local function FilterSystem(_, _, text)
-    if not db().guildHideChat then return false end
+-- Lines worth seeing in a wall of declines: setting, color state. A colored
+-- line is never hidden (you asked to see it). A secret line is left as it is.
+local STANDOUT = { join = { "guildColorJoin", "safe" }, guilded = { "guildColorGuilded", "title" } }
+local function FilterSystem(_, _, text, ...)
     local kind, name = MatchSystem(text)
+    if not kind then return false end
+    local mark = STANDOUT[kind]
+    if mark and db()[mark[1]] then
+        return false, ns.ColorCode(mark[2]) .. S.Value(text) .. "|r", ...
+    end
+    if not db().guildHideChat then return false end
+    -- Forever: you type the invite, so every answer to it is yours to read
+    -- (not found, already in a guild, declined). Only an opener's "No player
+    -- named" stays hidden: a wall of them is noise, and the row says it.
+    if Guild.WhisperFirst then
+        if kind ~= "notfound" then return false end
+        Calls.whisperMiss = Calls.whisperMiss or Pattern(ERR_CHAT_PLAYER_NOT_FOUND_S or "No player named '%s' is currently playing.")
+        if not S.Value(text):match(Calls.whisperMiss) then return false end
+    end
     return RECRUIT_LINES[kind] == true and InvitedRecruit(name) ~= nil
 end
 Guild.FilterWhisper, Guild.FilterSystem = FilterWhisper, FilterSystem
@@ -2458,15 +3174,19 @@ local keyCache = { seconds = 2 }
 local function DataKey(g)
     local now, ver = GetTime(), ns.Data.Version("guild")
     if keyCache.g == g and keyCache.ver == ver and now - keyCache.at < keyCache.seconds then return keyCache.text end
+    -- The live records are walked; the cold ones are counted as they change
+    -- (Cold.State), so a hundred thousand of them cost nothing here. (No
+    -- Data.Step: this runs inside the guild source's signature, under pcall.)
     local n, sum = 0, 0
     for _, r in pairs(g.recruits) do
         n = n + 1
         if r.invited and r.by then sum = sum + r.invited end
     end
+    local cold = Cold.State(g)
     local e, l = g.events or {}, g.log
     keyCache.g, keyCache.at, keyCache.ver = g, now, ver
     keyCache.text = table.concat({ tostring(g), #e, e[#e] and EventTime(e[#e]) or 0, #l, l[#l] and l[#l].t or 0,
-        n, sum, g.lastRead or 0 }, ":")
+        n + cold.n, sum + cold.sum, g.lastRead or 0, Guild.ColdVersion(g) }, ":")
     return keyCache.text
 end
 
@@ -2481,43 +3201,124 @@ function Guild.Memberships()
     return Cached("memberships", g, Guild.BuildMemberships)
 end
 
-function Guild.BuildMemberships(g)
+-- Entries of one player within the tolerance are one event (the game's log
+-- and the roster log both see a join).
+function Cold.AddMerged(list, who, entry, now)
+    list[who] = list[who] or {}
+    for _, e in ipairs(list[who]) do
+        if math.abs(e.t - entry.t) <= Tolerance(math.max(0, now - entry.t)) then
+            e.by = e.by or entry.by
+            return
+        end
+    end
+    table.insert(list[who], entry)
+end
+
+-- Invites, joins and leaves per player from the game's event log and the
+-- roster log (joins oldest first). Decoding thousands of events was most of
+-- every Memberships build, and the logs only grow at their end: kept until
+-- an entry is added or a day passes (Tolerance widens with age). Callers
+-- must not change it.
+function Cold.BuildEventSummary(g)
     local invites, joins, leaves = {}, {}, {}
     local now = time()
-    local function Add(list, who, entry)
-        list[who] = list[who] or {}
-        for _, e in ipairs(list[who]) do
-            if math.abs(e.t - entry.t) <= Tolerance(math.max(0, now - entry.t)) then
-                e.by = e.by or entry.by
-                return
-            end
-        end
-        table.insert(list[who], entry)
-    end
     for i, e in Guild.Events(g) do
         Step(i)
-        if e.k == "invite" and e.b then Add(invites, e.b, { t = e.t, by = e.a })
-        elseif e.k == "join" then Add(joins, e.a, { t = e.t })
-        elseif e.k == "quit" then Add(leaves, e.a, { t = e.t, how = "quit" })
-        elseif e.k == "remove" and e.b then Add(leaves, e.b, { t = e.t, how = "removed", by = e.a }) end
+        if e.k == "invite" and e.b then Cold.AddMerged(invites, e.b, { t = e.t, by = e.a }, now)
+        elseif e.k == "join" then Cold.AddMerged(joins, e.a, { t = e.t }, now)
+        elseif e.k == "quit" then Cold.AddMerged(leaves, e.a, { t = e.t, how = "quit" }, now)
+        elseif e.k == "remove" and e.b then Cold.AddMerged(leaves, e.b, { t = e.t, how = "removed", by = e.a }, now) end
     end
     for i, e in ipairs(g.log) do
         Step(i)
-        if e.k == "join" then Add(joins, e.n, { t = e.t })
-        elseif e.k == "leave" then Add(leaves, e.n, { t = e.t, how = "quit" })
-        elseif e.k == "kick" then Add(leaves, e.n, { t = e.t, how = "removed", by = e.by }) end
+        if e.k == "join" then Cold.AddMerged(joins, e.n, { t = e.t }, now)
+        elseif e.k == "leave" then Cold.AddMerged(leaves, e.n, { t = e.t, how = "quit" }, now)
+        elseif e.k == "kick" then Cold.AddMerged(leaves, e.n, { t = e.t, how = "removed", by = e.by }, now) end
     end
+    local n = 0
+    for _, list in pairs(joins) do
+        n = n + 1
+        Step(n)
+        table.sort(list, function(x, y) return x.t < y.t end)
+    end
+    -- Kept: invites and leaves of players who joined (all Memberships reads)
+    -- and, for Recruiters, who each player invited as one set per recruiter.
+    -- A list per invitee kept for a long history was megabytes.
+    local invitedBy = {}
+    local ji, jl = {}, {}
+    for who, list in pairs(invites) do
+        for _, inv in ipairs(list) do
+            if inv.by then
+                local set = invitedBy[inv.by]
+                if not set then set = {} invitedBy[inv.by] = set end
+                set[who] = true
+            end
+        end
+        if joins[who] then ji[who] = list end
+    end
+    for who, list in pairs(leaves) do if joins[who] then jl[who] = list end end
+    return { invites = ji, joins = joins, leaves = jl, invitedBy = invitedBy }
+end
+
+function Guild.EventSummary(g)
+    local e, l = g.events or {}, g.log or {}
+    local key = tostring(g) .. ":" .. #e .. ":" .. (e[#e] and EventTime(e[#e]) or 0) .. ":" .. #l .. ":" .. (l[#l] and l[#l].t or 0)
+        .. ":" .. math.floor(time() / 86400)
+    return ns.Data.Memo("guild:eventsummary", key, function() return Cold.BuildEventSummary(g) end)
+end
+
+-- The invite kept on every cold record (who, when, by whom) as three arrays:
+-- read from the strings once per change of the cold records, not on every
+-- membership rebuild after a live change. Callers must not change it.
+function Guild.ColdInvites(g)
+    return ns.Data.Memo("guild:coldinvites", tostring(g) .. ":" .. Guild.ColdVersion(g), function()
+        -- asked: the places of players only messaged (Forever), no invite sent.
+        local names, ts, bys, asked = {}, {}, {}, {}
+        for i, full in ipairs(Cold.Names(g)) do
+            Step(i)
+            local status, invited, by = Cold.Stat(g.cold[full] or "", g)
+            if invited and by then
+                local n = #names + 1
+                names[n], ts[n], bys[n] = full, tonumber(invited) or 0, by
+                if status == "asked" then asked[n] = true
+                elseif Guild.WhisperFirst and status == "notfound"
+                    and (tonumber(Unp(Cold.Raw(g.cold[full], Cold.at.invites) or "")) or 0) == 0 then
+                    -- "No player named..." after the opener, never invited: still only whispered.
+                    asked[n] = true
+                end
+            end
+        end
+        return { names = names, ts = ts, bys = bys, asked = asked }
+    end)
+end
+
+function Guild.BuildMemberships(g)
+    local summary = Guild.EventSummary(g)
+    local invites, joins, leaves = summary.invites, summary.joins, summary.leaves
+    -- The recruit records' invites, kept apart from the log's (both are
+    -- searched below; the log's entry wins a tie, as it did when they were merged).
+    local rinvites = {}
+    local now = time()
+    -- Only players who joined matter here: a table per old invite was garbage on every rebuild.
     for full, rec in pairs(g.recruits) do
-        if rec.invited and rec.by then Add(invites, full, { t = rec.invited, by = rec.by }) end
+        if rec.invited and rec.by and joins[full] then Cold.AddMerged(rinvites, full, { t = rec.invited, by = rec.by }, now) end
+    end
+    local ci = Guild.ColdInvites(g)
+    for i = 1, #ci.names do
+        Step(i)
+        local who = ci.names[i]
+        if joins[who] then Cold.AddMerged(rinvites, who, { t = ci.ts[i], by = ci.bys[i] }, now) end
     end
     local out, n = {}, 0
     for who, list in pairs(joins) do
         n = n + 1
         Step(n)
-        table.sort(list, function(x, y) return x.t < y.t end)
         for i, j in ipairs(list) do
             local inviter, best = nil, -math.huge
             for _, inv in ipairs(invites[who] or {}) do
+                if inv.t <= j.t + 2 * 3600 and inv.t > best then inviter, best = inv.by, inv.t end
+            end
+            for _, inv in ipairs(rinvites[who] or {}) do
                 if inv.t <= j.t + 2 * 3600 and inv.t > best then inviter, best = inv.by, inv.t end
             end
             local nextJoin = list[i + 1] and list[i + 1].t or math.huge
@@ -2549,16 +3350,21 @@ function Guild.BuildRecruiters(g)
             rejoins = 0, daysSum = 0, daysN = 0, list = {} }
         return stats[by]
     end
-    -- Only invites count here: the others are not decoded at all.
-    for i, s in ipairs(g.events or {}) do
-        Step(i)
-        if type(s) ~= "string" or s:find("|sinvite|", 1, true) then
-            local e = Guild.Event(s)
-            if e.k == "invite" and e.b then Stat(e.a).invited[e.b] = true end
-        end
+    -- Invites from the logs' summary and the cold arrays: nothing decoded here.
+    for by, set in pairs(Guild.EventSummary(g).invitedBy) do
+        local into = Stat(by).invited
+        for who in pairs(set) do into[who] = true end
     end
     for full, rec in pairs(g.recruits) do
-        if rec.invited and rec.by then Stat(rec.by).invited[full] = true end
+        -- Only real invites: a player just asked (Forever) was not invited, and one who then
+        -- turned out offline with no invite typed is the same.
+        local whisperOnly = Guild.WhisperFirst and (rec.status == "asked" or (rec.status == "notfound" and (rec.invites or 0) == 0))
+        if rec.invited and rec.by and not whisperOnly then Stat(rec.by).invited[full] = true end
+    end
+    local ci = Guild.ColdInvites(g)
+    for i = 1, #ci.names do
+        Step(i)
+        if not ci.asked[i] then Stat(ci.bys[i]).invited[ci.names[i]] = true end
     end
     local joinsOf = {}
     for i, m in ipairs(Guild.Memberships()) do
@@ -2584,9 +3390,12 @@ function Guild.BuildRecruiters(g)
         local n = 0
         for _ in pairs(st.invited) do n = n + 1 end
         st.invitedCount = n
+        -- Read only for the count: a set of every player invited, per recruiter, kept in the memo was megabytes.
+        st.invited = nil
         for who in pairs(st.joinedSet) do
             if (joinsOf[who] or 0) > 1 then st.rejoins = st.rejoins + 1 end
         end
+        st.joinedSet = nil
         st.days = st.daysN > 0 and st.daysSum / st.daysN or nil
         out[#out + 1] = st
     end
@@ -3002,26 +3811,39 @@ local function Step(source)
     local canInvite = Guild.Can("invite")
     local cands = canInvite and Guild.Candidates() or {}
     local what, who
-    -- The invite queue first: its oldest ready invite.
-    if canInvite and Allowed(source, "invite") then
-        who = Guild.InviteNext(source)
-        if who then what = "invite" end
-    end
-    -- Then a /who as soon as the button's own wait is over.
-    if not what and Guild.WhoWait() == 0 and Allowed(source, "who") then
-        if Guild.Who() then what = "who" end
-    end
-    if not what and Allowed(source, "invite") then
-        local tries = 0
-        for _, c in ipairs(cands) do
-            if not c.ready then
-                tries = tries + 1
-                if Guild.Invite(c.full) then
-                    local r = Recruit(c.full)
-                    what, who = (r and r.status == "inviting") and "whisper" or "invite", c.full
-                    break
+    if Guild.WhisperFirst then
+        -- Forever takes no invite from addons: the next opener, else a /who.
+        if canInvite and Allowed(source, "invite") then
+            for i, c in ipairs(cands) do
+                if i > HANDS_FREE_TRIES then break end
+                if Guild.Invite(c.full) then what, who = "whisper", c.full break end
+            end
+        end
+        if not what and Guild.WhoWait() == 0 and Allowed(source, "who") then
+            if Guild.Who() then what = "who" end
+        end
+    else
+        -- The invite queue first: its oldest ready invite.
+        if canInvite and Allowed(source, "invite") then
+            who = Guild.InviteNext(source)
+            if who then what = "invite" end
+        end
+        -- Then a /who as soon as the button's own wait is over.
+        if not what and Guild.WhoWait() == 0 and Allowed(source, "who") then
+            if Guild.Who() then what = "who" end
+        end
+        if not what and Allowed(source, "invite") then
+            local tries = 0
+            for _, c in ipairs(cands) do
+                if not c.ready then
+                    tries = tries + 1
+                    if Guild.Invite(c.full) then
+                        local r = Recruit(c.full)
+                        what, who = (r and r.status == "inviting") and "whisper" or "invite", c.full
+                        break
+                    end
+                    if tries >= HANDS_FREE_TRIES then break end
                 end
-                if tries >= HANDS_FREE_TRIES then break end
             end
         end
     end
@@ -3038,34 +3860,54 @@ end
 -- The game blocked an invite: the call returned as if it went, so the
 -- player does not count as invited: the invite goes back in the queue
 -- (ready once their opener is out).
-local function InviteBlocked(full)
+-- Ready again only after Calls.BLOCK_ACK_WAIT: a late "You have invited X" says
+-- it went after all. At Calls.MAX_UNCONFIRMED calls it stays counted as sent.
+local function InviteBlocked(full, why)
     local r = Recruit(full)
-    if not r or r.status ~= "invited" then return end
+    if not r or r.status ~= "invited" then return false end
+    if Calls.Unconfirmed(full) >= Calls.MAX_UNCONFIRMED then return false end
     r.invites = math.max(0, (r.invites or 1) - 1)
     r.ack = nil
-    InviteLater(full, "blocked")
+    InviteLater(full, why or "blocked", Calls.BLOCK_ACK_WAIT)
+    return true
+end
+
+-- Is a refusal named `fn` the step's own call? Other calls of the addon can
+-- be refused inside the same click (a window redrawn during it): the invite
+-- or /who itself still went. A refusal the game does not name may be it.
+function Calls.OwnRefusal(names, kind)
+    local word = kind == "who" and "who" or "invite"
+    for _, fn in ipairs(names) do
+        local plain = type(fn) == "string" and fn:lower() or "?"
+        if plain == "?" or plain == "" or plain:find("unknown", 1, true) or plain:find(word, 1, true) then return fn end
+    end
 end
 
 -- One step with the game's refusals watched: ADDON_ACTION_BLOCKED fires
 -- inside the blocked call, so only a refusal during the step counts.
 local function WatchedStep(source)
-    stepping = { source = source }
+    stepping = { source = source, blocked = {} }
     local ok, what, x = pcall(Step, source)
-    local blockedBy = stepping.blocked
+    local refused = stepping.blocked
     stepping = nil
     if not ok then error(what, 0) end
     if not what then return nil, x end
     local kind = what == "who" and "who" or "invite"
     local key = source .. ":" .. kind
+    local blockedBy = Calls.OwnRefusal(refused, kind)
     if not blockedBy then
         blockStreak[key] = 0
         if what == "who" then handsFreeWho = { t = GetTime(), source = source, pending = whoPending } end
         return what, x
     end
-    if what == "invite" then
-        InviteBlocked(x)
-        -- It never went: a click on their row may send it at once, and
-        -- Hands Free does not try them again (it would be blocked again).
+    if what == "invite" and not InviteBlocked(x) then
+        ns.Print(string.format("the game refused the guild invite to %s again (%s); it is counted as sent and not tried again, "
+            .. "since it may have reached them. Invite again from the Invited tab in a minute if they did not get it.",
+            Guild.Short(x), tostring(blockedBy)))
+    elseif what == "invite" then
+        -- It seems not to have gone: once BLOCK_ACK_WAIT passed without the
+        -- game's confirmation, a click on their row may send it, and Hands
+        -- Free does not try them again (it would be blocked again).
         Outbox.ForgetInvite(Target(x))
         yourClick[x] = source
         if not toldBlocked[source] then
@@ -3124,8 +3966,8 @@ end
 
 -- The recruit key binding (Bindings.xml) and "/click" macros press this
 -- button: a real key press each time, so it may invite and search. One step
--- per press (next queued invite, else /who, else the next whisper), Hands
--- Free on or off. A button, not a global function: frames are the addon's
+-- per press (Classic: next queued invite, else /who, else the next whisper;
+-- Forever: the next whisper, else /who), Hands Free on or off. A button, not a global function: frames are the addon's
 -- only globals.
 -- A block: its locals end with it (Lua 5.1 allows 200 in the file's chunk).
 do
@@ -3149,7 +3991,7 @@ do
     stepButton:EnableMouse(false)
     stepButton:SetScript("OnClick", function() Guild.RecruitStep("bind") end)
     _G["BINDING_HEADER_" .. ns.SLASH_KEY] = ns.NAME
-    _G["BINDING_NAME_" .. ns.BINDING_STEP] = "Next recruit step (invite, /who or whisper)"
+    _G["BINDING_NAME_" .. ns.BINDING_STEP] = "Next recruit step (" .. (Guild.WhisperFirst and "whisper or /who" or "invite, /who or whisper") .. ")"
 end
 
 -- The key bound to the recruit step, or nil.
@@ -3335,7 +4177,7 @@ end
 -- A refusal fired during a hands-free step: that step was blocked. Never
 -- turns Hands Free off; WatchedStep counts it.
 local function OnBlocked(addon, fn)
-    if stepping and addon == ADDON_NAME then stepping.blocked = S.Value(fn) or "?" end
+    if stepping and addon == ADDON_NAME then table.insert(stepping.blocked, S.Value(fn) or "?") end
 end
 
 function Guild.SetHandsFree(on)
@@ -3488,6 +4330,8 @@ ns.RegisterModule("Guild", {
         guildRecruitHideClass = {},
         guildRecruitHideScript = {},
         guildHideChat = true,
+        guildColorJoin = true,
+        guildColorGuilded = true,
         guildMiniShown = false,
         guildReplyNotice = true,
         guildReinviteDays = 7,

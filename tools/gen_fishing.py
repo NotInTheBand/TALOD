@@ -18,8 +18,8 @@ Sources:
     rule (src/game/Entities/GameObject.cpp in cmangos/mangos-classic): a fish is
     hooked when skill >= base and a 1-100 roll <= skill - base + 5, so below the
     base every fish gets away and from base + 95 none does.
-  - wago.tools DB2 exports of the Classic Era client
-    (https://wago.tools/db2/<table>/csv?product=wow_classic_era): AreaTable
+  - wago.tools DB2 exports of the WoW Forever client
+    (https://wago.tools/db2/<table>/csv?product=wowf): AreaTable
     (area names, parents), UiMapAssignment (UiMap ID -> AreaID).
   - The hand lists (TIMED, EXTRAVAGANZA, WHERE_NOTES) name their own source.
 
@@ -47,7 +47,7 @@ OUT = ADDON / "FishingData.lua"
 CACHE = ADDON / "tools" / "cache"
 CMANGOS_LIST = "https://api.github.com/repos/cmangos/classic-db/contents/Full_DB"
 CMANGOS_RAW = "https://github.com/cmangos/classic-db/raw/master/Full_DB/"
-WAGO = "https://wago.tools/db2/{}/csv?product=wow_classic_era"
+WAGO = "https://wago.tools/db2/{}/csv?product=wowf"   # the Forever client (was wow_classic_era)
 
 # Goal list: item ID -> group. Names, quests and rewards are read from the
 # database (a wrong ID stops the build). Groups: "pagle" = Nat Pagle's
@@ -189,8 +189,8 @@ def main():
     listing = json.loads(fetch(CMANGOS_LIST, "cmangos_full_db.json", refresh))
     dump = next(f["name"] for f in listing if f["name"].endswith(".sql.gz"))
     sql = gzip.decompress(fetch(CMANGOS_RAW + dump, dump, refresh, binary=True)).decode("utf-8", "replace")
-    areas = {int(r["ID"]): r for r in csv.DictReader(io.StringIO(fetch(WAGO.format("AreaTable"), "wago_era_AreaTable.csv", refresh)))}
-    assign = list(csv.DictReader(io.StringIO(fetch(WAGO.format("UiMapAssignment"), "wago_era_UiMapAssignment.csv", refresh))))
+    areas = {int(r["ID"]): r for r in csv.DictReader(io.StringIO(fetch(WAGO.format("AreaTable"), "wago_wowf_AreaTable.csv", refresh)))}
+    assign = list(csv.DictReader(io.StringIO(fetch(WAGO.format("UiMapAssignment"), "wago_wowf_UiMapAssignment.csv", refresh))))
 
     def area_name(a):
         r = areas.get(a)
@@ -277,7 +277,7 @@ def main():
         "-- Generated %s from:" % today,
         "--   CMaNGOS Classic DB %s (https://github.com/cmangos/classic-db):" % dump,
         "--     skill_fishing_base_level, fishing / reference loot, items, quests;",
-        "--   wago.tools Classic Era DB2 (https://wago.tools/db2/AreaTable, /UiMapAssignment).",
+        "--   wago.tools WoW Forever DB2 (https://wago.tools/db2/AreaTable, /UiMapAssignment).",
         "-- Zone level rule (cmangos/mangos-classic GameObject.cpp): hooked when skill >= base",
         "-- and a 1-100 roll <= skill - base + 5; no fish gets away from base + 95.",
         "local ADDON_NAME, ns = ...",

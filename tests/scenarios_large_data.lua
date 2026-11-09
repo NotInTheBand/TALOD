@@ -160,6 +160,10 @@ end
 scenarios.large_data_economy = function()
     local ns = boot(11509)
     local E, UI = ns.Economy, ns.EconomyUI
+    -- Noon: 400 steps of 24 h from just after midnight cross a daylight-saving
+    -- change onto the same date twice.
+    local today = date("*t", time())
+    MOCK.now = time({ year = today.year, month = today.month, day = today.day, hour = 12 })
     local now = time()
     -- Two characters, 5000 entries each, 400 days with gaps in the gold readings.
     for c = 1, 2 do
@@ -283,7 +287,8 @@ scenarios.large_data_background = function()
     D.Changed("prices")
     local builds = 0
     local base = Desk.BuildOpportunities
-    Desk.BuildOpportunities = function() builds = builds + 1 return base() end
+    -- A walk over every ladder is slow in the game (hundreds of ms on a real save): it says so to the fake clock.
+    Desk.BuildOpportunities = function() builds = builds + 1 ms = ms + 20 return base() end
     local function settle()
         local frames = 0
         while D.Busy() and frames < 5000 do MOCK.Tick(0.02) frames = frames + 1 end

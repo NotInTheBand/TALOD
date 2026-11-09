@@ -127,16 +127,35 @@ end
 -- was open. The sell rate drifts over days: PLAN_AGE bounds that.
 local PLAN_AGE = 1800
 
--- The control plan for one item, or nil without a ladder. {
---   id, ladder, stats, usual, rate (your sell rate or nil), age, stale,
+-- What a walk over every ladder reads once, not per plan: your auctions
+-- indexed by item and the deposit rate.
+function Desk.Context()
+    return { index = Market.SalesIndex(), depositRate = Desk.DepositRate() }
+end
+
+-- The control plan of one item for lists, or nil without a ladder. Lists hold
+-- thousands, so it keeps only what rows and the verdict read: {
+--   id, usual, rate (your sell rate or nil), age, stale,
 --   atLeast (some auctions not seen: costs are lower bounds), holders,
---   steps = { { k, upTo, units, cost, relist, deposit, revenue, profit, roi, overUsual,
---     over (the relist is an overpriced price: never the best) } },
---   best (the step with the highest profit, if any makes money),
+--   ladder = { t, low (the cheapest tier's price), units, auctions },
+--   move = { key, hex, label } (does it sell: Market.MoveKey),
+--   best (the reset step with the highest profit, if any makes money; see Detail),
 --   all = { units, cost, relist, deposit, revenue, profit, roi },
 -- }
-function Desk.Plan(id, base)
-    local plan = Kept("plan:" .. tostring(id), "", function() return Desk.BuildPlan(id) end, base, PLAN_AGE)
+-- base / ctx: Data.Key(SOURCES) and Desk.Context() when the caller walks
+-- many items.
+-- Every plan lives in one map kept like a memo (same key and age): a memo
+-- record and name per item was more than a megabyte over thousands of
+-- ladders. The map is this file's own cache: plans are added as asked for.
+function Desk.Plan(id, base, ctx)
+    ns.Data.Step()      -- a walk over every ladder pauses here, as it did at each memo
+    local map = Kept("plans", "", function() return {} end, base, PLAN_AGE)
+    local plan = map[id]
+    if plan == nil then
+        plan = Desk.BuildPlan(id, false, ctx) or false
+        map[id] = plan
+    end
+    plan = plan or nil
     if plan then
         plan.age = time() - plan.ladder.t
         plan.stale = plan.age > Desk.FRESH
@@ -144,59 +163,119 @@ function Desk.Plan(id, base)
     return plan
 end
 
-function Desk.BuildPlan(id)
-    local L = Prices.Ladder(id)
-    local plan
-    if L and #L.tiers > 0 then
-        local usual, stats = Desk.Usual(id)
-        local sales = Market.MySales(id)
-        local rate = sales.rate
-        local cut = 1 - Market.CUT
-        plan = { id = id, ladder = L, stats = stats, usual = usual, rate = rate, age = time() - L.t,
-            atLeast = L.partial or L.more > 0, holders = Desk.Holders(L), steps = {}, moves = Market.Movement(id) }
+-- The whole plan of one item (the Control tab's detail, tooltips, the report):
+-- the slim plan's fields plus ladder.tiers ({ u, q, m } cheapest first, and
+-- the ladder's sellers / mine / partial / bidOnly / more), steps (every
+-- reset: { k, upTo, units, cost, relist, deposit, revenue, profit, roi,
+-- overUsual, over (the relist is an overpriced price: never the best) }; best
+-- is one of them), stats (Market.Stats) and moves (Market.Movement).
+function Desk.Detail(id, base)
+    -- Eight slots by item id, the id in the key: a full plan holds every tier
+    -- and step, and hovering list rows for a session must not keep one per item.
+    local slot = (tonumber(id) or 0) % 8
+    local plan = Kept("detail:" .. slot, tostring(id), function() return Desk.BuildPlan(id, true) end, base, PLAN_AGE)
+    if plan then
+        plan.age = time() - plan.ladder.t
         plan.stale = plan.age > Desk.FRESH
-        local cost, units = 0, 0
-        for k, t in ipairs(L.tiers) do
-            local q = t.q - t.m
-            cost, units = cost + q * t.u, units + q
-            -- The next seller's price is the wall you relist under.
-            local wall
-            for j = k + 1, #L.tiers do
-                if L.tiers[j].q - L.tiers[j].m > 0 then wall = L.tiers[j].u break end
-            end
-            -- A tier of only your units adds nothing to buy: no step of its own.
-            if wall and q > 0 and wall - 1 > t.u then
-                local relist = wall - 1
-                local deposit = Desk.Deposit(id, units)
-                local revenue = math.floor(math.floor(relist * cut) * units * (rate or 1))
-                local profit = revenue - cost - deposit
-                plan.steps[#plan.steps + 1] = { k = k, upTo = t.u, units = units, cost = cost, relist = relist, deposit = deposit,
-                    revenue = revenue, profit = profit, roi = cost > 0 and profit / cost or nil,
-                    overUsual = usual and usual > 0 and (relist - usual) / usual or nil,
-                    over = usual and relist > usual * Market.OUTLIER_FACTOR or nil }
-            end
-        end
-        for _, step in ipairs(plan.steps) do
-            if step.profit > 0 and not step.over and (not plan.best or step.profit > plan.best.profit) then plan.best = step end
-        end
-        -- Everything: relist at the usual price or the highest listed, whichever is more.
-        -- Tiers overpriced against the usual (Market.OUTLIER_FACTOR) are not a price
-        -- anyone pays: the relist stops under them.
-        local top = 0
-        for _, t in ipairs(L.tiers) do
-            if not (usual and t.u > usual * Market.OUTLIER_FACTOR) then top = t.u end
-        end
-        local relist = math.max(math.floor(usual or 0), top)
-        local deposit = Desk.Deposit(id, units)
-        local revenue = math.floor(math.floor(relist * cut) * units * (rate or 1))
-        plan.all = { units = units, cost = cost, relist = relist, deposit = deposit, revenue = revenue,
-            profit = revenue - cost - deposit, roi = cost > 0 and (revenue - cost - deposit) / cost or nil }
     end
+    return plan
+end
+
+-- Desk.Deposit with the vendor price and the rate already read (a plan asks for each step).
+local function DepositFor(sell, units, rate)
+    if type(sell) ~= "number" or sell <= 0 then return 0 end
+    return math.floor(sell * units * rate + 0.5)
+end
+
+local ladderCols = { u = {}, q = {}, m = {} }
+local walls = {}
+
+function Desk.BuildPlan(id, full, ctx)
+    -- Anything that can pause the build (a memo read) comes before the shared
+    -- columns are filled.
+    ctx = ctx or Desk.Context()
+    local stats = Market.Stats(id)
+    local usual = (stats and stats.looks >= 2) and stats.usualBefore or nil
+    local _, _, rate = Market.SaleCounts(id, ctx.index)
+    local moves, brief
+    if full then
+        moves = Market.Movement(id)
+        brief = Market.MOVE_BRIEF[moves.key]
+    else
+        brief = Market.MOVE_BRIEF[(Market.MoveKey(id, ctx.index))]
+    end
+    local _, _, _, sell = Market.ItemInfo(id)
+    local depositRate = ctx.depositRate
+
+    local c = Prices.LadderColumns(id, ladderCols)
+    if not c or c.count == 0 then return nil end
+    local n, U, Q, M = c.count, c.u, c.q, c.m
+    local cut = 1 - Market.CUT
+    local plan = { id = id, usual = usual, rate = rate, age = time() - c.t, atLeast = c.partial or c.more > 0,
+        holders = Desk.Holders(c), move = brief,
+        ladder = { t = c.t, low = U[1], units = c.units, auctions = c.auctions } }
+    plan.stale = plan.age > Desk.FRESH
+    if full then
+        local L = Prices.Ladder(id)
+        L.low = U[1]
+        plan.ladder, plan.stats, plan.moves, plan.steps = L, stats, moves, {}
+    end
+    -- The next seller's price is the wall you relist under: the nearest dearer
+    -- tier with units that are not yours.
+    local nextWall
+    for k = n, 1, -1 do
+        walls[k] = nextWall
+        if Q[k] - M[k] > 0 then nextWall = U[k] end
+    end
+    local factor = Market.OUTLIER_FACTOR
+    local cost, units, best = 0, 0, nil
+    for k = 1, n do
+        local q = Q[k] - M[k]
+        cost, units = cost + q * U[k], units + q
+        local wall = walls[k]
+        -- A tier of only your units adds nothing to buy: no step of its own.
+        if wall and q > 0 and wall - 1 > U[k] then
+            local relist = wall - 1
+            local deposit = DepositFor(sell, units, depositRate)
+            local revenue = math.floor(math.floor(relist * cut) * units * (rate or 1))
+            local profit = revenue - cost - deposit
+            local over = usual and relist > usual * factor or nil
+            local better = profit > 0 and not over and (not best or profit > best.profit)
+            if full or better then
+                local step = { k = k, upTo = U[k], units = units, cost = cost, relist = relist, deposit = deposit,
+                    revenue = revenue, profit = profit, roi = cost > 0 and profit / cost or nil,
+                    overUsual = usual and usual > 0 and (relist - usual) / usual or nil, over = over }
+                if full then plan.steps[#plan.steps + 1] = step end
+                if better then best = step end
+            end
+        end
+    end
+    plan.best = best
+    -- Everything: relist at the usual price or the highest listed, whichever is more.
+    -- Tiers overpriced against the usual (Market.OUTLIER_FACTOR) are not a price
+    -- anyone pays: the relist stops under them.
+    local top = 0
+    for k = 1, n do
+        if not (usual and U[k] > usual * factor) then top = U[k] end
+    end
+    local relist = math.max(math.floor(usual or 0), top)
+    local deposit = DepositFor(sell, units, depositRate)
+    local revenue = math.floor(math.floor(relist * cut) * units * (rate or 1))
+    plan.all = { units = units, cost = cost, relist = relist, deposit = deposit, revenue = revenue,
+        profit = revenue - cost - deposit, roi = cost > 0 and (revenue - cost - deposit) / cost or nil }
     return plan
 end
 
 -- For writes that bypass Prices / Economy (tests): rebuilt on the next read.
 function Desk.Invalidate() ns.Data.Forget("desk:") end
+
+-- The item IDs with a ladder, in `pairs` order, collected first so a walk can
+-- pause between items (a paused `pairs` over saved data breaks on new keys).
+local function LadderIDs()
+    local ids = {}
+    for id in pairs(Prices.AllLadders()) do ids[#ids + 1] = id end
+    return ids
+end
 
 -- Resets worth a look: best step profit >= the setting and ROI >= MIN_ROI,
 -- ladders under OLD, and not an item that doesn't sell (relisting it all
@@ -209,12 +288,12 @@ end
 function Desk.BuildOpportunities()
     local out = {}
     local minProfit = db().deskMinProfit or 5000
-    local base = ns.Data.Key(SOURCES)
-    for id in pairs(Prices.AllLadders()) do
-        local plan = Desk.Plan(id, base)
+    local base, ctx = ns.Data.Key(SOURCES), Desk.Context()
+    for _, id in ipairs(LadderIDs()) do
+        local plan = Desk.Plan(id, base, ctx)
         local best = plan and plan.best
         if best and plan.age <= Desk.OLD and best.profit >= minProfit and (best.roi or 0) >= Desk.MIN_ROI
-            and plan.moves.key ~= "dead" then
+            and plan.move.key ~= "dead" then
             out[#out + 1] = plan
         end
     end
@@ -230,11 +309,11 @@ end
 
 function Desk.BuildMarkets(sort, search)
     local out = {}
-    local base = ns.Data.Key(SOURCES)
-    for id in pairs(Prices.AllLadders()) do
+    local base, ctx = ns.Data.Key(SOURCES), Desk.Context()
+    for _, id in ipairs(LadderIDs()) do
         local name = Market.ItemInfo(id)
         if not search or search == "" or name:lower():find(search, 1, true) then
-            local plan = Desk.Plan(id, base)
+            local plan = Desk.Plan(id, base, ctx)
             if plan then
                 plan.name = name
                 out[#out + 1] = plan
@@ -263,26 +342,25 @@ end
 
 function Desk.BuildDeals()
     local out = {}
-    for _, d in ipairs(Market.Deals()) do
-        local L = Prices.Ladder(d.id)
-        if L and math.abs(L.t - d.s.t) <= 600 then
+    local cols = { u = {}, q = {}, m = {} }
+    for i, d in ipairs(Market.Deals()) do
+        if i % 64 == 0 then ns.Data.Step() end
+        local c = Prices.LadderColumns(d.id, cols)
+        if c and math.abs(c.t - d.s.t) <= 600 then
             local limit = d.usual * Market.DEAL_FACTOR
             local net = Market.Net(d.usual)
             local units, cost, gain = 0, 0, 0
-            for _, t in ipairs(L.tiers) do
-                if t.u > limit then break end
-                local q = t.q - t.m
-                units, cost, gain = units + q, cost + q * t.u, gain + q * (net - t.u)
+            for k = 1, c.count do
+                if c.u[k] > limit then break end
+                local q = c.q[k] - c.m[k]
+                units, cost, gain = units + q, cost + q * c.u[k], gain + q * (net - c.u[k])
             end
             d.units, d.cost, d.totalGain = units, cost, gain - Desk.Deposit(d.id, units)
         end
         out[#out + 1] = d
     end
-    table.sort(out, function(a, b)
-        local ga, gb = a.totalGain or a.gain, b.totalGain or b.gain
-        return ga > gb
-    end)
-    return out
+    -- Most total gain first, one C sort (equal gains keep Market.Deals' order).
+    return ns.Utils.SortBy(out, function(d) return ns.Utils.NumKey(d.totalGain or d.gain, true) end)
 end
 
 ---------------------------------------------------------------------------
@@ -322,7 +400,15 @@ end
 -- the game showed them), list = { { id, name, count, unit, left, endsAt,
 -- deposit (paid, from your posting log), depositGuess (no logged post: from
 -- your deposit rate), overdue, standing, value (after the cut) } } }.
+-- Kept for a minute: "overdue" and the looks' ages move with the clock, the
+-- rest with prices (the live list is saved with a prices bump) and your
+-- auction log; the window redraws every second a scan changes anything.
 function Desk.Listings()
+    local char = ns.Gear and ns.Gear.CharKey and ns.Gear.CharKey()
+    return Kept("listings", char, Desk.BuildListings, nil, 60)
+end
+
+function Desk.BuildListings()
     local out = { list = {} }
     local live = Prices.Owned()
     if live and time() - live.t < LISTING_MAX_AGE then
@@ -452,7 +538,7 @@ local function Slash(command, rest)
         ns.Print("\"" .. rest .. "\": no full look at its auctions yet (search it on the Auction House, or a full scan).")
         return true
     end
-    local plan = Desk.Plan(found)
+    local plan = Desk.Detail(found)
     local L = plan.ladder
     ns.Print(string.format("%s: %d units in %d auctions, %s ago.", Market.ItemText(found), L.units, L.auctions or 0, Prices.Age(L.t)))
     print(string.format("  Buy them all: %s%s (%d units), relist at %s: %s.", plan.atLeast and "at least " or "", Money(plan.all.cost),

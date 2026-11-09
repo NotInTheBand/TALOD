@@ -76,9 +76,10 @@ end
 -- asked for before it is done finishes it then. Either way the same as at once.
 scenarios.perf_seal_in_background = function()
     BNGetInfo = function() return 1, "Tester#1234" end
-    local recruits = {}
+    -- Invited within the seal's window (it covers the last 35 days).
+    local recruits, base = {}, MOCK.now - 20 * 86400
     for i = 1, 3000 do
-        recruits["Recruit" .. i .. "-Mockrealm"] = { status = "invited", t = 1700000000 + i, invited = 1700000000 + i,
+        recruits["Recruit" .. i .. "-Mockrealm"] = { status = "invited", t = base + i, invited = base + i,
             by = "Tester-Mockrealm", level = 10 + i % 50, classFile = "MAGE" }
     end
     local ns = boot(11509, { db = { guild = { guilds = { ["Brave Souls-Mockrealm"] = { recruits = recruits, members = {}, log = {}, events = {} } } } } })

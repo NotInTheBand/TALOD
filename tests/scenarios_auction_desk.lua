@@ -58,7 +58,7 @@ scenarios.auction_desk_ladder = function()
     check(Pr.Entry(2589).p == 10, "lowest price still logged")
 
     -- Control plan (deposit: 15% of the 13c vendor price until you post; no sell rate yet).
-    local plan = Desk.Plan(2589)
+    local plan = Desk.Detail(2589)
     check(plan and plan.usual == 100 and #plan.steps == 2, "plan steps: " .. tostring(plan and #plan.steps))
     local s1, s2 = plan.steps[1], plan.steps[2]
     check(s1.units == 5 and s1.cost == 50 and s1.relist == 19 and s1.deposit == 10 and s1.profit == 5 * 18 - 50 - 10, "step 1: " .. s1.profit)
@@ -96,9 +96,36 @@ scenarios.auction_desk_ladder = function()
     lists.list = { { "Salt", 5, 50, "Al", 4289 }, { "Wool Cloth", 5, 500, "Bo", 2592 } }
     MOCK.FireEvent("AUCTION_ITEM_LIST_UPDATE")
     check(not Pr.Ladder(4289) and not Pr.Ladder(2592) and Pr.Entry(4289), "browse page: prices, no ladders")
+    -- One item on page 1 of a broad search ("cloth"): its total counts every item, so no ladder.
+    function QueryAuctionItems() end
+    Pr.HookQueries()
+    QueryAuctionItems("cloth", nil, nil, 0, nil, nil, false, false)
+    lists.list = { { "Linen Cloth", 5, 995, "Al", 2589 }, total = 120 }
+    local function Tiers(id)
+        local l = Pr.Ladder(id)
+        if not l then return "none" end
+        local out = {}
+        for _, t in ipairs(l.tiers) do out[#out + 1] = t.u .. ":" .. t.q end
+        return table.concat(out, ",") .. "/" .. tostring(l.auctions)
+    end
+    local before = Tiers(2589)
+    MOCK.FireEvent("AUCTION_ITEM_LIST_UPDATE")
+    check(Tiers(2589) == before and (Pr.Entry(2589).a or 0) < 120, "broad search: no ladder, no total for one item: " .. Tiers(2589))
+    -- An exact search for Salt over several pages: one ladder, the pages added up.
+    QueryAuctionItems("Salt", nil, nil, 0, nil, nil, false, true)
     lists.list = { { "Salt", 5, 50, "Al", 4289 }, total = 120 }
     MOCK.FireEvent("AUCTION_ITEM_LIST_UPDATE")
     check(Pr.Ladder(4289) and Pr.Ladder(4289).partial and Desk.Plan(4289).atLeast, "more pages: partial ladder, costs at least")
+    QueryAuctionItems("Salt", nil, nil, 1, nil, nil, false, true)
+    lists.list = { { "Salt", 5, 80, "Bo", 4289 }, total = 120 }
+    MOCK.FireEvent("AUCTION_ITEM_LIST_UPDATE")
+    check(Tiers(4289) == "10:5,16:5/2", "page 2 adds to page 1: " .. Tiers(4289))
+    -- A full scan's list (getAll, more than a page): never read here, the AH helper reads it in chunks.
+    QueryAuctionItems("", nil, nil, 0, nil, nil, true, false)
+    lists.list = {}
+    for i = 1, 60 do lists.list[i] = { "Salt", 1, 1, "Cy", 4289 } end
+    check(Pr.ReadLegacyList() == 0, "getAll list left to the full scan")
+    QueryAuctionItems = nil
 
     -- Your listings: from the posting log first (no live list yet).
     TALODDB.economy[ns.Gear.CharKey()] = TALODDB.economy[ns.Gear.CharKey()] or { log = {}, days = {} }

@@ -368,9 +368,10 @@ def data_report_check():
     ev = tool.archive_entries(archive, "guildEvents")[0]["value"]
     if ev != {"t": 5, "k": "join", "a": "Al-Realm", "b": None, "rank": None}:
         problems.append(f"data report event: {ev}")
-    db = {"guild": {"guilds": {"G": {"recruits": {"A": {"x": "s"}, "B": {"status": "declined"}}}}}, "prices": {}}
+    db = {"guild": {"guilds": {"G": {"recruits": {"B": {"status": "declined"}}, "cold": {"A": "sdeclined|n1", "C": "sinvited|n2"},
+                                     "dict": ["text"]}}}, "prices": {}}
     text = tool.report(db, archive, "test")
-    if "1 packed, 1 plain" not in text or "recruitText: 1 entries" not in text:
+    if "2 cold, 1 live" not in text or "recruitText: 1 entries" not in text:
         problems.append("data report text: " + text)
     return problems
 

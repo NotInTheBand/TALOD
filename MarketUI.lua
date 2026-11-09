@@ -155,7 +155,7 @@ local function DetailRows(id)
             local makes = r.makes or 1
             out[#out + 1] = { label = r.prof:sub(1, 12), text = r.name .. HEX.muted .. "  " .. r.skill .. "  ·  materials " .. Money(pr.cost)
                 .. (makes ~= 1 and string.format(" for %s (%s each)", makes, Money(pr.cost / makes)) or "")
-                .. (pr.guessed and " (partly estimated)" or "") .. "|r",
+                .. (pr.unknown and " + materials with no price" or (pr.guessed and " (partly estimated)" or "")) .. "|r",
                 cols = { pr.profit and ((pr.profit >= 0 and HEX.good or (HEX.bad .. "-")) .. Money(math.abs(pr.profit)) .. "|r") or "" } }
         end
     end
@@ -167,8 +167,9 @@ local function DetailRows(id)
         end
     end
     out[#out + 1] = { header = true, text = "Every look" }
-    for i = #s.points, 1, -1 do
-        local pt = s.points[i]
+    local points = Market.Points(id)
+    for i = #points, 1, -1 do
+        local pt = points[i]
         out[#out + 1] = { label = date("%b %d %H:%M", pt.t), text = Money(pt.p) .. " each"
             .. (pt.over and (HEX.bad .. "  overpriced, left out|r") or "") .. (pt.b and (HEX.muted .. "  (browse)|r") or ""),
             cols = { HEX.muted .. Supply(pt.n, pt.a) .. "|r" } }
@@ -409,7 +410,8 @@ local function CraftRow(pr)
             .. ((r.makes or 1) ~= 1 and (" x" .. r.makes) or "") .. HEX.muted .. "  " .. r.prof
             .. (#tags > 0 and ("  (" .. table.concat(tags, ", ") .. ")") or "") .. "|r" .. make
             .. (pr.priced and Market.MoveTag(r.creates) or ""),
-        cols = { Money(pr.cost) .. (pr.guessed and (HEX.muted .. "*|r") or ""), ProfitText(pr.profit), MarginText(pr.margin) },
+        cols = { pr.unknown and (HEX.muted .. ">=|r" .. Money(pr.cost)) or (Money(pr.cost) .. (pr.guessed and (HEX.muted .. "*|r") or "")),
+            ProfitText(pr.profit), MarginText(pr.margin) },
         accent = sel and COLORS.accent or nil,
         tint = sel and { COLORS.accent[1], COLORS.accent[2], COLORS.accent[3], 0.12 } or nil,
     }
@@ -425,18 +427,21 @@ local function CraftDetailRows(pr)
     out[#out + 1] = { header = true, text = "Per craft" .. (makes ~= 1 and (HEX.muted .. "  (makes " .. makes .. ")|r") or "") }
     out[#out + 1] = { label = "Materials", text = HEX.white .. Money(pr.cost) .. "|r" .. HEX.muted
         .. (makes ~= 1 and ("  ·  " .. Money(pr.cost / makes) .. " each") or "")
-        .. (pr.guessed and "  ·  partly estimated" or "") .. "|r" }
+        .. (pr.unknown and "  ·  plus materials nobody has a price for" or (pr.guessed and "  ·  partly estimated" or "")) .. "|r" }
     if pr.priced then
         out[#out + 1] = { label = "Sells for", text = Money(pr.value) .. HEX.muted .. "  after the " .. math.floor(Market.CUT * 100) .. "% cut"
             .. (pr.rate and (" and your " .. math.floor(pr.rate * 100 + 0.5) .. "% sell rate") or "") .. "|r",
             tooltip = function(o) ns.Tooltip.Text(o, { "Sells for", "The product's lowest buyout at your last look (the usual price when that "
                 .. "look was overpriced), after the Auction House cut, times your sell rate once 2 of your auctions of it have ended." }) end }
         out[#out + 1] = { label = "Profit", text = ProfitText(pr.profit) .. HEX.muted .. "  ·  margin |r" .. MarginText(pr.margin) }
+    elseif pr.value then
+        out[#out + 1] = { label = "Sells for", text = Money(pr.value) .. HEX.muted .. "  after the cut|r" }
+        out[#out + 1] = { label = "Profit", text = HEX.muted .. "unknown: a material has no price yet|r" }
     else
         out[#out + 1] = { label = "Sells for", text = HEX.muted .. "not seen on the Auction House: search it there|r" }
     end
     if pr.vendor then
-        out[#out + 1] = { label = "Vendor", text = Money(pr.vendor) .. ((pr.vendor > pr.cost) and (HEX.good .. "  more than the materials|r") or "") }
+        out[#out + 1] = { label = "Vendor", text = Money(pr.vendor) .. ((not pr.unknown and pr.vendor > pr.cost) and (HEX.good .. "  more than the materials|r") or "") }
     end
 
     if pr.priced then

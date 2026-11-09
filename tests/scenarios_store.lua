@@ -142,6 +142,78 @@ scenarios.store_seal = function()
     check(St.SealState("prof") == "new", "older seal format: " .. tostring(St.SealState("prof")))
 end
 
+-- The recruiting seal covers the invites of the last 35 days, counted from
+-- the logout that sealed them: the window's start is saved with the seal, so
+-- a login days later reads the same set (the clock moving is no edit), an
+-- edit inside the window is seen, and one outside it is not (officers never
+-- receive those). Live and cold records alike.
+scenarios.store_seal_window = function()
+    BNGetInfo = function() return 1, "Tester#1234" end
+    local now = MOCK.now
+    local function rec(age, extra)
+        local r = { status = "declined", t = now - age, invited = now - age, by = "Tester-Mockrealm", level = 20, classFile = "MAGE" }
+        for k, v in pairs(extra or {}) do r[k] = v end
+        return r
+    end
+    local recruits = {
+        ["Fresh-Mockrealm"] = rec(DAY, { status = "invited", t = now - 3600, ack = true }),  -- stays live
+        ["Edge-Mockrealm"] = rec(30 * DAY),      -- inside the window at logout, outside a fresh one 10 days later
+        ["Ancient-Mockrealm"] = rec(60 * DAY),   -- never in the seal
+        ["Timeless-Mockrealm"] = rec(10 * DAY, { invited = true }),  -- no invite time: not in the seal
+    }
+    local ns = boot(11509, { db = { guild = { guilds = { ["Brave Souls-Mockrealm"] = { recruits = recruits, members = {}, log = {}, events = {} } } } } })
+    MOCK.SetGuild()
+    local St = ns.Store
+    local seal
+    for _, s in ipairs(St.SEALS) do if s.name == "recruiting" then seal = s end end
+    check(seal.v == 2 and seal.window and seal.keep == 35, "the windowed seal is v2 over 35 days")
+    local g = ns.Guild.Data()
+    check(type(g.cold["Edge-Mockrealm"]) == "string" and type(g.cold["Ancient-Mockrealm"]) == "string" and g.recruits["Fresh-Mockrealm"],
+        "settled records packed, the fresh one live")
+    local value = seal.get(now - 35 * DAY)["Brave Souls-Mockrealm"]
+    check(value["Fresh-Mockrealm"] and value["Edge-Mockrealm"] and not value["Ancient-Mockrealm"] and not value["Timeless-Mockrealm"],
+        "the window: fresh and edge in, ancient and undated out")
+    check(value["Edge-Mockrealm"][1] == now - 30 * DAY and value["Edge-Mockrealm"][2] == "declined" and value["Edge-Mockrealm"][4] == "Tester-Mockrealm",
+        "a cold record reads invited, status, by")
+    check(St.SealState("recruiting") == "new", "never sealed: new")
+
+    MOCK.FireEvent("PLAYER_LOGOUT")
+    local saved = TALODDB.store.seals.recruiting
+    check(saved and saved.v == 2 and saved.from == now - 35 * DAY, "the window's start is saved with the seal")
+
+    -- Ten days later: Edge would be outside a fresh window; the saved one still holds it.
+    MOCK.now = now + 10 * DAY
+    St.Load()
+    check(St.SealState("recruiting") == "ok", "login 10 days later: " .. tostring(St.SealState("recruiting")))
+    MOCK.FireEvent("PLAYER_LOGOUT")
+    St.Load()
+    check(St.SealState("recruiting") == "ok", "sealed again at the new date: " .. tostring(St.SealState("recruiting")))
+
+    -- An edit outside the window is not the seal's business.
+    MOCK.FireEvent("PLAYER_LOGOUT")
+    g = TALODDB.guild.guilds["Brave Souls-Mockrealm"]
+    g.cold["Ancient-Mockrealm"] = g.cold["Ancient-Mockrealm"]:gsub("declined", "joined")
+    St.Load()
+    check(St.SealState("recruiting") == "ok", "edit outside the window: " .. tostring(St.SealState("recruiting")))
+    -- One inside is.
+    MOCK.FireEvent("PLAYER_LOGOUT")
+    rawset(g.recruits["Fresh-Mockrealm"], "by", "Someone-Mockrealm")
+    St.Load()
+    check(St.SealState("recruiting") == "edited", "edit inside the window: " .. tostring(St.SealState("recruiting")))
+    -- Moving the saved window changes the set: seen like any edit.
+    TALODDB.store.edited = {}
+    MOCK.FireEvent("PLAYER_LOGOUT")
+    TALODDB.store.seals.recruiting.from = MOCK.now - DAY
+    St.Load()
+    check(St.SealState("recruiting") == "edited", "window moved by hand: " .. tostring(St.SealState("recruiting")))
+    -- A seal from before the window (v1) is "new", never "edited".
+    TALODDB.store.edited = {}
+    MOCK.FireEvent("PLAYER_LOGOUT")
+    TALODDB.store.seals.recruiting.v = 1
+    St.Load()
+    check(St.SealState("recruiting") == "new", "older seal format: " .. tostring(St.SealState("recruiting")))
+end
+
 -- An officer receives a member's data: checked, never trusted.
 scenarios.store_guild_checks = function()
     MOCK.SetGuild({ rankIndex = 1, rankName = "Officer", can = { invite = true, promote = true }, roster = {
@@ -306,4 +378,51 @@ scenarios.store_legacy = function()
     St.ReportText()
     slash("data")
     check(St.ReportText():find("Data from other versions"), "the report lists it")
+end
+
+-- The recruiting seal's text is built straight from the records (no table
+-- per record): it must be exactly the generic serializer's text of the
+-- sealed value, for live and cold records, a missing status or recruiter,
+-- names with separators, several guilds and an empty one.
+scenarios.store_seal_text = function()
+    local now = MOCK.now
+    local function rec(age, extra)
+        local r = { status = "declined", t = now - age, invited = now - age, by = "Tester-Mockrealm", level = 20, classFile = "MAGE" }
+        for k, v in pairs(extra or {}) do r[k] = v end
+        return r
+    end
+    local recruits = {
+        ["Fresh-Mockrealm"] = rec(3600, { status = "invited", ack = true }),
+        ["Old One-Mockrealm"] = rec(10 * DAY, { replied = now - 9 * DAY }),
+        ["Odd|;=:{}-Mockrealm"] = rec(12 * DAY, { by = "A;b=c:{d}" }),
+        ["NoStatus-Mockrealm"] = rec(11 * DAY, { status = false }),
+        ["NoBy-Mockrealm"] = rec(13 * DAY, { by = false }),
+        ["Late-Mockrealm"] = rec(20 * DAY, { invited = now - 20 * DAY + 0.5 }),
+        ["Ancient-Mockrealm"] = rec(60 * DAY),
+    }
+    recruits["NoStatus-Mockrealm"].status = nil
+    recruits["NoBy-Mockrealm"].by = nil
+    local ns = boot(11509, { db = { guild = { guilds = {
+        ["Brave Souls-Mockrealm"] = { recruits = recruits, members = {}, log = {}, events = {} },
+        ["Empty-Mockrealm"] = { recruits = {}, members = {}, log = {}, events = {} },
+        ["Other-Mockrealm"] = { recruits = { ["Elsewhere-Mockrealm"] = rec(5 * DAY) }, members = {}, log = {}, events = {} },
+    } } } })
+    MOCK.SetGuild()
+    local St = ns.Store
+    local g = ns.Guild.Data()
+    check(type(g.cold["Old One-Mockrealm"]) == "string", "settled records are cold")
+    local seal
+    for _, s in ipairs(St.SEALS) do if s.name == "recruiting" then seal = s end end
+    for _, from in ipairs({ now - 35 * DAY, now - 11.5 * DAY, now + DAY, now - 100 * DAY }) do
+        local want = St.Serialize(seal.get(from))
+        local got = seal.text(from)
+        check(got == want, "seal text equals the serializer at " .. (now - from) .. ":\n" .. tostring(got) .. "\n" .. want)
+    end
+    -- The digests at logout use the text.
+    BNGetInfo = function() return 1, "Tester#1234" end
+    MOCK.FireEvent("PLAYER_LOGOUT")
+    St.Load()
+    MOCK.Tick(0.3)
+    for _ = 1, 50 do MOCK.Tick(0.016) end
+    check(St.SealState("recruiting") == "ok", "sealed with the text, checked with the text: " .. tostring(St.SealState("recruiting")))
 end

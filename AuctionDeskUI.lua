@@ -99,8 +99,10 @@ local function ResetText(step)
     return string.format("buy %d up to %s, relist at %s", step.units, Money(step.upTo), Money(step.relist))
 end
 
-local function PlanTooltip(plan)
+-- The list's plan is slim: the tooltip reads the item's full plan when shown.
+local function PlanTooltip(slim)
     return function(owner)
+        local plan = Desk.Detail(slim.id) or slim
         local lines = { Market.ItemText(plan.id) }
         local L = plan.ladder
         lines[#lines + 1] = string.format("%d units in %d auctions, look %s%s", L.units, L.auctions or 0, Prices.Age(L.t),
@@ -248,6 +250,17 @@ end
 ---------------------------------------------------------------------------
 -- Listings
 ---------------------------------------------------------------------------
+local function ListingRow(e)
+    local st = e.standing
+    local text = (e.id and Market.ItemText(e.id) or (HEX.white .. (e.name or "?") .. "|r")) .. HEX.muted .. "  x" .. e.count .. "|r"
+        .. (e.id and Market.MoveTag(e.id) or "")
+    local prices = Money(e.unit) .. (st.lowest and st.lowest ~= e.unit and (HEX.muted .. " vs " .. "|r" .. Money(st.lowest)) or "")
+    local row = { text = text, cols = { StandingText(e), prices, Money(e.value) }, tooltip = ListingTooltip(e) }
+    if e.id then row.icon = select(2, Market.ItemInfo(e.id)) end
+    if st.state == "undercut" and not e.overdue then row.accent = COLORS.bad or { 1, 0.3, 0.3 } end
+    return row
+end
+
 local function BuildListings(parent)
     local v = CreateFrame("Frame", nil, parent)
     v:SetAllPoints()
@@ -263,29 +276,29 @@ local function BuildListings(parent)
 
     function v:Refresh()
         local data = Desk.Listings()
-        local rows, value, deposits, guessed, noDeposit, undercut = {}, 0, 0, 0, 0, 0
-        rows[#rows + 1] = { header = true, text = "Item", cols = { "Standing", "Yours vs lowest", "After the cut" } }
-        for _, e in ipairs(data.list) do
-            if not e.overdue then
-                value, deposits = value + (e.value or 0), deposits + (e.deposit or 0)
-                if not e.deposit then
-                    if e.depositGuess then guessed = guessed + e.depositGuess else noDeposit = noDeposit + 1 end
+        -- Rows are made when drawn; the sums come with the list (kept while the listings are).
+        local sums = ns.Data.List(self.list, {
+            name = "desk:listingrows", sources = { "prices", "economy" }, key = tostring(data), maxAge = 60, row = ListingRow,
+            build = function(add, raw)
+                local value, deposits, guessed, noDeposit, undercut = 0, 0, 0, 0, 0
+                raw({ header = true, text = "Item", cols = { "Standing", "Yours vs lowest", "After the cut" } })
+                for _, e in ipairs(data.list) do
+                    if not e.overdue then
+                        value, deposits = value + (e.value or 0), deposits + (e.deposit or 0)
+                        if not e.deposit then
+                            if e.depositGuess then guessed = guessed + e.depositGuess else noDeposit = noDeposit + 1 end
+                        end
+                        if e.standing.state == "undercut" then undercut = undercut + 1 end
+                    end
+                    add(e, { id = e.id })
                 end
-                if e.standing.state == "undercut" then undercut = undercut + 1 end
-            end
-            local st = e.standing
-            local text = (e.id and Market.ItemText(e.id) or (HEX.white .. (e.name or "?") .. "|r")) .. HEX.muted .. "  x" .. e.count .. "|r"
-                .. (e.id and Market.MoveTag(e.id) or "")
-            local prices = Money(e.unit) .. (st.lowest and st.lowest ~= e.unit and (HEX.muted .. " vs " .. "|r" .. Money(st.lowest)) or "")
-            local row = { id = e.id, text = text, cols = { StandingText(e), prices, Money(e.value) }, tooltip = ListingTooltip(e) }
-            if e.id then row.icon = select(2, Market.ItemInfo(e.id)) end
-            if st.state == "undercut" and not e.overdue then row.accent = COLORS.bad or { 1, 0.3, 0.3 } end
-            rows[#rows + 1] = row
-        end
-        if #rows == 1 then
-            rows[2] = { text = HEX.muted .. "Nothing listed (or not seen yet: open the Auction House's Auctions tab once).|r" }
-        end
-        self.list:SetItems(rows)
+                if #data.list == 0 then
+                    raw({ text = HEX.muted .. "Nothing listed (or not seen yet: open the Auction House's Auctions tab once).|r" })
+                end
+                return { value = value, deposits = deposits, guessed = guessed, noDeposit = noDeposit, undercut = undercut }
+            end,
+        })
+        local value, deposits, guessed, noDeposit, undercut = sums.value, sums.deposits, sums.guessed, sums.noDeposit, sums.undercut
         -- Paid deposits, then the estimated ones (no logged post) apart, then any with no estimate at all.
         local stake = (deposits > 0 or guessed == 0) and Money(deposits) or ""
         if guessed > 0 then stake = stake .. (stake ~= "" and " + " or "") .. "about " .. Money(guessed) .. HEX.muted .. " (estimated)|r" end
@@ -479,7 +492,8 @@ local function MarketRow(p)
     local sel = state.selected == p.id
     local h = p.holders
     local r = ItemRow(p.id, (sel and HEX.accent or "") .. Market.ItemText(p.id) .. (sel and "|r" or "")
-        .. HEX.muted .. "  " .. p.ladder.units .. " units · " .. Prices.Age(p.ladder.t) .. "|r" .. Market.MoveTag(p.id),
+        .. HEX.muted .. "  " .. p.ladder.units .. " units · " .. Prices.Age(p.ladder.t) .. "|r"
+        .. ((p.move.key == "slow" or p.move.key == "dead") and (p.move.hex .. "  · " .. p.move.label .. "|r") or ""),
         { (p.atLeast and (HEX.muted .. ">=|r") or "") .. Money(p.all.cost), p.best and Profit(p.best.profit) or (HEX.dim .. "-|r"),
             h and ((h.share >= Desk.CONTROL_SHARE and not h.mine and HEX.gold or HEX.muted) .. math.floor(h.share * 100 + 0.5) .. "%|r") or (HEX.dim .. "?|r") },
         PlanTooltip(p))
@@ -543,10 +557,10 @@ local function BuildControl(parent)
             end,
         })
         self.left.sub:SetText(string.format("%d items", #markets))
-        local plan = state.selected and Desk.Plan(state.selected)
+        local plan = state.selected and Desk.Detail(state.selected)
         if plan then
             self.right.title:SetText(Market.ItemText(plan.id))
-            self.right.sub:SetText(string.format("lowest %s  ·  own it all %s%s  ·  best reset %s", Money(plan.ladder.tiers[1].u),
+            self.right.sub:SetText(string.format("lowest %s  ·  own it all %s%s  ·  best reset %s", Money(plan.ladder.low),
                 plan.atLeast and ">= " or "", Money(plan.all.cost), plan.best and Profit(plan.best.profit) or "none"))
             self.detail:SetItems(DetailRows(plan))
             self.chart:SetItem(plan.id)

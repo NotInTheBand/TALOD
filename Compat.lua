@@ -69,12 +69,23 @@ function S.Call(fn, ...)
 end
 
 -- Like S.Call, but returns up to `count` results, each nil when secret.
+-- Up to four results without a table (unit reads call this several times a
+-- read, a dozen reads a tick: two tables per call were most of the garbage).
+local Value = S.Value
 function S.CallMulti(count, fn, ...)
     if type(fn) ~= "function" then return end
+    if count <= 4 then
+        local ok, a, b, c, d = pcall(fn, ...)
+        if not ok then return end
+        if count == 1 then return Value(a) end
+        if count == 2 then return Value(a), Value(b) end
+        if count == 3 then return Value(a), Value(b), Value(c) end
+        return Value(a), Value(b), Value(c), Value(d)
+    end
     local results = { pcall(fn, ...) }
     if not results[1] then return end
     local out = {}
-    for i = 1, count do out[i] = S.Value(results[i + 1]) end
+    for i = 1, count do out[i] = Value(results[i + 1]) end
     return unpack(out, 1, count)
 end
 

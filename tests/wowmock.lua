@@ -63,6 +63,7 @@ MOCK.NewWidget = NewWidget
 function Widget:GetName() return self._name end
 -- A button pressed by a key binding or /click: its OnClick runs (inside the press).
 function Widget:Click(button) return self:Fire("OnClick", button or "LeftButton", false) end
+function Widget:IsMouseOver() return self._mouseOver == true end
 function Widget:GetObjectType() return self._kind end
 function Widget:SetScript(event, fn) self._scripts[event] = fn end
 -- Keyboard: a frame with keys on gets every press (MOCK.KeyDown); without
@@ -1019,4 +1020,15 @@ function MOCK.ChatHidden(event, ...)
         if fn(nil, event, ...) then return true end
     end
     return false
+end
+
+-- The text a chat frame would show after the filters (nil when hidden).
+function MOCK.ChatText(event, text, ...)
+    local args = { text, ... }
+    for _, fn in ipairs(MOCK.chatFilters[event] or {}) do
+        local out = { fn(nil, event, unpack(args)) }
+        if out[1] then return nil end
+        if #out > 1 then args = { select(2, unpack(out)) } end
+    end
+    return args[1], args
 end

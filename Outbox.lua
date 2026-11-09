@@ -33,13 +33,17 @@ local MAX_QUEUE = 10           -- default limit of whispers still waiting to be 
 local MIN_BURST = 2
 local REPEAT_GUARD = 10        -- the same whisper / invite to the same player within this is not sent again (GetTime)
 local THROTTLE_HOLD, THROTTLE_HOLD_MAX = 15, 120
-local THROTTLE_MATCH = 5       -- a dropped line belongs to a whisper sent this recently (GetTime)
-local MAX_SENT_LOG = 30
+-- A dropped line belongs to a whisper sent this recently (GetTime). Wide
+-- enough for a lagging client or a low frame rate, where the line comes
+-- late; whispers the game already echoed are never the dropped one.
+local THROTTLE_MATCH = 10
+local ECHO_WAIT = 30           -- a whisper with no echo this long after it went is counted as unconfirmed
+local MAX_SENT_LOG = 100       -- about the last minutes of whispers at the game's pace
 
 local queueFree = -math.huge   -- GetTime when the last whisper sent is delivered
 local holdUntil, holdLen, throttleSource = -math.huge, 0, nil
 local recent = {}              -- [kind .. "|" .. target .. "|" .. text] = GetTime() it went out
-local sentLog = {}             -- newest last: { t, target, text, label, onLost, lost }
+local sentLog = {}             -- newest last: { t, target, text, label, onLost, lost, echoed }
 local holdHints = {}           -- functions called when a hold starts; may return a hint for the notice
 
 local function db() return ns.DB() end
@@ -198,10 +202,19 @@ local function Drain()
     end
 end
 
--- One guild invite, only from a click or a typed command (see the header).
--- Returns true, or false and why: "repeat", "failed".
+---------------------------------------------------------------------------
+-- Guild invites
+---------------------------------------------------------------------------
+-- On Forever the game refuses addon code a guild invite in every form tried
+-- (the call from a real click: ADDON_ACTION_FORBIDDEN; /ginvite from a secure
+-- macro: "A macro script has been blocked"), with no Lua error and nothing
+-- sent. Only a /ginvite the player types works, so there the call is never
+-- made: it answers false, "typed" and the caller tells the player what to type.
+-- Elsewhere an invite goes only from a click or a typed command.
+-- Returns true, or false and why: "repeat", "failed", "typed".
 -- [VERIFY] whether the server limits invites the way it limits whispers.
 local function SendInvite(target)
+    if ns.IS_FOREVER == true then return false, "typed" end
     local fn = Fn(C_GuildInfo, "Invite", "GuildInvite")
     if not fn or type(target) ~= "string" then return false, "failed" end
     local now = GetTime()
@@ -255,12 +268,12 @@ function Outbox.OnHold(fn)
 end
 
 -- One dropped line: the newest whisper sent in the last THROTTLE_MATCH
--- seconds that is not yet counted as lost. The game does not name it.
+-- seconds that is not yet counted as lost and has no echo. The game does not name it.
 local function MarkLost(now)
     for i = #sentLog, 1, -1 do
         local e = sentLog[i]
         if now - e.t > THROTTLE_MATCH then return nil end
-        if not e.lost then
+        if not e.lost and not e.echoed then
             e.lost = true
             return e
         end
@@ -308,8 +321,44 @@ function Outbox.OnThrottleLine(event, text)
     return true
 end
 
+-- The first word of a name, lowercased: the echo may name them with or
+-- without the realm, or in the unit's "First-Surname" form.
+local function FirstWord(name)
+    return (name:lower():match("^[^%s%-]+")) or name:lower()
+end
+
+-- CHAT_MSG_WHISPER_INFORM: the game sent it. Marks the oldest matching
+-- whisper not echoed yet (the same text twice is two echoes).
+function Outbox.OnEcho(text, target)
+    text, target = S.Value(text), S.Value(target)
+    if type(text) ~= "string" or type(target) ~= "string" or target == "" then return false end
+    local who = FirstWord(target)
+    for _, e in ipairs(sentLog) do
+        if not e.echoed and e.text == text and FirstWord(e.target) == who then
+            e.echoed = true
+            return true
+        end
+    end
+    return false
+end
+
+-- Whispers sent in the last `seconds` (default 5 min) the game never
+-- echoed after ECHO_WAIT: may not have reached them. { target, text, t, lost }
+function Outbox.Unechoed(seconds)
+    local out, now = {}, GetTime()
+    for _, e in ipairs(sentLog) do
+        local age = now - e.t
+        if not e.echoed and age >= ECHO_WAIT and age <= (seconds or 300) then
+            out[#out + 1] = { target = e.target, text = e.text, t = e.t, lost = e.lost }
+        end
+    end
+    return out
+end
+
 local function OnEvent(event, ...)
-    if event == "CHAT_MSG_SYSTEM" then
+    if event == "CHAT_MSG_WHISPER_INFORM" then
+        Outbox.OnEcho(...)
+    elseif event == "CHAT_MSG_SYSTEM" then
         Outbox.OnThrottleLine(event, (...))
     else
         -- (errorType, message); older clients send the message alone.
@@ -323,6 +372,16 @@ local function Status()
         Outbox.Learned() and "learned from the game's limit; " .. ns.Cmd.Text("pace") .. " reset forgets it" or "default",
         Outbox.Hold() > 0 and string.format(", paused %d s more", math.ceil(Outbox.Hold())) or "",
         #pending > 0 and string.format(", %d waiting to go out", #pending) or ""))
+    local missing = Outbox.Unechoed()
+    if #missing > 0 then
+        local names = {}
+        for i, e in ipairs(missing) do
+            if i > 10 then names[#names + 1] = "+" .. (#missing - 10) .. " more" break end
+            names[#names + 1] = e.target
+        end
+        ns.Print(string.format("%d whispers of the last 5 minutes the game never showed as sent (they may not have reached them): %s",
+            #missing, table.concat(names, ", ")))
+    end
 end
 Outbox.Status = Status
 
@@ -335,7 +394,7 @@ end
 
 ns.RegisterModule("Outbox", {
     tick = function() Outbox.Drain() end,
-    events = { "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE", "UI_INFO_MESSAGE" },
+    events = { "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE", "UI_INFO_MESSAGE", "CHAT_MSG_WHISPER_INFORM" },
     onEvent = OnEvent,
     slash = Slash,
 })

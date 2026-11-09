@@ -36,7 +36,7 @@
 -- (parked untouched until a version that reads them is back).
 --
 -- TALODDB.store = { v = { [key] = version }, addon = version that saved the
--- file, salt, seals = { [name] = { h, t, bt, v } }, edited = { [name] = { t } },
+-- file, salt, seals = { [name] = { h, t, bt, v, from } }, edited = { [name] = { t } },
 -- since = { [name] = time of the first seal }, quarantine = { { t, key, path,
 -- reason, value, ver } }, cleaned = { { t, id, n, auto, c } } (Cleanup.lua's
 -- runs, newest last), legacy = { { t, key, what, from, to } } (newest last),
@@ -77,6 +77,13 @@ local floor, format = math.floor, string.format
 local putYield, putCount = false, 0     -- a background digest pauses every PUT_STEP values
 local PUT_STEP = 3000
 
+local function NumberText(v)
+    if v ~= v then return "nan" end
+    if v == floor(v) then return (v > -1e14 and v < 1e14) and tostring(v) or format("%.0f", v) end
+    return format("%.4f", v)
+end
+Store.NumberText = NumberText
+
 local function Put(buf, v, depth)
     if putYield then
         putCount = putCount + 1
@@ -104,9 +111,7 @@ local function Put(buf, v, depth)
         end
         buf[#buf + 1] = "}"
     elseif t == "number" then
-        if v ~= v then buf[#buf + 1] = "nan"
-        elseif v == floor(v) then buf[#buf + 1] = (v > -1e14 and v < 1e14) and tostring(v) or format("%.0f", v)
-        else buf[#buf + 1] = format("%.4f", v) end
+        buf[#buf + 1] = NumberText(v)
     elseif t == "string" then
         buf[#buf + 1] = #v .. ":" .. v
     elseif t == "boolean" then
@@ -598,8 +603,11 @@ Store.DEFS = {
         check = function(d) return Map("fishSwap", "fishSwap", d, Tab, "not a weapon pair") end,
         count = CountMap, byChar = function(d, add) ByName(d, add) end },
     -- v3: the guild event log's entries packed into strings (Guild.Event).
-    { key = "guild", scope = "guild", label = "Guild (roster log, recruits)", version = 3,
-        migrate = { [3] = function(d) ns.Guild.PackEvents(d) end },
+    -- v4: settled recruits as one string each in g.cold, repeated texts in g.dict (Guild.MigrateCold).
+    -- v6: Forever recruits whose invite the game refused (or never confirmed) are "asked" (Guild.AskedFromSent).
+    { key = "guild", scope = "guild", label = "Guild (roster log, recruits)", version = 6,
+        migrate = { [3] = function(d) ns.Guild.PackEvents(d) end, [4] = function(d) ns.Guild.MigrateCold(d) end,
+            [6] = function(d) ns.Guild.AskedFromSent(d) end },
         check = function(d)
             if not Tab(d) then Store.Quarantine("guild", "guild", "not a table", d) return nil end
             d.guilds = Map("guild", "guild.guilds", d.guilds, Tab, "not a guild")
@@ -607,6 +615,20 @@ Store.DEFS = {
                 local p = "guild.guilds." .. key
                 g.members = Map("guild", p .. ".members", g.members, Tab, "not a member")
                 g.recruits = Map("guild", p .. ".recruits", g.recruits, Tab, "not a recruit")
+                -- A cold record is one string (Guild.ColdField); a name in both maps keeps its live record.
+                g.cold = Map("guild", p .. ".cold", g.cold, function(s, full) return Str(s) and not (g.recruits and g.recruits[full]) end,
+                    "not a cold recruit")
+                -- The dictionary keeps its places (a cold string points at one): a bad entry is blanked, never removed.
+                if g.dict ~= nil and not Tab(g.dict) then
+                    Store.Quarantine("guild", p .. ".dict", "not a list", g.dict)
+                    g.dict = {}
+                end
+                for i, text in ipairs(g.dict or {}) do
+                    if not Str(text) then
+                        Store.Quarantine("guild", p .. ".dict[" .. i .. "]", "not a text", text)
+                        g.dict[i] = ""
+                    end
+                end
                 g.log = List("guild", p .. ".log", g.log, IsLogEntry, "not a log entry")
                 g.events = List("guild", p .. ".events", g.events, function(e)
                     return (Str(e) and e:match("^n%d") ~= nil) or IsLogEntry(e)
@@ -684,9 +706,11 @@ function Store.Def(key) return BY_KEY[key] end
 ---------------------------------------------------------------------------
 -- { name, v (bump when get changes: an old seal then counts as "new", not
 -- "edited"), keep (days an "edited" mark stays: longer than the data is
--- shared), get = fn() -> the sealed value, copy (get builds a fresh table
--- nothing else changes: digested in the background) }. Seal names are GuildSync's
--- category keys.
+-- shared), get = fn(from) -> the sealed value, copy (get builds a fresh table
+-- nothing else changes: digested in the background), window (get takes the
+-- records of the last `keep` days: `from` is saved with the seal and handed
+-- back at the next login, so the clock moving between logout and login
+-- changes nothing) }. Seal names are GuildSync's category keys.
 local function SharedSkills()
     local out = {}
     for name, c in pairs(Tab(db().skills) and db().skills or {}) do
@@ -699,21 +723,140 @@ local function SharedSkills()
     return out
 end
 
-local function SharedRecruits()
+-- The recruiting seal covers the invites of the last RECRUIT_DAYS days;
+-- officers receive the last 30 (GuildSync), and a whole history (100,000
+-- invites after a long run) took seconds to serialize at logout. A record
+-- outside the window is one officers never receive. The window's start is
+-- not sealed itself: moving it in the saved file changes the set of records
+-- digested, which the seal catches like any other edit.
+local RECRUIT_DAYS = 35
+
+local function SharedRecruits(from)
+    if not Num(from) then from = time() - RECRUIT_DAYS * 86400 end
     local out = {}
     local guilds = Tab(db().guild) and db().guild.guilds
     for key, g in pairs(Tab(guilds) and guilds or {}) do
         local mine = {}
         for full, r in pairs(Tab(g) and Tab(g.recruits) and g.recruits or {}) do
-            if Tab(r) and r.invited then mine[full] = { r.invited, r.status, r.replied and true or false, r.by } end
+            if Tab(r) and Num(r.invited) and r.invited >= from then
+                mine[full] = { r.invited, r.status, r.replied and true or false, r.by }
+            end
+        end
+        -- The cold records give the same four values, read from the string
+        -- (a save from before v4 has none: its packed records keep these as fields).
+        -- Most of a long history is outside the window: its `t` (one plain find)
+        -- is never older than the invite, so a record is decoded only when `t`
+        -- is inside. The newest-first list Guild keeps is not used here: it is
+        -- the current guild's, built through Guild.Data(), which reads the
+        -- guild from the game (not there yet at login) and settles records.
+        local G = ns.Guild
+        for full, s in pairs(Tab(g) and Tab(g.cold) and g.cold or {}) do
+            if Str(s) and G and G.ColdHot then
+                local t = G.ColdField(s, "t", g)
+                if Num(t) and t >= from then
+                    local status, _, invited, by, _, _, replied = G.ColdHot(s, g)
+                    if Num(invited) and invited >= from then mine[full] = { invited, status, replied and true or false, by } end
+                end
+            end
         end
         out[key] = mine
     end
     return out
 end
 
+-- Exactly Store.Serialize(SharedRecruits(from)), built from the records
+-- without the table per record and the generic walk: at logout this was
+-- most of the seal's cost with every recent invite inside the window
+-- (tests/scenarios_store.lua compares the two). Two steps: a snapshot (the
+-- live records' four values and the cold strings, which never change in
+-- place; taken at login before anything writes), then the text, which a
+-- login builds in the background digest (it pauses between records).
+local function Field(i, v)
+    if v == nil then return "" end
+    local t = type(v)
+    if t == "number" then return i .. "=" .. NumberText(v) .. ";" end
+    if t == "string" then return i .. "=" .. #v .. ":" .. v .. ";" end
+    if t == "boolean" then return i .. "=" .. (v and "T" or "F") .. ";" end
+    return i .. "=?;"
+end
+
+local function RecruitSnapshot(from)
+    if not Num(from) then from = time() - RECRUIT_DAYS * 86400 end
+    local guilds = Tab(db().guild) and db().guild.guilds
+    local snap = { from = from, keys = {}, by = {} }
+    for key, g in pairs(Tab(guilds) and guilds or {}) do
+        if not Str(key) then return nil end        -- an odd key: the generic path
+        local live, cold = {}, {}
+        for full, r in pairs(Tab(g) and Tab(g.recruits) and g.recruits or {}) do
+            if Tab(r) and Num(r.invited) and r.invited >= from then
+                if not Str(full) then return nil end
+                live[full] = Field(1, r.invited) .. Field(2, r.status) .. Field(3, r.replied and true or false) .. Field(4, r.by)
+            end
+        end
+        for full, c in pairs(Tab(g) and Tab(g.cold) and g.cold or {}) do
+            if Str(c) then
+                if not Str(full) then return nil end
+                cold[full] = c
+            end
+        end
+        snap.keys[#snap.keys + 1] = key
+        snap.by[key] = { live = live, cold = cold, dict = Tab(g) and g.dict or nil, g = g }
+    end
+    table.sort(snap.keys)
+    return snap
+end
+
+-- pause: yield every few hundred records (inside the login digest).
+local function SnapshotText(snap, pause)
+    local G, from = ns.Guild, snap.from
+    local sealFields = G and G.ColdSealFields
+    local out = { "{" }
+    local n = 0
+    for _, key in ipairs(snap.keys) do
+        local part = snap.by[key]
+        local names, body = {}, {}
+        for full, text in pairs(part.live) do names[#names + 1] = full body[full] = text end
+        for full, c in pairs(part.cold) do
+            n = n + 1
+            if pause and n % 500 == 0 then coroutine.yield() end
+            local t, inv, status, replied, by
+            if sealFields then t, inv, status, replied, by = sealFields(c, part.dict) end
+            if t and t >= from then
+                local invited = inv and tonumber(inv)
+                if inv and invited and invited >= from then
+                    -- The packed digits are NumberText's own text for a whole number (both tostring).
+                    local invText = (inv:find("^%-?%d+$") and invited > -1e14 and invited < 1e14) and inv or NumberText(invited)
+                    if body[full] == nil then names[#names + 1] = full end
+                    body[full] = "1=" .. invText .. ";" .. (status and ("2=" .. #status .. ":" .. status .. ";") or "")
+                        .. (replied and "3=T;" or "3=F;") .. (by and ("4=" .. #by .. ":" .. by .. ";") or "")
+                elseif not inv and G.ColdHot then
+                    -- Not a plain number: the full reader decides, as SharedRecruits does.
+                    local st2, _, invited2, by2, _, _, rep2 = G.ColdHot(c, part.g)
+                    if Num(invited2) and invited2 >= from then
+                        if body[full] == nil then names[#names + 1] = full end
+                        body[full] = Field(1, invited2) .. Field(2, st2) .. Field(3, rep2 and true or false) .. Field(4, by2)
+                    end
+                end
+            end
+        end
+        table.sort(names)
+        out[#out + 1] = #key .. ":" .. key .. "={"
+        for _, full in ipairs(names) do out[#out + 1] = #full .. ":" .. full .. "={" .. body[full] .. "};" end
+        out[#out + 1] = "};"
+    end
+    out[#out + 1] = "}"
+    return table.concat(out)
+end
+
+local function SharedRecruitsText(from, pause)
+    local snap = RecruitSnapshot(from)
+    return snap and SnapshotText(snap, pause) or nil
+end
+Store.SharedRecruitsText = SharedRecruitsText
+
 Store.SEALS = {
-    { name = "recruiting", v = 1, keep = 35, get = SharedRecruits, copy = true },
+    { name = "recruiting", v = 2, keep = RECRUIT_DAYS, get = SharedRecruits, text = SharedRecruitsText,
+        snapshot = RecruitSnapshot, snapshotText = SnapshotText, copy = true, window = true },
     { name = "activity", v = 1, keep = 65, get = function() return db().guildActivity end },
     { name = "prof", v = 1, keep = 7, get = SharedSkills, copy = true },
 }
@@ -775,9 +918,14 @@ local function HashSome(ms)
     return hashing[1] == nil
 end
 
+-- value: the sealed value, or its text already, or { snapshot, toText }
+-- (a seal with `snapshot`: the text is built here, pausing).
 local function Digester(name, value)
     return coroutine.create(function()
-        local text = Store.Serialize(value)
+        local text
+        if type(value) == "string" then text = value
+        elseif type(value) == "table" and value.toText then text = value.toText(value.snapshot, true)
+        else text = Store.Serialize(value) end
         local h1, h2
         for i = 1, #text, HASH_CHUNK do
             h1, h2 = Hash(text:sub(i, i + HASH_CHUNK - 1), h1, h2)
@@ -788,11 +936,24 @@ local function Digester(name, value)
     end)
 end
 
+-- The window a seal was taken over, as saved with it (nil: none saved).
+local function WindowFrom(m, s)
+    local rec = s.window and m.seals[s.name]
+    return Tab(rec) and Num(rec.from) and rec.from or nil
+end
+
 local function DigestAll()
     wipe(hashing)
+    local m = Meta()
     for _, s in ipairs(Store.SEALS) do
         local value
-        ns.SafeCall(function() value = s.get() end)
+        ns.SafeCall(function()
+            local from = WindowFrom(m, s)
+            local snap = s.snapshot and s.snapshot(from)
+            if snap then value = { snapshot = snap, toText = s.snapshotText }
+            else value = s.text and s.text(from) end
+            if value == nil then value = s.get(from) end
+        end)
         if s.copy then
             digests[s.name] = nil
             hashing[#hashing + 1] = Digester(s.name, value)
@@ -864,11 +1025,15 @@ function Store.SealAll()
     local tag = BattleTag()
     Store.NoteMe()
     for _, s in ipairs(Store.SEALS) do
-        local value
-        ns.SafeCall(function() value = s.get() end)
+        local digest
+        local from = s.window and (time() - s.keep * 86400) or nil
+        ns.SafeCall(function()
+            local text = s.text and s.text(from)
+            if text then digest = string.format("%08x%08x", Hash(text)) else digest = Store.Digest(s.get(from)) end
+        end)
         local mark = m.edited[s.name]
         local markT = Tab(mark) and mark.t or nil
-        m.seals[s.name] = { h = SealOf(s.name, Store.Digest(value), m.salt, tag, markT), t = time(), bt = tag and true or nil, v = s.v }
+        m.seals[s.name] = { h = SealOf(s.name, digest or Store.Digest(nil), m.salt, tag, markT), t = time(), bt = tag and true or nil, v = s.v, from = from }
         m.since[s.name] = m.since[s.name] or time()
     end
 end
