@@ -1044,7 +1044,8 @@ scenarios.market = function()
     Pr.Record(2589, 90, 220, now - 86400, 11)
     Pr.Record(2589, 50, 400, now, 20)
     local st = M.Stats(2589)
-    check(st.looks == 4 and st.usual == 95 and st.low == 50 and st.high == 110 and st.a == 20 and st.over == 0, "stats")
+    -- Usual = the low median of 50, 90, 100, 110: 90 (a price someone asked, not the mean of two).
+    check(st.looks == 4 and st.usual == 90 and st.low == 50 and st.high == 110 and st.a == 20 and st.over == 0, "stats")
     check(st.trend < -0.4 and st.supplyTrend > 0.5, "under usual, more supply: " .. st.trend .. " " .. tostring(st.supplyTrend))
     check(Pr.Entry(2589).name == "Linen Cloth" and Pr.Looks(Pr.Entry(2589))[1].a == 10, "name and auctions kept in history")
 
@@ -1057,7 +1058,7 @@ scenarios.market = function()
     local sell = M.SellList()
     local byId = {}
     for _, e in ipairs(sell) do byId[e.id] = e end
-    check(byId[2589] and byId[2589].n == 2 and byId[2589].verdict == "ah" and byId[2589].net == 47, "linen: AH")
+    check(byId[2589] and byId[2589].n == 2 and byId[2589].verdict == "ah" and byId[2589].net == 47.5, "linen: AH (47.5c a unit: the cut is rounded per auction, not per unit)")
     check(byId[9001] and byId[9001].verdict == "vendor" and byId[9001].bound, "bound ring: vendor")
 
     -- Crafting: Bolt of Linen Cloth (2 linen at 50c) sells for 300c.
@@ -1115,31 +1116,36 @@ scenarios.market = function()
     local full = M.SaleValue(4306)
     check(full == M.Net(400), "no history: AH after the cut, got " .. tostring(full))
     local list = TALODDB.economy.Tester.auctions
-    list[#list + 1] = { name = silk, count = 20, status = "expired", deposit = 60, t = now, ended = now }
+    -- Five trials (a cancel is not one): 1 sold, 4 expired; plus one cancelled.
+    for _ = 1, 4 do list[#list + 1] = { name = silk, count = 20, status = "expired", deposit = 60, t = now, ended = now } end
     list[#list + 1] = { name = silk, count = 20, status = "cancelled", deposit = 60, t = now, ended = now }
-    list[#list + 1] = { name = silk, count = 20, status = "expired", deposit = 60, t = now, ended = now }
     list[#list + 1] = { name = silk, count = 20, status = "sold", received = 7600, t = now, ended = now }
     local ss = M.MySales(4306)
-    check(ss.failed == 3 and ss.ended == 4 and ss.rate == 0.25 and ss.hard and ss.depositLost == 180, "sell rate: "
-        .. tostring(ss.rate) .. " failed " .. ss.failed)
+    -- Laplace: (1 + 1) / (5 + 2).
+    check(ss.failed == 5 and ss.ended == 5 and math.abs(ss.rate - 2 / 7) < 1e-9 and ss.hard and ss.depositLost == 300, "sell rate: "
+        .. tostring(ss.rate) .. " failed " .. ss.failed .. " ended " .. ss.ended)
     local value, how, info = M.SaleValue(4306)
-    -- 380c after the cut x 25% sold = 95c, under Silk Cloth's vendor price: the vendor wins.
-    check(info.expected == math.floor(M.Net(400) * 0.25) and info.hard, "AH value x sell rate: " .. tostring(info.expected))
-    check(info.vendor > info.expected and how == "vendor" and value == info.vendor, "hard to sell: vendor wins, got " .. tostring(how))
+    -- Posting once: r x net + (1 - r) x (vendor - deposit lost): an unsold one comes back.
+    local r = 2 / 7
+    -- Per unit, not rounded (the deposit's share too): the caller rounds the total.
+    local want = r * M.Net(400) + (1 - r) * (info.vendor - (info.deposit or 0))
+    check(math.abs(info.expected - want) < 1e-9 and info.hard, "expected value of posting: " .. tostring(info.expected) .. " vs " .. want)
+    check(how == (want > info.vendor and "ah" or "vendor") and value == math.max(want, info.vendor), "the better of AH and vendor, got " .. tostring(how))
     check(P.SellValue(4306) == value, "planner uses the same rule")
-    check(M.SellRateText(ss):find("sold 1 of 4"), "rate text")
+    check(M.SellRateText(ss):find("sold 1 of 5"), "rate text: " .. tostring(M.SellRateText(ss)))
     local through = M.SellThroughList()
     check(through[1].id == 4306 and through[1].sales.hard, "worst seller first")
     ns.MarketUI.Show("sellthrough")
     local stv = ns.MarketUI.views.sellthrough
     check(stv.list.items[1].header and stv.list.items[1].text:find("Hard to sell"), "sell-through tab groups")
-    check(stv.card.sub:GetText():find("3 unsold"), "sell-through totals: " .. stv.card.sub:GetText())
+    check(stv.card.sub:GetText():find("5 unsold"), "sell-through totals: " .. stv.card.sub:GetText())
     stv.list.items[2].tooltip(stv)
     -- An item that keeps failing falls to the vendor by itself.
     for _ = 1, 6 do list[#list + 1] = { name = silk, count = 20, status = "expired", t = now, ended = now } end
     MOCK.items[4306] = nil
     local _, how2, info2 = M.SaleValue(4306)
-    check(info2.rate == 0.1, "rate after more failures: " .. tostring(info2.rate))
+    -- 1 sold of 11: (1 + 1) / (11 + 2).
+    check(math.abs(info2.rate - 2 / 13) < 1e-9, "rate after more failures: " .. tostring(info2.rate))
 
     -- Old results count less: failures 60 days ago, two recent sales.
     local wool = "|cffffffff|Hitem:2592::::::::|h[Wool Cloth]|h|r"
@@ -1147,7 +1153,18 @@ scenarios.market = function()
     list[#list + 1] = { name = wool, count = 20, status = "sold", received = 2000, t = now - 86400, ended = now - 86400 }
     list[#list + 1] = { name = wool, count = 20, status = "sold", received = 2000, t = now, ended = now }
     local ws = M.MySales(2592)
-    check(ws.rawRate < 0.34 and ws.rate > 0.85 and not ws.hard and ws.recentSold == 2 and ws.recentEnded == 2,
+    -- Weighted, the old failures count ~0.05 each: the share sold is 1.95 / 2.16 = 0.90,
+    -- but that share rests on about two auctions (effective count 2.4 of 6):
+    -- too few for a rate, never "80%" from two sales.
+    check(ws.rawRate < 0.34 and ws.rate == nil and ws.rateOld and ws.nEff < 3 and not ws.hard
+        and ws.recentSold == 2 and ws.recentEnded == 2,
+        "two recent sales among old failures: raw " .. tostring(ws.rawRate) .. " weighted " .. tostring(ws.rate))
+    -- Three more recent sales: enough recent auctions, and they outweigh the old failures.
+    for k = 1, 3 do
+        list[#list + 1] = { name = wool, count = 20, status = "sold", received = 2000, t = now - k * 3600, ended = now - k * 3600 }
+    end
+    ws = M.MySales(2592)
+    check(ws.rawRate < 0.6 and ws.rate and ws.rate > 0.75 and ws.recentSold == 5,
         "recent sales outweigh old failures: raw " .. tostring(ws.rawRate) .. " weighted " .. tostring(ws.rate))
     -- Tooltip: likelihood to sell with how fresh the evidence is.
     local tip = {}
@@ -1156,12 +1173,12 @@ scenarios.market = function()
     TALODDB.tooltipPrices = true
     ns.Tooltip.ItemLines(GameTooltip, 4306)
     local text = table.concat(tip, " || ")
-    check(text:find("Sells | slow  10%%") and text:find("you sold 1 of 10") and text:find("last sold"),
+    check(text:find("Sells | slow  15%%") and text:find("you sold 1 of 11") and text:find("last sold"),
         "tooltip sell chance: " .. text)
     tip = {}
     ns.Tooltip.ItemLines(GameTooltip, 2592)
     text = table.concat(tip, " || ")
-    check(text:find("moves fast  90%%") and text:find("last 30 days: 2 of 2") and text:find("last sold today"), "tooltip recent: " .. text)
+    check(text:find("moves fast  8%d%%") and text:find("last 30 days: 5 of 5") and text:find("last sold today"), "tooltip recent: " .. text)
     GameTooltip.AddDoubleLine = add
     TALODMarketWindow:Hide()
     ns.MarketUI.state.view = "prices"
@@ -1264,7 +1281,8 @@ scenarios.ah_helper = function()
     local tip = { AddDoubleLine = function(_, l, r) lines[#lines + 1] = l .. " " .. r end, AddLine = function() end, Show = function() end }
     ns.Tooltip.ItemLines(tip, 4289)
     check(lines[1] and lines[1]:find("80c each"), "tooltip: " .. tostring(lines[1]))
-    check(ns.Market.PostPrice(4289) == 79, "post 1c under")
+    -- One auction of 5 at 80c each (400c): 1c under the stack, 399c for 5.
+    check(math.abs(ns.Market.PostPrice(4289) - 79.8) < 1e-9, "post 1c under the stack: " .. ns.Market.PostPrice(4289))
 
     -- Newer engine: SendSearchQuery and ReplicateItems.
     local sent, replicated = nil, false
@@ -2543,7 +2561,7 @@ scenarios.review_fixes = function()
     TakeInboxMoney(1)
     changed()
     local sales = ns.Market.MySales(2589)
-    check(sales.sold == 1 and sales.units == 20 and sales.listed == 40 and sales.perUnit == 11, "one stack sold: "
+    check(sales.sold == 1 and sales.units == 20 and sales.listed == 40 and sales.perUnit == 9.5, "one stack sold (220c less the 30c deposit back, over 20): "
         .. sales.sold .. " " .. sales.units .. " " .. sales.listed .. " " .. tostring(sales.perUnit))
     MOCK.FireEvent("MAIL_CLOSED")
 

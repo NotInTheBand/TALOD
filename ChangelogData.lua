@@ -6,6 +6,87 @@ local ADDON_NAME, ns = ...
 
 -- Newest first.
 ns.CHANGELOGS = {
+    { v = "0.30.0", d = "2026-11-08", from = "0.29.2", text = [[
+The economy pages were checked formula by formula against standard market statistics. Every number that can steer
+your gold (usual price, trend, sell rate, sale value, posting price, deals, Auction desk plans, crafting costs and
+the gold ledger) was reworked so it is right, and anything {name} cannot know is shown as unknown or "at least",
+never as a number or as safe.
+
+### Changed
+
+- **Usual price:** the middle of your looks with odd ones left out either way (a greedy auction far above, or a
+  throwaway unit far below), counted by days, not by how often you looked. A real price drop or rise that holds with
+  plenty listed becomes the price; a lone cheap unit or a thin listing does not. Fewer than three earlier looks give
+  no usual price at all.
+- **Trend:** today's price against the middle of your earlier looks; a price that halved shows -50%. When your
+  latest look was a rough browse row the trend shows "-".
+- **Sell rate:** worked out from your own ended auctions with smoothing, so 2 sold of 2 is not "100%", and it needs
+  5 ended auctions before it counts. Cancelled auctions are not a sale or a failure, but their deposit still counts as
+  lost. A commodity sold in parts counts as one auction. Old auctions weigh less.
+- **Sale value:** what an item is worth to you is now the expected value: your sell rate times what the Auction House
+  pays after the cut, plus the unsold share at the vendor price less the deposit you lose. Labels say what was
+  counted, or "if it sells" while your sell rate is not known yet.
+- **Posting price:** goes 1c under the cheapest auction that is not yours, per stack (38c for a 20-stack listed at
+  39c), and uses the usual price when the lowest look is odd. When only your own auctions are listed, it suggests
+  your own price.
+- **Prices for cheap stacks** are kept to a fraction of a copper, so costs and values of stacked goods no longer
+  round up or down to whole copper per unit. The 5% cut is taken once per auction.
+- **Buying costs walk up the listings:** crafting costs, make-or-buy and the craft tracker price materials along the
+  real auctions, cheapest first, buying whole stacks on the classic Auction House (spare units count for later
+  steps), with a vendor when cheaper.
+- **Deals:** only things you can buy (never your own listing), seen in the last 2 days, measured against a usual
+  price built from enough looks. The Auction desk shows the expected gain once your sell rate is known, "if all
+  resold" before that, and lists losses last in red.
+- **Auction desk plans:** each relist is valued at no more than the usual price, profits use your sell rate and
+  deposits, the return is profit over the gold and deposits you put in, and the best reset is chosen among the steps
+  worth doing. Resets relist 1c under the next seller's auction. Opportunities need your sell rate, a usual price and
+  a full, fresh look.
+- **Market movement:** "doesn't sell" needs two real days with neither supply nor price moving; "moves" needs at
+  least 3 units gone. Units a day show decimals.
+- **Sell-through and Sell tab:** each row shows the value the totals and verdict use, sell-rate words always match the
+  percentage, and "Sells" lists items that sell again.
+- **Deposits** are learned from your own posts per auction length; a post's deposits add up to what you paid.
+- **Price graph:** marks the same overpriced and throwaway looks the usual price leaves out, follows your local
+  calendar days, and shows "? units" for an unknown count.
+
+### Fixed
+
+- **Auction desk Listings and Overview** no longer break on a listing tied with another seller or an item with no
+  vendor price. "Lowest" is only claimed from a fresh, complete look; otherwise the state is unknown.
+- **Supply you did not fully see stays unknown:** a search read only on some pages, partial Auction House results or
+  a broad name search no longer count as the whole supply, and re-reading a page no longer doubles it. A price under
+  half a copper is never "free".
+- **Bids:** identical auctions from different sellers are listed apart, a re-read page no longer shows a bid twice,
+  bids costing more than buying out are left out, and a search you did not finish shows no saving.
+- **Unknown values are never 0:** listings without a value, unpriced fish, unknown deposits, unknown training costs
+  and materials nobody has a price for show as unknown or "at least" instead of counting as 0.
+- **Profession planner:** an unpriced material no longer makes a recipe look cheap, training at a rank's end and ranks
+  taught by a book are counted, and a plan that pays for itself shows its gain.
+- **Craft tracker:** products are valued by what the market can take, with the rest at the vendor price.
+- **Gold ledger:** refunds, returned auctions (also with Open All, and in several stacks), commodities sold in parts
+  and gold mailed between your own characters (also with WoW Forever names) are booked correctly; a player who shares
+  your alt's name on another realm is not counted as yours; gold moved between your characters is not income; the
+  gold chart over all characters starts once each has a reading.
+- **Bound items** you already wore are valued at the vendor price, not the Auction House.
+- **Old Auctions-tab reads** whose time ran out show "should have ended" instead of active.
+- **Usual price follows the market now:** it comes from the last two weeks of looks. An older price stands in only
+  when nothing recent exists, is marked as old wherever it shows, and never makes a deal or a reset profit.
+- **Sell chance needs recent evidence:** one recent sale after many old failures (or the reverse) says "too few
+  recent auctions to tell" instead of a confident rate. "Usually sells in" counts a stack sold in parts once.
+- **Market movement** uses your recent looks only and says how old its evidence is; your old auctions give way to
+  what the Auction House shows now.
+- **Percent changes** are no longer one point too large, and a flat price no longer shows -1%.
+- **Your listings:** an undercut seen on an old look no longer offers a repost price, and auctions sold or posted
+  after the list was read are counted correctly. Listings whose time ran out with no letter show as "ended?".
+- **Full scan** no longer stamps the previous scan's prices as new; a new search in the same visit replaces the
+  price, so an auction you bought out is no longer the item's price.
+- **Bids:** a saving is measured only against a buyout seen at about the same time; an exact search that finds
+  nothing clears that item's bids.
+- **Gold ledger:** a sale letter never closes an auction posted after the sale, loot around midnight stays on its own
+  day, and the Auctions tab counts sales in the range they happened.
+- **Auction desk** never picks a reset bigger than what sells in one listing period, and says so.
+- **Sell tab and Crafting** mark old prices, show the earlier price a % is measured against, and Sell-through dates
+  show the year and how long ago.]] },
     { v = "0.29.2", d = "2026-11-08", from = "0.29.1", text = [[
 ### Fixed
 

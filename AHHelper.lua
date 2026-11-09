@@ -333,7 +333,10 @@ function Helper.FullScan()
     if wait > 0 then return false, string.format("the next full scan is possible in %d:%02d.", math.floor(wait / 60), wait % 60) end
     if Modern() then
         if type(C_AuctionHouse.ReplicateItems) ~= "function" then return false, "this client has no full scan." end
-        state.scan = { kind = "modern", clock = GetTime() }
+        -- What the client already holds (an earlier scan's list): the poll
+        -- below must not read it again as this request's answer.
+        local held = type(C_AuctionHouse.GetNumReplicateItems) == "function" and S.Call(C_AuctionHouse.GetNumReplicateItems) or nil
+        state.scan = { kind = "modern", clock = GetTime(), held = type(held) == "number" and held or nil }
         if not pcall(C_AuctionHouse.ReplicateItems) then
             Helper.LogScan(false, "refused by the Auction House")
             state.scan = nil
@@ -423,7 +426,11 @@ local function CheckScanTimeout()
     if state.scan and state.scan.kind == "modern" and GetTime() - state.scan.clock > 2
         and type(C_AuctionHouse) == "table" and type(C_AuctionHouse.GetNumReplicateItems) == "function" then
         local n = S.Call(C_AuctionHouse.GetNumReplicateItems)
-        if type(n) == "number" and n > 0 then OnScanData("modern") return end
+        -- Only a list that changed since the click (or the first one): the same
+        -- count may be the last scan's list still held, stamped as new. Then
+        -- the answer's event reads it, or the scan times out (unknown, not old).
+        local held = state.scan.held
+        if type(n) == "number" and n > 0 and (not held or held == 0 or n ~= held) then OnScanData("modern") return end
     end
     if state.scan and not state.scan.reading and GetTime() - state.scan.clock > SCAN_TIMEOUT then
         Helper.LogScan(false, "no answer from the server in " .. SCAN_TIMEOUT .. " s")

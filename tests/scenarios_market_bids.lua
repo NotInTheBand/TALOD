@@ -22,8 +22,8 @@ local function setup(interface)
 end
 
 -- A legacy page: { count, minBid, increment, buyout, bid, highBidder, owner, id, band } rows.
-local function legacyPage(rows)
-    function GetNumAuctionItems(kind) if kind == "list" then return #rows, #rows end return 0, 0 end
+local function legacyPage(rows, total)
+    function GetNumAuctionItems(kind) if kind == "list" then return #rows, total or #rows end return 0, 0 end
     function GetAuctionItemInfo(kind, i)
         local r = kind == "list" and rows[i]
         if not r then return nil end
@@ -82,18 +82,25 @@ end
 scenarios.market_bids_legacy_pages = function()
     local ns = setup(11509)
     local Pr = ns.Prices
-    legacyPage({ { 1, 300, 10, 1000, 0, false, "Al", 7001, 4 } })
+    -- Pages are told apart by the search (the game's QueryAuctionItems, hooked).
+    function QueryAuctionItems() end
+    Pr.HookQueries()
+    QueryAuctionItems("ring", nil, nil, 0, nil, nil, false, false)
+    legacyPage({ { 1, 300, 10, 1000, 0, false, "Al", 7001, 4 } }, 2)
     MOCK.FireEvent("AUCTION_ITEM_LIST_UPDATE")
     -- The next page of the same search, a minute later: added to the look.
     MOCK.now = MOCK.now + 60
-    legacyPage({ { 1, 250, 10, 0, 0, false, "Bo", 7001, 3 } })
+    QueryAuctionItems("ring", nil, nil, 1, nil, nil, false, false)
+    legacyPage({ { 1, 250, 10, 0, 0, false, "Bo", 7001, 3 } }, 2)
     MOCK.FireEvent("AUCTION_ITEM_LIST_UPDATE")
     local b = Pr.Bids(7001)
     check(b and #b.rows == 2 and b.rows[1].next == 250 and not b.rows[1].buyout, "pages merged, bid-only row kept")
     -- A new search later replaces it.
     MOCK.now = MOCK.now + 600
+    QueryAuctionItems("ring", nil, nil, 0, nil, nil, false, false)
     legacyPage({ { 1, 900, 10, 950, 0, false, "Cy", 7001, 4 } })
     MOCK.FireEvent("AUCTION_ITEM_LIST_UPDATE")
+    QueryAuctionItems = nil
     b = Pr.Bids(7001)
     check(b and #b.rows == 1 and b.rows[1].next == 900, "a later search replaces the look")
 

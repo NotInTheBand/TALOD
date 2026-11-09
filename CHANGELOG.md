@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.30.0 — 2026-11-08
+
+### Changed
+
+- **Economy formulas checked:** usual price (robust middle of recent days, odd looks left out either way), trend,
+  smoothed sell rate from your own auctions, expected sale value (sell rate, cut, deposit, vendor fallback),
+  posting price per stack under the cheapest other seller, deals, Auction desk plans (value capped at the usual
+  price, sell rate, deposits, demand per listing) and crafting costs along the real listings.
+- **Unknown is never 0:** unknown supply, prices, deposits, training costs and sell rates show as unknown or
+  "at least" everywhere in the economy pages.
+
+### Fixed
+
+- **Auction desk Listings / Overview** no longer break on a tied listing or an item with no vendor price.
+- **Supply and prices:** partial searches, re-read pages, browse rows and old price lists no longer count as the
+  whole or current market; full scans no longer re-stamp old prices.
+- **Bids, Sell-through, Sell tab, price graph** agree with the usual price and the sell rate.
+- **Gold ledger:** refunds, returned and partly sold auctions, Open All, transfers between your own characters
+  (WoW Forever names too), loot at midnight and the Auctions tab range are booked correctly.
+- **Profession planner and craft tracker:** unpriced materials and unknown training no longer look cheap; products
+  are valued by what the market can take.
+- Price history days are re-keyed to your local calendar once after the update.
+
 ## 0.29.2 — 2026-11-08
 
 ### Fixed

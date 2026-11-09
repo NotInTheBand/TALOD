@@ -58,39 +58,64 @@ scenarios.auction_desk_ladder = function()
     check(Pr.Entry(2589).p == 10, "lowest price still logged")
 
     -- Control plan (deposit: 15% of the 13c vendor price until you post; no sell rate yet).
+    -- Without your sell rate there is no expected profit: only "if it all sells",
+    -- each relist valued at min(relist, usual) after the cut, deposits refunded.
     local plan = Desk.Detail(2589)
     check(plan and plan.usual == 100 and #plan.steps == 2, "plan steps: " .. tostring(plan and #plan.steps))
     local s1, s2 = plan.steps[1], plan.steps[2]
-    check(s1.units == 5 and s1.cost == 50 and s1.relist == 19 and s1.deposit == 10 and s1.profit == 5 * 18 - 50 - 10, "step 1: " .. s1.profit)
-    -- Step 2 relists under Al's 100c (your own 30c tier is no wall).
-    check(s2.units == 15 and s2.cost == 250 and s2.relist == 99 and s2.profit == 15 * 94 - 250 - 29, "step 2: " .. s2.profit)
-    check(plan.best == s2, "best reset")
-    check(plan.all.units == 35 and plan.all.cost == 2250 and plan.all.relist == 100 and plan.all.profit == 35 * 95 - 2250 - 68,
-        "own it all: " .. plan.all.cost .. " " .. plan.all.profit)
+    -- Relist 1c under Bo's stack of 10 for 200c: 199c for 10 (19.9c each), not 19c each.
+    check(s1.units == 5 and s1.cost == 50 and math.abs(s1.relist - 19.9) < 1e-9 and math.abs(s1.value - 19.9) < 1e-9 and s1.deposit == 10
+        and s1.profit == nil and s1.ifAll == math.floor(5 * 19.9 * 0.95 + 1e-6) - 50, "step 1: " .. tostring(s1.ifAll))
+    -- Step 2 relists under Al's 20 for 2000c (your own 30c tier is no wall): 1999c for 20.
+    check(s2.units == 15 and s2.cost == 250 and math.abs(s2.relist - 99.95) < 1e-9 and s2.profit == nil
+        and s2.ifAll == math.floor(15 * 99.95 * 0.95 + 1e-6) - 250, "step 2: " .. tostring(s2.ifAll))
+    check(plan.best == nil and plan.bestIfAll == s2, "no expected best without a sell rate; best if all sells")
+    check(plan.all.units == 35 and plan.all.cost == 2250 and plan.all.relist == 100 and plan.all.profit == nil
+        and plan.all.ifAll == 35 * 95 - 2250, "own it all: " .. plan.all.cost .. " " .. tostring(plan.all.ifAll))
     check(plan.holders and plan.holders.name == "Al" and math.abs(plan.holders.share - 25 / 43) < 1e-9 and not plan.holders.mine, "holders")
 
     -- Buyout cost to a price.
     local cost, units = Desk.BuyoutCost(L, 20)
     check(cost == 250 and units == 15, "buyout to 20c")
 
-    -- Deals with depth: 15 units under 80c (yours not counted).
+    -- Deals with depth: 15 units under 80c (yours not counted); no sell rate: only "if all resold".
     local deals = Desk.Deals()
-    check(#deals == 1 and deals[1].units == 15 and deals[1].cost == 250 and deals[1].totalGain == 5 * 85 + 10 * 75 - 29,
-        "deal depth: " .. tostring(deals[1] and deals[1].totalGain))
+    check(#deals == 1 and deals[1].units == 15 and deals[1].cost == 250 and deals[1].totalGain == nil
+        and deals[1].gainIfAll == 15 * 95 - 250, "deal depth: " .. tostring(deals[1] and deals[1].gainIfAll))
 
-    -- Opportunities: above the profit setting only.
-    check(#Desk.Opportunities() == 0, "1131c under the default 50s")
-    TALODDB.deskMinProfit = 1000
+    -- Opportunities need your sell rate: none yet, whatever the profit setting.
+    TALODDB.deskMinProfit = 100
     Desk.Invalidate()
-    -- 30 units listed three days running: nothing leaves the AH, so no reset.
-    check(ns.Market.Movement(2589).key == "dead" and #Desk.Opportunities() == 0, "doesn't sell: left out")
-    -- Units leaving between looks: it moves, the reset shows.
-    local e = Pr.Entry(2589)
-    local looks = Pr.Looks(e)
-    looks[1].n, looks[2].n, looks[3].n = 90, 60, 45
-    e.h = Pr.PackLooks(looks)
+    check(#Desk.Opportunities() == 0, "no sell rate: no opportunity")
+
+    -- Five ended auctions of Linen (4 sold, 1 expired): rate (4 + 1) / (5 + 2) = 5/7.
+    local key = ns.Gear.CharKey()
+    TALODDB.economy[key] = TALODDB.economy[key] or { log = {}, days = {} }
+    local link = MOCK.ItemLink(2589, "Linen Cloth")
+    local hist = {}
+    for i = 1, 4 do hist[i] = { id = i, t = now - 3600, name = link, count = 5, deposit = 10, status = "sold", received = 400, ended = now } end
+    hist[5] = { id = 5, t = now - 3600, name = link, count = 5, deposit = 10, status = "expired", ended = now }
+    TALODDB.economy[key].auctions = hist
+    M.InvalidateSales()
     Desk.Invalidate()
-    check(ns.Market.Movement(2589).key ~= "dead" and #Desk.Opportunities() == 1, "shown from 10s")
+    plan = Desk.Detail(2589)
+    local r = 5 / 7
+    -- Deposit learned from those posts: 10 / (13 x 5) of the vendor price.
+    local dep = math.floor(13 * 15 * (10 / 65) + 0.5)
+    local want = math.floor(r * math.floor(15 * 99.95 * 0.95 + 1e-6) + (1 - r) * math.max(0, 15 * 13 - dep)) - 250
+    s2 = plan.steps[2]
+    check(math.abs(plan.rate - r) < 1e-9 and s2.deposit == dep and s2.profit == want, "expected profit: " .. tostring(s2.profit) .. " vs " .. want)
+    check(math.abs(s2.roi - want / (250 + dep)) < 1e-9, "return on the money and deposits")
+    check(plan.best == s2, "best reset on the expected profit")
+    -- The latest look shows a new price and supply: not "doesn't sell"; the reset shows.
+    check(ns.Market.Movement(2589).key ~= "dead", "moves: " .. ns.Market.Movement(2589).key)
+    local opp = Desk.Opportunities()
+    check(#opp == 1 and opp[1].id == 2589, "opportunity once the rate is known: " .. #opp)
+    -- A greedy 1-unit wall far over the usual price never sets the value.
+    check(s2.value <= plan.usual, "valued at most at the usual price")
+    TALODDB.economy[key].auctions = {}
+    M.InvalidateSales()
+    Desk.Invalidate()
 
     -- A page with two items: no ladder (it may not show every auction). More pages: partial.
     lists.list = { { "Salt", 5, 50, "Al", 4289 }, { "Wool Cloth", 5, 500, "Bo", 2592 } }
@@ -136,7 +161,8 @@ scenarios.auction_desk_ladder = function()
     local data = Desk.Listings()
     check(data.source == "log" and #data.list == 1 and data.list[1].unit == 30, "listing from the log")
     local st = data.list[1].standing
-    check(st.state == "undercut" and st.ahead == 15 and st.lowest == 10 and st.repost == 9, "undercut: " .. tostring(st.ahead))
+    -- Repost 1c under the cheapest stack (5 for 50c): 49c for 5.
+    check(st.state == "undercut" and st.ahead == 15 and st.lowest == 10 and math.abs(st.repost - 9.8) < 1e-9, "undercut: " .. tostring(st.ahead) .. " " .. tostring(st.repost))
     -- Deposit learned from that post: 10 / (13 * 5).
     local rate, posts = Desk.DepositRate()
     check(posts == 1 and math.abs(rate - 10 / 65) < 1e-9, "deposit rate learned: " .. rate)
@@ -163,7 +189,8 @@ scenarios.auction_desk_window = function()
     MOCK.Tick(3.2) MOCK.Tick(0.3)
     local Pr = ns.Prices
     local now = time()
-    Pr.Record(2589, 100, 30, now - 2 * 86400, 3, "Linen Cloth")
+    Pr.Record(2589, 100, 30, now - 3 * 86400, 3, "Linen Cloth")
+    Pr.Record(2589, 100, 30, now - 2 * 86400, 3)
     Pr.Record(2589, 100, 30, now - 86400, 3)
     Pr.Record(2589, 10, 30, now, 3)
     Pr.RecordLadder(2589, { { 10, 5, "Al" }, { 20, 10, "Bo" }, { 100, 20, "Al" } }, false, now)

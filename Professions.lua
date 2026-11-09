@@ -26,7 +26,10 @@ ns.Professions = Prof
 local DATA = ns.ProfessionData or { ranks = {}, recipes = {}, items = {}, gathering = {} }
 Prof.DATA = DATA
 
-local UNKNOWN_PRICE = 2000      -- copper per unit when Wowhead has no price: possible, not preferred
+-- Copper per unit when nothing has a price: only a ranking penalty when the
+-- planner picks recipes (possible, not preferred). Never shown or added to an
+-- amount: ItemPrice says "unknown" with it, BuyCost returns nil.
+local UNKNOWN_PRICE = 2000
 local PATTERN_PENALTY = 1.5     -- a dropped / quest pattern you do not have costs luck or a trip
 local LEARN_SPREAD = 15         -- a recipe's training fee is spread over this many points when comparing
 local STICKY = 1.1              -- keep the current recipe unless another is >10% cheaper per point
@@ -104,6 +107,10 @@ end
 -- (nil for a dropped pattern: no price).
 function Prof.LearnCost(r)
     if Prof.IsPattern(r) then return r.patternPrice end
+    if not r.cost then
+        -- Starter recipes come with the profession: free, not unknown.
+        for _, src in ipairs(r.src or {}) do if src == "starter" then return 0 end end
+    end
     return r.cost
 end
 
@@ -122,7 +129,8 @@ function Prof.ItemIcon(id)
     return it and it.icon and ("Interface\\Icons\\" .. it.icon) or 134400
 end
 
--- Copper for one, where the price comes from, and when it was seen:
+-- Copper for one (the lowest you know: one unit, not n; see BuyCost), where
+-- the price comes from, and when it was seen:
 -- "seen" (the Auction House as you last looked, see Prices.lua) or
 -- "auctionator" (its scans), "vendor" when a vendor sells it for less (or
 -- it was not seen), "ah" (Wowhead's Classic Era auction average: the last
@@ -137,6 +145,141 @@ function Prof.ItemPrice(id)
     if p then return p, src, t end
     if it and it.ah and it.ah > 0 then return it.ah, "ah" end
     return UNKNOWN_PRICE, "unknown"
+end
+
+-- Buying `n` of an item, units `from` + 1 .. `from` + n (from: units already
+-- bought earlier in the same plan, default 0), counted along the price ladder:
+--   Prof.BuyCost(id, n, from) -> cost | nil, info
+--   cost  copper for all n, nil when some units have no price (never a guess)
+--   info  { src = "vendor" / "ladder" / "lowest" / "ah" / "unknown",
+--           estimated = true when not counted along a ladder (the lowest price
+--           times n, or Wowhead's average): thin data,
+--           short = units without a price, partial = copper for the priced
+--           units (always a number), age = ladder age in seconds or nil,
+--           surplus = units bought past n: only whole stacks were for sale,
+--           and cost is the money for all of them }
+-- ItemPrice's lowest times n assumes every unit is as cheap as the cheapest
+-- auction: 144 Linen with 5 listed at 30c is not 144 x 30c. A vendor sells
+-- without limit, so it caps every tier and covers what the ladder does not.
+-- Units past a ladder's end (or past what it kept) have no price: the ladder
+-- is the whole market you saw, more may or may not be listed now.
+local STALE_LADDER = 7 * 86400
+function Prof.BuyCost(id, n, from)
+    n, from = math.max(0, math.floor(n or 0)), math.max(0, math.floor(from or 0))
+    local it = DATA.items[id]
+    local vendor = it and it.vendor and it.vendor > 0 and it.vendor or nil
+    local info = { src = "unknown", estimated = false, short = 0, partial = 0 }
+    if n == 0 then
+        info.src = vendor and "vendor" or "unknown"
+        return 0, info
+    end
+    local Pr = ns.Prices
+    local c2, got2, age = nil, nil, nil
+    if Pr and Pr.LadderBuy then c2, got2, age = Pr.LadderBuy(id, from + n, vendor) end
+    -- The ladder counts only while no newer price exists (a search over many
+    -- items, a browse row or Auctionator's later scan update the price, not
+    -- the ladder): an old ladder is not today's market. Then the newest
+    -- lowest price stands in, estimated.
+    if c2 and Pr.Get then
+        local _, seen = Pr.Get(id)
+        if seen and age and seen > time() - age + 600 then c2 = nil end
+    end
+    if c2 then
+        local c1, got1 = 0, 0
+        if from > 0 then c1, got1 = Pr.LadderBuy(id, from, vendor) end
+        -- Whole auctions: the units bought can be more than needed (a stack of
+        -- 20 for 3); the money is spent all the same, and the spare units are
+        -- owned: a later need takes them first at no extra cost. So this step
+        -- costs what buying from + n costs more than buying `from`, and its
+        -- units past the ladder are those short of from + n less those already
+        -- short of `from` (counted by the step before).
+        got1, got2 = got1 or 0, got2 or 0
+        local lack = math.max(0, math.max(0, from + n - got2) - math.max(0, from - got1))
+        local covered = n - lack
+        info.surplus = (c2 > c1 and got2 > from + n) and got2 - (from + n) or nil
+        info.age = age
+        -- An old ladder (and nothing newer): its cost is what the market was.
+        info.stale = (age and age > STALE_LADDER) or nil
+        if vendor then
+            local full2 = c2 + math.max(0, from + n - got2) * vendor
+            local full1 = c1 + math.max(0, from - got1) * vendor
+            info.partial = math.max(0, full2 - full1)
+            info.src = covered > 0 and "ladder" or "vendor"
+            return info.partial, info
+        end
+        local cost = math.max(0, c2 - c1)
+        info.src, info.partial, info.short = "ladder", cost, lack
+        if lack > 0 then return nil, info end
+        return cost, info
+    end
+    -- No ladder: the lowest price you know for every unit (vendor exact).
+    local p, src = Prof.ItemPrice(id)
+    if src == "unknown" then
+        info.short = n
+        return nil, info
+    end
+    if src == "vendor" then
+        info.src, info.partial = "vendor", p * n
+        return info.partial, info
+    end
+    info.src, info.estimated, info.partial = (src == "ah") and "ah" or "lowest", true, p * n
+    return info.partial, info
+end
+
+-- Cheapest way to get `n` of an item: buy them (BuyCost) or make them with a
+-- recipe makers(id, depth) offers, its materials bought or made the same way.
+-- Returns cost | nil (some part has no price), recipe | nil (nil = buy).
+-- A route with a price always beats one without. `path` stops cycles
+-- (essences that turn into each other). `bought` (optional): { [id] = units
+-- already bought } by the plan or tree around this route: a reagent is priced
+-- after those along its ladder, and after what the same route buys of it in
+-- an earlier branch, never from the cheapest tier again.
+-- Third return: what a made route buys, { { id, units } }, so the caller's
+-- later branches price after it.
+function Prof.RouteCost(id, n, makers, depth, maxDepth, path, from, bought)
+    depth, maxDepth = depth or 0, maxDepth or 4
+    local best = Prof.BuyCost(id, n, from)
+    local recipe, buys
+    if depth >= maxDepth or n <= 0 then return best, nil end
+    path = path or {}
+    bought = bought or {}
+    path[id] = true
+    for _, r in ipairs(makers(id, depth) or {}) do
+        local crafts = math.ceil(n / math.max(r.makes or 1, 1))
+        local cost, ok = 0, true
+        local claims, undo = {}, {}
+        local function Claim(cid, units)
+            claims[#claims + 1] = { cid, units }
+            undo[#undo + 1] = { cid, rawget(bought, cid) }
+            bought[cid] = (bought[cid] or 0) + units
+        end
+        for _, rg in ipairs(r.reagents or {}) do
+            if path[rg[1]] then ok = false break end
+            local m = rg[2] * crafts
+            local c, sub, subBuys = Prof.RouteCost(rg[1], m, makers, depth + 1, maxDepth, path, bought[rg[1]] or 0, bought)
+            if not c then ok = false break end
+            cost = cost + c
+            -- What this branch buys: later branches of the route buy after it.
+            if sub then
+                for _, b in ipairs(subBuys or {}) do Claim(b[1], b[2]) end
+            else
+                Claim(rg[1], m)
+            end
+        end
+        for k = #undo, 1, -1 do rawset(bought, undo[k][1], undo[k][2]) end
+        if ok and (not best or cost < best) then best, recipe, buys = cost, r, claims end
+    end
+    path[id] = nil
+    return best, recipe, buys
+end
+
+-- An amount where part has no price: "1g 20s", "1g 20s + 3 without a price",
+-- or "? (3 without a price)". Unknown is never shown as a number.
+function Prof.MoneyKnown(copper, unpriced, what)
+    if not unpriced or unpriced <= 0 then return Prof.Money(copper) end
+    what = what or "without a price"
+    if (copper or 0) > 0 then return Prof.Money(copper) .. " + " .. unpriced .. " " .. what end
+    return "? (" .. unpriced .. " " .. what .. ")"
 end
 
 -- "AH 25c, 2 h ago" / "AH ~25c (Wowhead average)" / "vendor 10c".
@@ -167,18 +310,25 @@ end
 local AH_CUT = 0.05
 function Prof.SellValue(id)
     -- One rule everywhere (Market.SaleValue: your sell rate, soulbound, grey).
+    -- Also returns the vendor price and the units listed at your last look
+    -- (nil: not seen), so a caller can tell how far the AH value reaches.
+    local listed = ns.Prices and ns.Prices.Entry and ns.Prices.Entry(id)
+    listed = type(listed) == "table" and listed.n or nil
+    local it = DATA.items[id]
     if ns.Market and ns.Market.SaleValue then
         local v, how, info = ns.Market.SaleValue(id)
-        return v, how, info and info.t
+        -- The supply of the look that gave the price: an Auctionator price has
+        -- none of its own (nil: unknown, never 0 nor an older look's count).
+        if not (info and info.src == "seen") then listed = nil end
+        return v, how, info and info.t, (info and info.vendor) or (it and it.sell) or 0, listed
     end
-    local it = DATA.items[id]
     local vendor = it and it.sell or 0
     local p, t = nil, nil
     if ns.Prices then p, t = ns.Prices.Get(id) end
     local net = p and math.floor(p * (1 - ((ns.Market and ns.Market.CUT) or AH_CUT))) or 0
-    if net > vendor then return net, "ah", t end
-    if vendor > 0 then return vendor, "vendor" end
-    return 0, nil
+    if net > vendor then return net, "ah", t, vendor, listed end
+    if vendor > 0 then return vendor, "vendor", nil, vendor, listed end
+    return 0, nil, nil, vendor, listed
 end
 
 -- At your last look: units and auctions listed (nil: not seen).
@@ -426,33 +576,46 @@ end
 ---------------------------------------------------------------------------
 local UnitCost
 
--- Expected copper for one craft at `skill`.
+-- Expected copper for one craft at `skill`, and how many of its materials
+-- have no price (their cost in the copper is a placeholder: a recipe with
+-- unpriced materials never ranks above one fully priced).
 local function CraftCost(r, ctx, skill, depth)
-    local total = 0
+    local total, unpriced = 0, 0
     for _, rg in ipairs(r.reagents) do
-        total = total + rg[2] * (UnitCost(rg[1], ctx, skill, depth))
+        local c, _, unk = UnitCost(rg[1], ctx, skill, depth)
+        total = total + rg[2] * c
+        unpriced = unpriced + (unk or 0)
     end
-    return total
+    return total, unpriced
 end
 
 -- Cheapest way to get one: buy it, or make it with a recipe you can use
 -- now (this profession at `skill`, or another profession you have, e.g.
--- smelting bars as a miner).
+-- smelting bars as a miner). Returns cost, maker, unpriced (materials with
+-- no price on the chosen route; a priced route beats an unpriced one).
 function UnitCost(id, ctx, skill, depth)
     -- A plan asks for the same reagents at every point and in every recipe:
     -- prices are fixed while it is built, costs for one skill point.
     local memo = ctx.memo
     local key = id * 8 + (depth or 0)
     if memo then
-        if memo.skill ~= skill then memo.skill, memo.cost, memo.maker = skill, {}, {} end
+        if memo.skill ~= skill then memo.skill, memo.cost, memo.maker, memo.unk = skill, {}, {}, {} end
         local c = memo.cost[key]
-        if c then return c, memo.maker[key] or nil end
+        if c then return c, memo.maker[key] or nil, memo.unk[key] end
     end
     local best = memo and memo.price[id]
+    local unk = memo and memo.priceUnk and memo.priceUnk[id]
     if not best then
-        best = Prof.ItemPrice(id)
-        if memo then memo.price[id] = best end
+        local src
+        best, src = Prof.ItemPrice(id)
+        unk = src == "unknown" and 1 or 0
+        if memo then
+            memo.price[id] = best
+            memo.priceUnk = memo.priceUnk or {}
+            memo.priceUnk[id] = unk
+        end
     end
+    unk = unk or 0
     local maker
     local it = DATA.items[id]
     if it and it.made and (depth or 0) < MAX_DEPTH then
@@ -460,13 +623,15 @@ function UnitCost(id, ctx, skill, depth)
             local r = DATA.recipes[sid]
             local at = r and (r.prof == ctx.prof and skill or ctx.ranks[r.prof])
             if r and at and r.skill <= at and ctx.Allowed(r, true) then
-                local c = CraftCost(r, ctx, skill, (depth or 0) + 1) / (r.makes or 1)
-                if c < best then best, maker = c, r end
+                local c, cu = CraftCost(r, ctx, skill, (depth or 0) + 1)
+                c = c / (r.makes or 1)
+                cu = cu > 0 and 1 or 0
+                if cu < unk or (cu == unk and c < best) then best, maker, unk = c, r, cu end
             end
         end
     end
-    if memo then memo.cost[key], memo.maker[key] = best, maker or false end
-    return best, maker
+    if memo then memo.cost[key], memo.maker[key], memo.unk[key] = best, maker or false, unk end
+    return best, maker, unk
 end
 
 -- prof: profession name; from / to: skill; opts:
@@ -481,7 +646,7 @@ function Prof.Plan(prof, from, to, opts)
     opts = opts or {}
     local known, excluded = opts.known or {}, opts.excluded or {}
     local plan = { prof = prof, from = from, to = to, steps = {}, gaps = {}, shopping = {}, tools = {},
-        crafts = 0, materials = 0, learn = 0, training = 0, unknownPrices = 0 }
+        crafts = 0, materials = 0, learn = 0, training = 0, unknownTraining = 0, unknownPrices = 0, unpriced = 0, unknownLearn = 0 }
     local recipes = byProf[prof]
     if not recipes then
         plan.error = Prof.IsGathering(prof) and ("levels by " .. DATA.gathering[prof]) or "no recipe data"
@@ -503,6 +668,14 @@ function Prof.Plan(prof, from, to, opts)
 
     -- 1. Pick a recipe for every point.
     local cap = opts.max or (Prof.RankFor(prof, from) or {}).max or 75
+    -- Your maximum not read and the start at a rank's end (75 / 150 / 225):
+    -- whether that rank is trained is unknown, so the training is counted
+    -- (its fee and its level), never assumed done for free.
+    if not opts.max then
+        for _, rk in ipairs(DATA.ranks[prof] or {}) do
+            if rk.max == from then cap = from break end
+        end
+    end
     local used, seg = {}, nil
     local s = from
     while s < to do
@@ -513,16 +686,23 @@ function Prof.Plan(prof, from, to, opts)
             local rank = Prof.NextRank(prof, cap)
             if not rank then break end
             plan.steps[#plan.steps + 1] = { kind = "train", at = s, rank = rank }
-            plan.training = plan.training + (rank.cost or 0)
+            -- A rank taught by a book costs the book (its price is not in the
+            -- data), and a fee missing from the data is unknown: neither is 0.
+            local book = type(rank.note) == "string" and rank.note:find("^a book") ~= nil
+            if rank.cost == nil or book then
+                plan.unknownTraining = plan.unknownTraining + 1
+            else
+                plan.training = plan.training + rank.cost
+            end
             if rank.level and opts.level and opts.level < rank.level then plan.levelShort = rank end
             cap = rank.max
             seg = nil
         else
-            local best, bestScore, bestChance
+            local best, bestScore, bestChance, bestUnk
             local function Consider(r)
                 local chance = Prof.Chance(r, s)
                 if chance <= 0 or not ctx.Allowed(r) then return end
-                local cost = CraftCost(r, ctx, s, 0)
+                local cost, unk = CraftCost(r, ctx, s, 0)
                 -- Resale: what the product brings back lowers its cost (never
                 -- below a quarter of it, so fewer crafts still win).
                 if opts.resale and r.creates then
@@ -535,7 +715,10 @@ function Prof.Plan(prof, from, to, opts)
                     if learn and not used[r.id] then score = score + learn / LEARN_SPREAD end
                 end
                 if seg and seg.recipe == r then score = score / STICKY end
-                if not bestScore or score < bestScore then best, bestScore, bestChance = r, score, chance end
+                -- Fewer materials without a price first: a placeholder price never outranks a real one.
+                if not bestScore or unk < bestUnk or (unk == bestUnk and score < bestScore) then
+                    best, bestScore, bestChance, bestUnk = r, score, chance, unk
+                end
             end
             for _, r in ipairs(recipes) do
                 if r.skill > s then break end
@@ -553,7 +736,12 @@ function Prof.Plan(prof, from, to, opts)
                     seg = { kind = "craft", from = s, to = s + 1, recipe = best, expect = expect,
                         color = Prof.Color(best, s), known = known[best.name] and true or false,
                         pattern = Prof.IsPattern(best) and not known[best.name] }
-                    if not seg.known and not used[best.id] then seg.learn = Prof.LearnCost(best) end
+                    if not seg.known and not used[best.id] then
+                        seg.learn = Prof.LearnCost(best)
+                        -- A dropped / quest pattern (or a fee the data lacks)
+                        -- costs something unknown, never 0.
+                        if not seg.learn then seg.learnUnknown = true end
+                    end
                     used[best.id] = true
                     plan.steps[#plan.steps + 1] = seg
                 end
@@ -577,17 +765,40 @@ function Prof.Plan(prof, from, to, opts)
         local e = shopIndex[id]
         if not e then
             local unit, src, seen = Prof.ItemPrice(id)
-            e = { id = id, need = 0, have = 0, buy = 0, unit = unit, src = src, seen = seen }
+            -- unit: the lowest price, for "each" texts only (nil: no price);
+            -- cost / short: what buying `buy` along the ladder costs.
+            e = { id = id, need = 0, have = 0, buy = 0, unit = src ~= "unknown" and unit or nil, src = src, seen = seen,
+                cost = 0, short = 0 }
             shopIndex[id] = e
             plan.shopping[#plan.shopping + 1] = e
         end
         return e
+    end
+    -- Recipes you can use for an intermediate at skill `at` (UnitCost's rule).
+    local makersAt = {}
+    local NONE = {}
+    local function Makers(id, at, depth)
+        local it = DATA.items[id]
+        if not (it and it.made) or (depth or 0) >= MAX_DEPTH then return NONE end
+        local key = id * 1024 + at
+        local list = makersAt[key]
+        if list then return list end
+        list = {}
+        for _, sid in ipairs(it.made) do
+            local r = DATA.recipes[sid]
+            local skill = r and (r.prof == ctx.prof and at or ctx.ranks[r.prof])
+            if r and skill and r.skill <= skill and ctx.Allowed(r, true) then list[#list + 1] = r end
+        end
+        makersAt[key] = list
+        return list
     end
     local function Tool(id)
         if toolSeen[id] then return end
         toolSeen[id] = true
         plan.tools[#plan.tools + 1] = { id = id, have = Bags(id) > 0 }
     end
+    -- Units the plan bought so far, per item (RouteCost adds its own claims on top and takes them back).
+    local boughtView = setmetatable({}, { __index = function(_, k) return shopIndex[k] and shopIndex[k].buy or nil end })
     local Need
     -- n of item id at skill `at`, appended to `out` (a step's or a line's list).
     function Need(id, n, at, step, depth, out)
@@ -606,7 +817,16 @@ function Prof.Plan(prof, from, to, opts)
             line.have, n = have, n - have
         end
         if n <= 0 then return line end
-        local _, maker = UnitCost(id, ctx, at, depth)
+        -- Make or buy for this many: buying more walks up the ladder (after
+        -- what earlier steps already bought), so a cheap tier that wins for
+        -- one unit can lose for 144.
+        local maker
+        if (depth or 0) < MAX_DEPTH and Makers(id, at, depth)[1] then
+            local function MakersAt(x, d) return Makers(x, at, (depth or 0) + d) end
+            local from = shopIndex[id] and shopIndex[id].buy or 0
+            -- Reagents priced after what earlier steps already bought of them.
+            maker = select(2, Prof.RouteCost(id, n, MakersAt, 0, MAX_DEPTH - (depth or 0), nil, from, boughtView))
+        end
         if maker then
             local crafts = math.ceil(n / (maker.makes or 1))
             line.make, line.recipe, line.children = crafts, maker, {}
@@ -618,11 +838,16 @@ function Prof.Plan(prof, from, to, opts)
             if extra > 0 then madeAvail[id] = (madeAvail[id] or 0) + extra end
         else
             local e = Shop(id)
+            local _, info = Prof.BuyCost(id, n, e.buy)
             e.need, e.buy = e.need + n, e.buy + n
-            line.buy, line.cost = n, n * e.unit
-            step.cost = (step.cost or 0) + line.cost
-            plan.materials = plan.materials + line.cost
-            if e.src == "unknown" then plan.unknownPrices = plan.unknownPrices + 1 end
+            if info.short > 0 and e.short == 0 then plan.unknownPrices = plan.unknownPrices + 1 end
+            e.cost, e.short, e.buySrc = e.cost + info.partial, e.short + info.short, info.src
+            e.estimated = e.estimated or info.estimated or nil
+            line.buy, line.cost, line.short = n, info.partial, info.short > 0 and info.short or nil
+            step.cost = (step.cost or 0) + info.partial
+            if info.short > 0 then step.short = (step.short or 0) + info.short end
+            plan.materials = plan.materials + info.partial
+            plan.unpriced = plan.unpriced + info.short
         end
         return line
     end
@@ -633,21 +858,38 @@ function Prof.Plan(prof, from, to, opts)
             step.mats = {}
             plan.crafts = plan.crafts + step.crafts
             plan.learn = plan.learn + (step.learn or 0)
+            if step.learnUnknown then plan.unknownLearn = plan.unknownLearn + 1 end
             for _, tid in ipairs(r.tools or {}) do Tool(tid) end
             for _, rg in ipairs(r.reagents) do Need(rg[1], rg[2] * step.crafts, step.from, step, 0, step.mats) end
             if r.creates then madeAvail[r.creates] = (madeAvail[r.creates] or 0) + step.crafts * (r.makes or 1) end
         end
     end
     -- What you end up with: products not used by later steps, and what selling them brings.
+    -- The Auction House value counts only for as many units as the market
+    -- listed at your last look; the rest at the vendor price. A market that
+    -- carries 5 does not take 200 of yours at its lowest price, and walking up
+    -- the ladder would be worse (those dearer listings are other sellers
+    -- waiting too). Nothing tells how many would sell: the vendor is the one
+    -- price that takes any number, so it is the floor for the rest.
     plan.products, plan.resale = {}, 0
     for _, step in ipairs(plan.steps) do
         local id = step.kind == "craft" and step.recipe.creates
         if id and (madeAvail[id] or 0) > 0 then
             local left = madeAvail[id]
             madeAvail[id] = 0
-            local value, src, seen = Prof.SellValue(id)
-            plan.products[#plan.products + 1] = { id = id, n = left, unit = value, src = src, seen = seen }
-            plan.resale = plan.resale + left * value
+            local value, src, seen, vendor, listed = Prof.SellValue(id)
+            local worth, atAH = left * value, left
+            -- Supply unknown: only the vendor price is sure (worth is then a
+            -- lower bound, said so: supplyUnknown), never "0 were listed".
+            local supplyUnknown = src == "ah" and listed == nil or nil
+            if src == "ah" then
+                atAH = math.min(left, listed or 0)
+                worth = atAH * value + (left - atAH) * (vendor or 0)
+            end
+            plan.products[#plan.products + 1] = { id = id, n = left, unit = value, src = src, seen = seen,
+                worth = worth, atAH = (src == "ah" and not supplyUnknown) and atAH or nil, vendor = vendor, supplyUnknown = supplyUnknown }
+            if supplyUnknown then plan.resaleAtLeast = true end
+            plan.resale = plan.resale + worth
         end
     end
     plan.total = plan.materials + plan.learn + plan.training
@@ -751,9 +993,31 @@ end
 function Prof.Summary(plan)
     if plan.error then return plan.prof .. ": " .. plan.error end
     return string.format("%s %d -> %d: about %d crafts, est. %s (materials %s, recipes %s, training %s)%s",
-        plan.prof, plan.from, plan.to, plan.crafts, Prof.Money(plan.total), Prof.Money(plan.materials),
-        Prof.Money(plan.learn), Prof.Money(plan.training),
+        plan.prof, plan.from, plan.to, plan.crafts, Prof.TotalText(plan), Prof.MaterialsText(plan),
+        Prof.LearnText(plan), Prof.TrainingText(plan),
         #plan.gaps > 0 and string.format("; no recipe for %d-%d", plan.gaps[1][1], plan.gaps[1][2]) or "")
+end
+
+-- A plan's amounts with what has no price said, never counted as a number:
+-- plan.total / materials / learn hold the priced part only.
+function Prof.MaterialsText(plan)
+    return Prof.MoneyKnown(plan.materials, plan.unpriced or 0, (plan.unpriced or 0) == 1 and "unit without a price" or "units without a price")
+end
+
+function Prof.LearnText(plan)
+    local n = plan.unknownLearn or 0
+    return Prof.MoneyKnown(plan.learn, n, n == 1 and "pattern without a price" or "patterns without a price")
+end
+
+function Prof.TrainingText(plan)
+    local n = plan.unknownTraining or 0
+    return Prof.MoneyKnown(plan.training, n, n == 1 and "rank without a price" or "ranks without a price")
+end
+
+function Prof.TotalText(plan)
+    local u, l, tr = plan.unpriced or 0, plan.unknownLearn or 0, plan.unknownTraining or 0
+    if u == 0 and l == 0 and tr == 0 then return Prof.Money(plan.total) end
+    return "at least " .. Prof.Money(plan.total)
 end
 
 ---------------------------------------------------------------------------
@@ -775,11 +1039,17 @@ function Prof.Crafts(charKey)
     return c and c.crafts or {}
 end
 
--- Copper for the materials of one craft at the data's prices (bought, not made).
+-- What the materials of one craft are worth at the lowest prices you know
+-- (bought, not made): copper for the priced ones, and how many materials have
+-- no price (left out, never counted at a placeholder). A value of what was
+-- used, not a purchase, so one price per unit.
 function Prof.ReagentCost(r)
-    local total = 0
-    for _, rg in ipairs(r.reagents or {}) do total = total + rg[2] * (Prof.ItemPrice(rg[1])) end
-    return total
+    local total, unpriced = 0, 0
+    for _, rg in ipairs(r.reagents or {}) do
+        local p, src = Prof.ItemPrice(rg[1])
+        if src == "unknown" then unpriced = unpriced + 1 else total = total + rg[2] * p end
+    end
+    return total, unpriced
 end
 
 function Prof.RecordCraft(spellID, now)

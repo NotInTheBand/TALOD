@@ -23,10 +23,12 @@ end
 
 local function Pct(x)
     if not x then return HEX.dim .. "-|r" end
-    local v = math.floor(x * 100 + (x >= 0 and 0.5 or -0.5))
+    -- Half away from zero on both sides: floor(x - 0.5) put every drop a point too low.
+    local v = x >= 0 and math.floor(x * 100 + 0.5) or -math.floor(-x * 100 + 0.5)
     if v == 0 then return HEX.muted .. "0%|r" end
     return (v < 0 and HEX.good or HEX.bad) .. (v > 0 and "+" or "") .. v .. "%|r"
 end
+UI.Pct = Pct
 
 -- Freshness color: today green, this week gold, older grey.
 local function AgeText(t)
@@ -83,21 +85,27 @@ local function DetailRows(id)
     out[#out + 1] = { header = true, text = "Now" }
     out[#out + 1] = { label = "Lowest", text = HEX.white .. Money(s.p) .. "|r each  ·  " .. AgeText(s.t)
             .. (s.overNow and (HEX.bad .. "  overpriced|r") or ""), cols = { Pct(s.trend) },
-        tooltip = function(o) ns.Tooltip.Text(o, { "Lowest buyout per unit at your last look.", "Right: against its usual price.",
+        tooltip = function(o) ns.Tooltip.Text(o, { "Lowest buyout per unit at your last look.",
+            s.trendBase and ("Right: against your earlier looks (the middle of each day: " .. Money(math.floor(s.trendBase + 0.5)) .. ").")
+                or "Right: against your earlier looks (none yet).",
+            s.usual and ("Usual price " .. Money(math.floor(s.usual + 0.5)) .. (s.usualStale and ", from old looks only" or "") .. ".") or nil,
             s.overNow and string.format("Over %dx the usual price: the cheap ones are gone or the price was not per unit. "
                 .. "Left out of the usual; selling counts the usual price instead.", Market.OUTLIER_FACTOR) or nil }) end }
     out[#out + 1] = { label = "Supply", text = Supply(s.n, s.a), cols = { Pct(s.supplyTrend) },
         tooltip = function(o) ns.Tooltip.Text(o, { "Auctions and units listed at your last look.",
-            s.avgN and string.format("Usually %d units. Right: now against that.", math.floor(s.avgN + 0.5)) or "One look so far." }) end }
+            s.avgN and string.format("Usually %d units. Right: now against that.", math.floor(s.avgN + 0.5))
+                or (s.looks > 1 and "Too few looks with a unit count for a usual supply." or "One look so far.") }) end }
     out[#out + 1] = { label = "Usual", text = string.format("%s  ·  low %s  ·  high %s  ·  %d looks", Money(s.usual and math.floor(s.usual + 0.5)),
         Money(s.low), Money(s.high), s.looks),
         tooltip = function(o) ns.Tooltip.Text(o, { "Usual price", string.format("The middle (median) of your looks, leaving out the overpriced "
-            .. "ones (over %dx the middle; marked red in the graph and under Every look). Low and high: of the looks kept.", Market.OUTLIER_FACTOR) }) end }
+            .. "ones (over %dx the middle; marked red in the graph and under Every look) and the thin cheap ones (under half of it "
+            .. "with one auction or few units). Low and high: of the looks kept.", Market.OUTLIER_FACTOR) }) end }
     local craft = Market.CraftCost(id)
     if craft then
         local each = math.floor(craft.each + 0.5)
         local diff = s.p and s.p > 0 and (each - s.p) / s.p or nil
-        out[#out + 1] = { label = "Craft", text = HEX.white .. Money(each) .. "|r" .. HEX.muted .. " each  ·  " .. craft.r.name
+        out[#out + 1] = { label = "Craft", text = HEX.white .. Money(each) .. "|r" .. HEX.muted
+                .. (craft.spare and " each, making one batch (whole stacks: materials left over)  ·  " or " each  ·  ") .. craft.r.name
                 .. (craft.estimated and "  (partly estimated)" or "") .. "|r",
             cols = { Pct(diff) },
             tooltip = function(o) ns.Tooltip.Text(o, { "Crafting price", "Materials of the cheapest recipe that makes it, at the best "
@@ -110,9 +118,12 @@ local function DetailRows(id)
             .. "  left out (up to " .. Money(s.highAll) .. ")|r" }
     end
     out[#out + 1] = { header = true, text = "Selling it" }
-    local post, _, atUsual = Market.PostPrice(id)
-    out[#out + 1] = { label = "Post at", text = HEX.white .. Money(post) .. "|r" .. HEX.muted
-        .. (atUsual and "  each: the usual price (the lowest now is overpriced)" or "  each: 1c under the lowest at your last look")
+    local post, _, atUsual, onlyMine, stack = Market.PostPrice(id)
+    out[#out + 1] = { label = "Post at", text = HEX.white .. Money(post) .. "|r"
+        .. ((stack and stack > 1 and post) and (HEX.white .. " (" .. Money(post * stack) .. " for " .. stack .. ")|r") or "") .. HEX.muted
+        .. (atUsual and "  each: the usual price (the lowest now is odd)"
+            or onlyMine and "  each: your own price (only your auctions were listed at your last look)"
+            or "  each: 1c under the cheapest auction (its whole stack) at your last look")
         .. ((s.t and time() - s.t > 3600) and ", look again first" or "") .. "|r" }
     local fair = Market.FairPrice(id)
     out[#out + 1] = { label = "AH nets", text = Money(Market.Net(fair)) .. HEX.muted .. "  each after the " .. math.floor(Market.CUT * 100) .. "% cut"
@@ -134,7 +145,8 @@ local function DetailRows(id)
             out[#out + 1] = { label = "Sells", text = (sales.hard and HEX.bad or "") .. rate .. (sales.hard and "  ·  hard to sell|r" or "")
                 .. (sales.depositLost > 0 and (HEX.muted .. "  ·  " .. Money(sales.depositLost) .. " deposits lost|r") or ""),
                 tooltip = function(o) ns.Tooltip.Text(o, { "Your sell rate", "Auctions of it that sold, of those that ended (every character). "
-                    .. "Values everywhere are the AH price after the cut times this rate, once 2 have ended." }) end }
+                    .. string.format("Once %d have ended, values everywhere count it: this share sells at the AH price after the cut, "
+                        .. "the rest comes back and is worth the vendor price less the deposit.", Market.SELL_MIN_ENDED) }) end }
         end
     end
     out[#out + 1] = { header = true, text = "Other prices" }
@@ -263,7 +275,7 @@ local function BuildPrices(parent)
     function v:Footer()
         return "Logged as you browse the Auction House: lowest buyout per unit, auctions and units listed. "
             .. "Usual = the middle of your looks, overpriced ones (over " .. Market.OUTLIER_FACTOR .. "x) marked red and left out; "
-            .. "green % = cheaper than usual."
+            .. "% = the price now against your earlier looks (green = cheaper)."
     end
 
     function v:Refresh()
@@ -321,12 +333,13 @@ local function BuildSell(parent)
 
     function v:Footer()
         return "AH = the lowest price at your last look, after the " .. math.floor(Market.CUT * 100)
-            .. "% cut (deposit not counted). Click an item seen on the AH for its detail."
+            .. "% cut; with your sell rate known, the unsold share at the vendor price and the deposit count too. "
+            .. "Click an item seen on the AH for its detail."
     end
 
     function v:Refresh()
         local list = Market.SellList()
-        local rows, totalAH, totalVendor, unseen = {}, 0, 0, 0
+        local rows, totalAH, totalVendor, unseen, old = {}, 0, 0, 0, 0
         local current
         for _, e in ipairs(list) do
             if e.verdict ~= current then
@@ -335,24 +348,37 @@ local function BuildSell(parent)
                     vendor = "Sell to a vendor", keep = "No vendor or auction value" }
                 rows[#rows + 1] = { header = true, text = titles[e.verdict], sortId = "sell", cols = { "Where", "Vendor", "AH after cut" } }
             end
-            if e.verdict == "ah" then totalAH = totalAH + (e.expected or e.net or 0) * e.n end
+            if e.verdict == "ah" then
+                totalAH = totalAH + (e.expected or e.net or 0) * e.n
+                if e.stale then old = old + 1 end
+            end
             if e.verdict == "vendor" then totalVendor = totalVendor + (e.vendor or 0) * e.n end
             if e.verdict == "unseen" then unseen = unseen + 1 end
             local _, icon = Market.ItemInfo(e.id)
             rows[#rows + 1] = {
                 id = e.id, icon = icon, link = e.link,
-                text = Market.ItemText(e.id) .. HEX.muted .. "  x" .. e.n .. "|r" .. (e.bound and "" or Market.MoveTag(e.id)),
+                text = Market.ItemText(e.id) .. HEX.muted .. "  x" .. e.n .. "|r" .. (e.bound and "" or Market.MoveTag(e.id))
+                    -- An old price (or one of unknown age) is not today's market: said on the row.
+                    .. ((e.verdict == "ah" and e.stale) and (HEX.gold .. "  · old price: look again|r") or ""),
                 cols = { VERDICT[e.verdict],
                     e.vendor and e.vendor > 0 and Money(e.vendor * e.n) or (HEX.dim .. "-|r"),
-                    e.net and Money(e.net * e.n) or (HEX.dim .. "-|r") },
+                    -- The number the verdict and the total use: expected with your sell rate, else if it sells.
+                    (e.expected or e.net) and Money((e.expected or e.net) * e.n) or (HEX.dim .. "-|r") },
                 tooltip = function(owner)
                     local lines = { Market.ItemText(e.id) .. "  x" .. e.n }
                     if e.p then
                         lines[#lines + 1] = string.format("AH: %s each (%s%s%s), %s after the cut", Money(e.p),
                             e.over and "usual price: the lowest now is overpriced, " or "",
                             e.src == "auctionator" and "Auctionator, " or "", Prices.Age(e.t, e.src), Money(e.net))
-                        local post = Market.PostPrice(e.id)
-                        if post then lines[#lines + 1] = string.format("Post at %s each (%s for all %d)", Money(post), Money(post * e.n), e.n) end
+                        -- Under a whole stack the price to type is the stack's, floored so it
+                        -- stays under (a per-unit 4.9c shown as "5c" x 20 is over 99c).
+                        local post, _, _, _, stack = Market.PostPrice(e.id)
+                        if post and stack and stack > 1 then
+                            lines[#lines + 1] = string.format("Post at %s for each %d (%s for all %d)", Money(math.floor(post * stack + 1e-6)),
+                                stack, Money(math.floor(post * e.n + 1e-6)), e.n)
+                        elseif post then
+                            lines[#lines + 1] = string.format("Post at %s each (%s for all %d)", Money(post), Money(post * e.n), e.n)
+                        end
                     else
                         lines[#lines + 1] = "Not seen on the Auction House yet."
                     end
@@ -360,19 +386,21 @@ local function BuildSell(parent)
                     local rate = Market.SellRateText(e.sales)
                     if rate then
                         lines[#lines + 1] = (e.hard and HEX.bad or "") .. "You: " .. rate .. (e.hard and " — hard to sell|r" or "")
-                        if e.expected and e.net and e.expected < e.net then
-                            lines[#lines + 1] = "Counted at " .. Money(e.expected) .. " each (AH after the cut x your sell rate)."
+                        if e.expected and e.net and e.expected ~= e.net then
+                            lines[#lines + 1] = string.format("Counted at %s each: %s each if it sells, %d%% sell rate, the unsold "
+                                .. "share at the vendor price less %s deposit (%s for all %d if every one sells).", Money(e.expected),
+                                Money(e.net), Market.RatePct(e.rate) or 0, Money(e.deposit or 0), Money(e.net * e.n), e.n)
                         end
                     end
-                    if e.bound then lines[#lines + 1] = HEX.bad .. "Binds when picked up.|r" end
+                    if e.bound then lines[#lines + 1] = HEX.bad .. "Bound to you: no auction for these.|r" end
                     ns.Tooltip.Text(owner, lines)
                 end,
             }
         end
         if #rows == 0 then rows[1] = { text = HEX.muted .. "Your bags are empty (or could not be read).|r" } end
         self.list:SetItems(rows)
-        self.card.sub:SetText(string.format("Auction House about %s after the cut  ·  vendor %s  ·  %d items not seen on the AH",
-            Money(totalAH), Money(totalVendor), unseen))
+        self.card.sub:SetText(string.format("Auction House about %s after the cut%s  ·  vendor %s  ·  %d items not seen on the AH",
+            Money(totalAH), old > 0 and string.format(" (%d from old prices)", old) or "", Money(totalVendor), unseen))
     end
     return v
 end
@@ -429,10 +457,16 @@ local function CraftDetailRows(pr)
         .. (makes ~= 1 and ("  ·  " .. Money(pr.cost / makes) .. " each") or "")
         .. (pr.unknown and "  ·  plus materials nobody has a price for" or (pr.guessed and "  ·  partly estimated" or "")) .. "|r" }
     if pr.priced then
-        out[#out + 1] = { label = "Sells for", text = Money(pr.value) .. HEX.muted .. "  after the " .. math.floor(Market.CUT * 100) .. "% cut"
-            .. (pr.rate and (" and your " .. math.floor(pr.rate * 100 + 0.5) .. "% sell rate") or "") .. "|r",
-            tooltip = function(o) ns.Tooltip.Text(o, { "Sells for", "The product's lowest buyout at your last look (the usual price when that "
-                .. "look was overpriced), after the Auction House cut, times your sell rate once 2 of your auctions of it have ended." }) end }
+        -- Where the value comes from: a vendor price is not "after the cut".
+        local how = pr.how == "vendor" and "  at a vendor (more than the Auction House brings you)"
+            or ("  on the Auction House after the " .. math.floor(Market.CUT * 100) .. "% cut"
+                .. (pr.rate and (", your " .. (Market.RatePct(pr.rate) or 0) .. "% sell rate and the deposit") or ""))
+        -- An old price (or one of unknown age) is not today's market: said beside it.
+        out[#out + 1] = { label = "Sells for", text = Money(pr.value) .. HEX.muted .. how .. "|r"
+            .. ((pr.stale and pr.how ~= "vendor") and (HEX.gold .. "  ·  old price: look again|r") or ""),
+            tooltip = function(o) ns.Tooltip.Text(o, { "Sells for", string.format("The product's lowest buyout at your last look (the usual price when that "
+                .. "look was overpriced), after the Auction House cut. Once %d of your auctions of it have ended, your sell rate counts too: "
+                .. "the unsold share at the vendor price, less the deposit. The vendor price instead when that is more.", Market.SELL_MIN_ENDED) }) end }
         out[#out + 1] = { label = "Profit", text = ProfitText(pr.profit) .. HEX.muted .. "  ·  margin |r" .. MarginText(pr.margin) }
     elseif pr.value then
         out[#out + 1] = { label = "Sells for", text = Money(pr.value) .. HEX.muted .. "  after the cut|r" }
@@ -448,8 +482,10 @@ local function CraftDetailRows(pr)
         local s = Market.Stats(r.creates)
         out[#out + 1] = { header = true, text = "Its market" }
         if s then
-            out[#out + 1] = { label = "Lowest", text = Money(s.p) .. " each  ·  " .. AgeText(s.t) .. HEX.muted .. "  ·  usual "
-                .. Money(s.usual and math.floor(s.usual + 0.5)) .. "|r", cols = { Pct(s.trend) },
+            -- The % is measured against the earlier looks, so that is the price named beside it.
+            out[#out + 1] = { label = "Lowest", text = Money(s.p) .. " each  ·  " .. AgeText(s.t) .. HEX.muted .. "  ·  earlier "
+                .. Money(s.trendBase and math.floor(s.trendBase + 0.5)) .. "  ·  usual " .. Money(s.usual and math.floor(s.usual + 0.5)) .. "|r",
+                cols = { Pct(s.trend) },
                 id = r.creates, tooltip = function(o) ns.Tooltip.Text(o, { "Click: its prices." }) end }
             out[#out + 1] = { label = "Supply", text = Supply(s.n, s.a) }
         end
@@ -464,11 +500,15 @@ local function CraftDetailRows(pr)
         local price = e.src == "unknown" and (HEX.bad .. "no price|r") or (HEX.muted .. ns.Professions.PriceText(e.id) .. "|r")
         out[#out + 1] = { label = e.need .. " x", text = Market.ItemText(e.id) .. "  " .. price
                 .. HEX.muted .. "  ·  have |r" .. (e.have >= e.need and HEX.good or HEX.muted) .. e.have .. "|r",
-            cols = { e.src == "unknown" and (HEX.dim .. "?|r") or Money(e.sub) },
+            cols = { e.sub and Money(e.sub) or (HEX.dim .. "?|r") },
             id = Prices.Entry(e.id) and e.id or nil }
         if e.craft then
-            out[#out + 1] = { label = "", text = HEX.gold .. "make it: " .. Money(math.floor(e.craft.each + 0.5)) .. " each|r"
-                .. HEX.muted .. "  (" .. e.craft.r.name .. ", " .. e.craft.r.prof .. (e.craft.estimated and ", estimated" or "") .. ")|r" }
+            -- Whole crafts: what making `need` costs, and what is left over.
+            local c = e.craft
+            out[#out + 1] = { label = "", text = HEX.gold .. "make it: " .. Money(c.whole) .. "|r" .. HEX.muted
+                .. "  (" .. c.crafts .. (c.crafts == 1 and " craft" or " crafts")
+                .. (c.spare > 0 and (", " .. c.spare .. " spare") or "") .. "; " .. c.r.name .. ", " .. c.r.prof
+                .. (c.estimated and ", estimated" or "") .. ")|r" }
         end
     end
 
@@ -476,10 +516,16 @@ local function CraftDetailRows(pr)
     if plan.canMake > 0 then
         out[#out + 1] = { label = "Can make", text = HEX.good .. plan.canMake .. (plan.canMake == 1 and " craft" or " crafts") .. "|r"
             .. HEX.muted .. "  (" .. plan.canMake * makes .. " items)|r"
-            .. (pr.priced and (HEX.muted .. "  ·  |r" .. ProfitText(pr.profit * plan.canMake) .. HEX.muted .. " over the materials' price|r") or "") }
+            .. (function()
+                if not pr.priced then return "" end
+                -- All of them sold: the AH value only for as many as were listed, the rest at the vendor.
+                local p = Market.BatchProfit(r, plan.canMake)
+                return p and (HEX.muted .. "  ·  |r" .. ProfitText(p) .. HEX.muted .. " over the materials' price|r") or ""
+            end)() }
     else
         out[#out + 1] = { label = "Can make", text = HEX.muted .. "none yet|r" }
-        out[#out + 1] = { label = "Buy", text = Money(plan.buyCost) .. HEX.muted .. "  of materials you lack for one craft|r" }
+        out[#out + 1] = { label = "Buy", text = (plan.unknown > 0 and "at least " or "") .. Money(plan.buyCost) .. HEX.muted
+            .. "  of materials you lack for one craft" .. (plan.unknown > 0 and (", + " .. plan.unknown .. " without a price") or "") .. "|r" }
     end
 
     out[#out + 1] = { header = true, text = "Recipe" }
@@ -640,8 +686,8 @@ local function DealRow(d)
     return {
         icon = icon,
         text = Market.ItemText(d.id) .. HEX.muted .. "  " .. Supply(d.s.n, d.s.a) .. "  ·  " .. Prices.Age(d.s.t) .. "|r",
-        cols = { HEX.white .. Money(d.s.p) .. "|r", Money(math.floor(d.usual + 0.5)), HEX.good .. "+" .. Money(d.gain)
-            .. HEX.muted .. " (" .. math.floor(d.gain / math.max(1, d.s.p) * 100) .. "%)|r" },
+        cols = { HEX.white .. Money(d.p) .. "|r", Money(math.floor(d.usual + 0.5)), HEX.good .. "+" .. Money(d.gain)
+            .. HEX.muted .. " (" .. math.floor(d.gain / math.max(1, d.p) * 100) .. "%)|r" },
     }
 end
 
@@ -741,12 +787,21 @@ local function BuildBids(parent)
             build = function(add, raw)
                 local cols = { "Ends", "Next bid", "Price", "Saving" }
                 local current, unpriced, n = nil, {}, 0
+                local now = time()
                 for _, d in ipairs(Market.Bids()) do
                     if not d.saving then
                         unpriced[#unpriced + 1] = d
                     else
-                        local band = d.r.band and Prices.BANDS[d.api] and Prices.BANDS[d.api][d.r.band]
-                        local title = band and ("Time left " .. band[2] .. " at your look") or "Time left unknown"
+                        -- Grouped by the time left from now (the latest it can end), not
+                        -- by the band at looks taken hours apart: the list's order.
+                        local title = "Time left unknown"
+                        if d.r.band then
+                            local left = d.r.ends - now
+                            title = "Ends within " .. Market.Duration(left)
+                            for _, band in ipairs(Prices.BANDS[d.api] or Prices.BANDS.legacy) do
+                                if left <= band[1] then title = "Ends within " .. Market.Duration(band[1]) break end
+                            end
+                        end
                         if title ~= current then
                             current = title
                             raw({ header = true, text = title, sortId = "bids", cols = cols })
@@ -786,7 +841,7 @@ local function SellThroughRow(e)
         icon = icon,
         text = (e.id and Market.ItemText(e.id) or (HEX.white .. (e.name or "?") .. "|r"))
             .. (s.listed > 0 and (HEX.muted .. "  ·  " .. s.listed .. " listed now|r") or ""),
-        cols = { (s.rate and ((s.hard and HEX.bad or "") .. math.floor(s.rate * 100 + 0.5) .. "% sold" .. (s.hard and "|r" or ""))
+        cols = { (s.rate and ((s.hard and HEX.bad or "") .. Market.RatePct(s.rate) .. "% likely" .. (s.hard and "|r" or ""))
                 or (HEX.dim .. "?|r")) .. HEX.muted .. string.format("  %d/%d|r", s.sold, s.ended),
             s.failed > 0 and (HEX.bad .. s.failed .. " unsold|r" .. (s.depositLost > 0 and (HEX.muted .. " -" .. Money(s.depositLost) .. "|r") or ""))
                 or (HEX.dim .. "-|r"),
@@ -794,12 +849,13 @@ local function SellThroughRow(e)
         tooltip = function(owner)
             local lines = { e.name or "?", Market.SellRateText(s) or "Nothing ended yet." }
             lines[#lines + 1] = string.format("%d expired, %d cancelled, deposits lost %s", s.expired - s.cancelled, s.cancelled, Money(s.depositLost))
-            if s.perUnit then lines[#lines + 1] = "Sold for " .. Money(math.floor(s.perUnit)) .. " each on average (what you received)." end
-            if s.lastFailed then lines[#lines + 1] = "Last unsold: " .. date("%b %d", s.lastFailed) end
-            if s.last then lines[#lines + 1] = "Last sold: " .. date("%b %d", s.last) end
+            if s.perUnit then lines[#lines + 1] = "Sold for " .. Money(math.floor(s.perUnit)) .. " each on average (after the cut, your deposit back not counted)." end
+            -- With the age: a date without its year reads as this year's.
+            if s.lastFailed then lines[#lines + 1] = "Last unsold: " .. date("%b %d %Y", s.lastFailed) .. " (" .. Market.DaysAgo(s.lastFailed) .. ")" end
+            if s.last then lines[#lines + 1] = "Last sold: " .. date("%b %d %Y", s.last) .. " (" .. Market.DaysAgo(s.last) .. ")" end
             if e.id then
-                local value, how = Market.SaleValue(e.id)
-                lines[#lines + 1] = "Counted at " .. Money(value) .. " each (" .. (how == "ah" and "AH x your sell rate" or (how or "no price")) .. ")"
+                local value, how, info = Market.SaleValue(e.id)
+                lines[#lines + 1] = "Counted at " .. Money(value) .. " each: " .. Market.SaleValueText(how, info)
             end
             ns.Tooltip.Text(owner, lines)
         end,
@@ -835,7 +891,9 @@ local function BuildSellThrough(parent)
                 local list = Market.SellThroughList()
                 for i, e in ipairs(list) do
                     local s = e.sales
-                    e.group = s.ended == 0 and "open" or (not s.rate and "few") or (s.hard and "hard") or (s.rate < 1 and "mixed" or "good")
+                    -- The smoothed rate never reaches 1: "sells" is none unsold or a chance the movement calls fast.
+                    e.group = s.ended == 0 and "open" or (not s.rate and "few") or (s.hard and "hard")
+                        or ((s.unsold == 0 or s.rate >= 0.75) and "good" or "mixed")
                     e.order = i
                 end
                 table.sort(list, function(a, b)
@@ -848,7 +906,7 @@ local function BuildSellThrough(parent)
                         current = e.group
                         raw({ header = true, text = ({ hard = "Hard to sell", mixed = "Sometimes unsold", good = "Sells",
                             few = "Too few ended to tell", open = "Listed, nothing ended yet" })[e.group],
-                            sortId = "sellthrough", cols = { "Sell rate", "Unsold", "Average sale" } })
+                            sortId = "sellthrough", cols = { "Sell chance", "Unsold", "Average sale" } })
                     end
                     d.sold, d.failed, d.lost = d.sold + s.sold, d.failed + s.failed, d.lost + s.depositLost
                     local last = math.max(s.last or 0, s.lastFailed or 0)

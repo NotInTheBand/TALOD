@@ -306,16 +306,27 @@ function Fishing.ItemValue(id)
     return v or 0, how, info.unseen == true, info
 end
 
--- Total value of { [id] = n }, kinds without any price, and kinds valued
--- at the vendor only because they were never seen on the AH.
+-- Total value of { [id] = n }, kinds without any price, kinds valued at the
+-- vendor only because they were never seen on the AH, and kinds whose value
+-- is unknown (could go to the AH, never seen there, no vendor price): with
+-- any of those the total is a lower bound, never the whole value. A bound or
+-- grey item with no vendor price is worth nothing, not unknown.
 function Fishing.ItemsValue(items)
-    local total, unpriced, unseen = 0, 0, 0
+    local total, unpriced, unseen, unknown = 0, 0, 0, 0
     for id, n in pairs(items or {}) do
         local v, _, notSeen = Fishing.ItemValue(id)
         if v > 0 then total = total + v * n else unpriced = unpriced + 1 end
         if notSeen then unseen = unseen + 1 end
+        if notSeen and v <= 0 then unknown = unknown + 1 end
     end
-    return total, unpriced, unseen
+    return total, unpriced, unseen, unknown
+end
+
+-- Money, as "at least X" when part of it has no known value.
+function Fishing.ValueText(copper, unknown)
+    local text = ns.Professions.Money(copper)
+    if (unknown or 0) > 0 then return "at least " .. text end
+    return text
 end
 
 function Fishing.ItemName(id)
@@ -403,12 +414,12 @@ local function CharKey() return ns.Gear and ns.Gear.CharKey() or "?" end
 -- Sessions
 ---------------------------------------------------------------------------
 local function SessionSummary(s)
-    local value = Fishing.ItemsValue(s.it)
+    local value, _, _, unknown = Fishing.ItemsValue(s.it)
     local minutes = (s.s or 0) / 60
     local gained = (s.skill1 and s.skill0) and (s.skill1 - s.skill0) or 0
     return string.format("%s: %d min fished, %d caught of %d casts, %s%s%s%s", s.zone or "?", math.floor(minutes + 0.5),
-        s.c or 0, s.n or 0, ns.Professions.Money(value),
-        minutes >= MIN_MINUTES and (" (" .. ns.Professions.Money(value / (minutes / 60)) .. "/h)") or "",
+        s.c or 0, s.n or 0, Fishing.ValueText(value, unknown),
+        minutes >= MIN_MINUTES and (" (" .. Fishing.ValueText(value / (minutes / 60), unknown) .. "/h)") or "",
         gained > 0 and (", +" .. gained .. " skill") or "",
         ((s.x or 0) + (s.p or 0) + (s.u or 0)) > 0 and (", " .. ((s.x or 0) + (s.p or 0) + (s.u or 0)) .. " attacks") or "")
 end
@@ -779,13 +790,15 @@ function Fishing.Rates(t)
     t = t or NewTally()
     local hours = (t.s or 0) / 3600
     local tries = (t.c or 0) + (t.a or 0)
-    local value, unpriced, unseen = Fishing.ItemsValue(t.it)
+    local value, unpriced, unseen, unknown = Fishing.ItemsValue(t.it)
     local enough = (t.s or 0) >= MIN_MINUTES * 60
+    -- partial: some catches have no known value, so value, perCatch and gph
+    -- are lower bounds (shown "at least", ranked as unknown).
     return {
         casts = t.n or 0, catches = t.c or 0, hours = hours, escaped = t.a or 0, missed = t.m or 0,
         catchPct = tries > 0 and (t.c or 0) / tries or nil,
         perHour = enough and (t.c or 0) / hours or nil,
-        value = value, unpriced = unpriced, unseen = unseen,
+        value = value, unpriced = unpriced, unseen = unseen, unknown = unknown, partial = unknown > 0 or nil,
         perCatch = (t.c or 0) > 0 and value / t.c or nil,
         gph = enough and value / hours or nil,
     }
@@ -1444,7 +1457,7 @@ function Fishing.SummaryLines()
         local r = Fishing.Rates(tally)
         lines[#lines + 1] = string.format("Here (%s, %s): %s caught, %s per catch, %s/h", p.sub, label,
             r.catchPct and (math.floor(r.catchPct * 100 + 0.5) .. "%") or "?",
-            r.perCatch and ns.Professions.Money(r.perCatch) or "?", r.gph and ns.Professions.Money(r.gph) or "?")
+            r.perCatch and Fishing.ValueText(r.perCatch, r.unknown) or "?", r.gph and Fishing.ValueText(r.gph, r.unknown) or "?")
         for _, line in ipairs((Fishing.DangerLines(spot))) do lines[#lines + 1] = "  " .. line end
     else
         lines[#lines + 1] = "Not fished here yet."

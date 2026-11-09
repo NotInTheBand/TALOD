@@ -183,13 +183,17 @@ scenarios.large_data_economy = function()
     local out, order = E.ScopeDays("all")
     check(#order == 400, "400 days: " .. #order)
     for _, day in ipairs({ order[1], order[57], order[200], order[400] }) do
-        local want, any = 0, false
+        -- Known only once every character with a reading has one by that day (unknown is not 0).
+        local want, all = 0, true
         for _, c in pairs(TALODDB.economy) do
-            local best
-            for d2, dd in pairs(c.days) do if d2 <= day and dd.money and (not best or d2 > best) then best = d2 end end
-            if best then want, any = want + c.days[best].money, true end
+            local best, ever
+            for d2, dd in pairs(c.days) do
+                if dd.money then ever = true end
+                if d2 <= day and dd.money and (not best or d2 > best) then best = d2 end
+            end
+            if best then want = want + c.days[best].money elseif ever then all = false end
         end
-        check(out[day].money == (any and want or nil), "gold on " .. day .. ": " .. tostring(out[day].money) .. " vs " .. want)
+        check(out[day].money == (all and want or nil), "gold on " .. day .. ": " .. tostring(out[day].money) .. " vs " .. want)
     end
     check(E.ScopeDays("all") == out, "ScopeDays memoized")
 

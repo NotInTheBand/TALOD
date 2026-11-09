@@ -25,9 +25,7 @@ for _, k in ipairs(Economy.KINDS) do KIND_LABEL[k.key] = k.label end
 
 local function RangeStart()
     if state.range == 0 then return nil end
-    local now = time()
-    local t = date("*t", now)
-    return now - (t.hour * 3600 + t.min * 60 + t.sec) - (state.range - 1) * 86400
+    return Economy.DayStart(nil, state.range - 1)
 end
 
 local function RangeLabel()
@@ -101,20 +99,26 @@ local function EntryTooltip(owner, item)
         if e.gained then lines[#lines + 1] = "Got: " .. ItemsText(e.gained, 10) end
         if e.lost then lines[#lines + 1] = "Gave: " .. ItemsText(e.lost, 10) end
     end
+    if e.refund then lines[#lines + 1] = "Your own money back (bid or deposit): " .. FormatMoney(e.refund) .. HEX.muted .. "  not income|r" end
     if e.value then lines[#lines + 1] = "Items' vendor value: " .. FormatMoney(e.value) end
     -- The kept items at your Auction House prices (after the cut).
     if ns.Prices and ns.Market and e.gained then
+        -- Whole copper as the seller is paid; items with no price are said, never 0.
         local ah, priced = 0, 0
         for _, it in ipairs(e.gained) do
             local id = type(it[1]) == "string" and tonumber(it[1]:match("item:(%d+)")) or nil
             local p = id and ns.Prices.Get(id)
-            if p then ah, priced = ah + ns.Market.Net(p) * (it[2] or 1), priced + 1 end
+            if p then ah, priced = ah + ns.Market.NetTotal(p * (it[2] or 1)), priced + 1 end
         end
-        if priced > 0 then lines[#lines + 1] = "On the Auction House: " .. FormatMoney(ah) .. HEX.muted .. " (after the cut, your last looks)|r" end
+        if priced > 0 then
+            lines[#lines + 1] = "On the Auction House: " .. FormatMoney(ah) .. HEX.muted .. " (after the cut, your last looks"
+                .. (priced < #e.gained and (string.format("; %d of %d items priced", priced, #e.gained)) or "") .. ")|r"
+        end
     end
     if e.kind == "transfer" then lines[#lines + 1] = HEX.muted .. "Between your own characters: not income or spending for the account.|r" end
     ns.Tooltip.Text(owner, lines)
 end
+UI.EntryTooltip = EntryTooltip
 
 local function EntryRow(item)
     local e = item.e
@@ -300,9 +304,7 @@ local function BuildOverview(parent)
             for _, row in ipairs(chars) do if row[1] == state.scope then money = row[2] end end
         end
         local now = time()
-        local t = date("*t", now)
-        local midnight = now - (t.hour * 3600 + t.min * 60 + t.sec)
-        local tInc, tExp = Economy.ScopeTotals(state.scope, midnight)
+        local tInc, tExp = Economy.ScopeTotals(state.scope, Economy.DayStart(now))
         local rInc, rExp, by = Economy.ScopeTotals(state.scope, since)
         local bestK, bestV, worstK, worstV
         for k, val in pairs(by) do
@@ -311,15 +313,20 @@ local function BuildOverview(parent)
                 if val < 0 and (not worstV or val < worstV) then worstK, worstV = k, val end
             end
         end
-        local sNet, sHour
-        if state.scope == "all" or state.scope == ns.Gear.CharKey() then sNet, sHour = Economy.Session() end
+        local sNet, sHour, sMoved
+        if state.scope == "all" or state.scope == ns.Gear.CharKey() then
+            local _
+            sNet, sHour, _, sMoved = Economy.Session()
+        end
+        local sessionTip = { "This session", "Gold gained or spent since you logged in, without gold moved between your own characters." }
+        if sMoved and sMoved ~= 0 then sessionTip[#sessionTip + 1] = "Moved to / from your characters: " .. FormatMoney(sMoved, true) end
         local charTip = { "Gold by character" }
         for _, row in ipairs(chars) do charTip[#charTip + 1] = row[1] .. "  " .. FormatMoney(row[2]) end
         local data = {
             { "Gold now", FormatMoney(money), state.scope == "all" and (#chars .. " characters") or state.scope, charTip },
             { "Today", FormatMoney(tInc - tExp, true), "in " .. FormatMoney(tInc) .. "  out " .. FormatMoney(tExp) },
             { rangeLabel .. " net", FormatMoney(rInc - rExp, true), "in " .. FormatMoney(rInc) .. "  out " .. FormatMoney(rExp) },
-            { "This session", sNet and FormatMoney(sNet, true) or "-", sHour and (FormatMoney(sHour, true) .. " per hour") or "per hour after 5 min" },
+            { "This session", sNet and FormatMoney(sNet, true) or "-", sHour and (FormatMoney(sHour, true) .. " per hour") or "per hour after 5 min", sessionTip },
             { "Best income", bestK and KIND_LABEL[bestK] or "-", bestV and FormatMoney(bestV, true) or "" },
             { "Biggest cost", worstK and KIND_LABEL[worstK] or "-", worstV and FormatMoney(worstV, true) or "" },
         }
@@ -447,15 +454,26 @@ end
 ---------------------------------------------------------------------------
 local STATUS = {
     listed = { "listed", HEX.compare }, sold = { "sold", HEX.good }, expired = { "expired", HEX.bad },
-    cancelled = { "cancelled", HEX.muted },
+    cancelled = { "cancelled", HEX.muted }, unknown = { "ended?", HEX.gold },
 }
+
+-- A listing's status as shown: "unknown" once its time is up and no letter
+-- closed it (Economy.ListingOver): never "listed" when it cannot still be.
+local function StatusOf(a)
+    if Economy.ListingOver(a) then return "unknown" end
+    return a.status
+end
 
 local function AuctionRow(item)
     local a = item.a
-    local st = STATUS[a.status] or { a.status, "" }
+    local status = StatusOf(a)
+    local st = STATUS[status] or { status, "" }
     local result
-    if a.status == "sold" then result = FormatMoney(a.received or 0) .. "  " .. HEX.muted .. "profit|r " .. FormatMoney(a.profit or 0, true)
+    -- A sale letter pays your deposit back too: the sale is what it kept after the cut.
+    if a.status == "sold" then result = a.received and (FormatMoney(a.received - (a.deposit or 0)) .. HEX.muted .. " after the cut|r")
+        or (HEX.muted .. "? (payment unknown)|r")
     elseif a.status == "expired" or a.status == "cancelled" then result = HEX.muted .. "deposit lost|r " .. FormatMoney(-(a.deposit or 0), true)
+    elseif status == "unknown" then result = HEX.muted .. "outcome unknown (no letter)|r"
     else result = HEX.muted .. "deposit|r " .. FormatMoney(a.deposit or 0) end
     return {
         label = date("%b %d %H:%M", a.t),
@@ -468,8 +486,17 @@ local function AuctionRow(item)
                 "Posted " .. date("%b %d %H:%M", a.t) .. "  ·  " .. tostring(a.duration or "?") .. "  ·  " .. tostring(item.char),
                 "Buyout " .. (a.buyout and FormatMoney(a.buyout) or "-") .. "   bid " .. (a.bid and FormatMoney(a.bid) or "-"),
                 "Deposit " .. FormatMoney(a.deposit or 0),
-                "Status: " .. st[1] .. (a.ended and ("  (" .. date("%b %d %H:%M", a.ended) .. ")") or "") }
-            if a.received then lines[#lines + 1] = "Received " .. FormatMoney(a.received) .. "  ·  profit " .. FormatMoney(a.profit or 0, true) end
+                -- When it sold or ended (from its letter); else when the letter was taken, said so.
+                "Status: " .. st[1] .. (a.closedAt and ("  (" .. date("%b %d %H:%M", a.closedAt) .. ")")
+                    or (a.ended and ("  (letter taken " .. date("%b %d %H:%M", a.ended) .. ")")) or "") }
+            if status == "unknown" then
+                lines[#lines + 1] = "Its time ran out and no auction letter closed it: sold, expired or cancelled is unknown."
+            end
+            if a.received then
+                lines[#lines + 1] = "Sold for " .. FormatMoney(a.received - (a.deposit or 0)) .. " after the cut"
+                lines[#lines + 1] = "Letter paid " .. FormatMoney(a.received) .. (a.deposit and a.deposit > 0
+                    and ("  (with your deposit " .. FormatMoney(a.deposit) .. " back)") or "")
+            end
             ns.Tooltip.Text(owner, lines)
         end,
     }
@@ -503,34 +530,42 @@ local function BuildAuctions(parent)
     function v:Refresh()
         for _, b in ipairs(self.filters) do Paint(b, b.key == state.auctionFilter) end
         local data = ns.Data.List(self.list, {
-            name = "economy:auctions", sources = { "economy" }, key = ViewKey(state.auctionFilter),
+            -- maxAge: a listing's time running out changes what it shows, with no new data.
+            name = "economy:auctions", sources = { "economy" }, key = ViewKey(state.auctionFilter), maxAge = 300,
             row = AuctionRow, empty = "No auctions here yet: post something at the auction house.",
             build = function(add)
                 local since = RangeStart()
                 local all = {}
                 for key, c in pairs(Economy.Scope(state.scope)) do
                     for _, a in ipairs(c.auctions or {}) do
-                        if not since or a.t >= since or a.status == "listed" then all[#all + 1] = { a = a, char = key } end
+                        -- In the range by when it ended (the money's day), not when it
+                        -- was posted; one still up is always shown, one whose time ran
+                        -- out with no letter by when it would have ended.
+                        local status = StatusOf(a)
+                        local when = a.closedAt or a.ended or a.t
+                        if status == "unknown" then
+                            local hours = type(a.duration) == "string" and tonumber(a.duration:match("^(%d+)")) or 48
+                            when = a.t + hours * 3600
+                        end
+                        if not since or status == "listed" or when >= since then all[#all + 1] = { a = a, char = key } end
                     end
                 end
                 table.sort(all, function(x1, x2) return x1.a.t > x2.a.t end)
-                local d = { listed = 0, sold = 0, expired = 0, income = 0, deposits = 0, profit = 0 }
+                local listings = {}
                 for _, item in ipairs(all) do
-                    local a = item.a
-                    if a.status == "listed" then d.listed = d.listed + 1 end
-                    if a.status == "sold" then d.sold = d.sold + 1 d.income = d.income + (a.received or 0) d.profit = d.profit + (a.profit or 0) end
-                    if a.status == "expired" then d.expired = d.expired + 1 end
-                    d.deposits = d.deposits + (a.deposit or 0)
-                    if state.auctionFilter == "all" or state.auctionFilter == a.status then
+                    listings[#listings + 1] = item.a
+                    if state.auctionFilter == "all" or state.auctionFilter == StatusOf(item.a) then
                         add(item)
                     end
                 end
-                return d
+                return Economy.AuctionTotals(listings)
             end,
         })
         self.card.title:SetText("Auctions  " .. HEX.muted .. ScopeLabel() .. "  ·  " .. RangeLabel() .. "|r")
-        self.card.sub:SetText(string.format("%d listed  ·  %d sold for %s (profit %s)  ·  %d expired  ·  deposits %s",
-            data.listed, data.sold, FormatMoney(data.income), FormatMoney(data.profit, true), data.expired, FormatMoney(data.deposits)))
+        local unpriced = (data.unpriced or 0) > 0 and (" + " .. data.unpriced .. " with no payment known") or ""
+        local unknown = (data.unknown or 0) > 0 and ("  ·  " .. data.unknown .. " ended, outcome unknown") or ""
+        self.card.sub:SetText(string.format("%d listed  ·  %d sold for %s after the cut%s  ·  %d expired  ·  %d cancelled%s  ·  deposits lost %s  ·  profit %s",
+            data.listed, data.sold, FormatMoney(data.income), unpriced, data.expired, data.cancelled, unknown, FormatMoney(data.lost), FormatMoney(data.profit, true)))
     end
     return v
 end
@@ -676,9 +711,7 @@ UI.views = views
 ns.Data.Window(UI, { "economy" }, {
     prebuild = function() if not frame then Build() end end,
     warm = function()
-        local now = time()
-        local t = date("*t", now)
-        Economy.ScopeTotals(state.scope, now - (t.hour * 3600 + t.min * 60 + t.sec))
+        Economy.ScopeTotals(state.scope, Economy.DayStart())
         Economy.ScopeTotals(state.scope, RangeStart())
         Economy.ScopeDays(state.scope)
     end,

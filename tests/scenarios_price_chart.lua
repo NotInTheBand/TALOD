@@ -12,11 +12,12 @@ scenarios.price_chart = function()
     MOCK.Tick(3.2) MOCK.Tick(0.3)
     local Pr, Chart = ns.Prices, ns.PriceChart
     local now = time()
-    local today = math.floor(now / 86400)
+    -- Days are the player's calendar days (Prices.DayKey), whatever the time zone.
+    local today = Pr.DayKey(now)
 
     -- 40 days, two looks a day (6 h apart): 80 looks, only 30 kept raw.
     for d = 40, 1, -1 do
-        local noon = (today - d) * 86400 + 43200
+        local noon = Pr.DayNoon(today - d)
         Pr.Record(2589, 100 + d, 200 - d, noon - 3 * 3600, 10, "Linen Cloth")
         Pr.Record(2589, 90 + d, 210 - d, noon + 3 * 3600, 11)
     end
@@ -33,7 +34,7 @@ scenarios.price_chart = function()
     -- Your sales: 20 sold yesterday.
     local key = ns.Gear.CharKey()
     TALODDB.economy[key] = TALODDB.economy[key] or { log = {}, days = {} }
-    TALODDB.economy[key].auctions = { { id = 1, t = now - 2 * 86400, ended = (today - 1) * 86400 + 40000,
+    TALODDB.economy[key].auctions = { { id = 1, t = now - 2 * 86400, ended = Pr.DayNoon(today - 1) - 3200,
         name = MOCK.ItemLink(2589, "Linen Cloth"), count = 20, buyout = 2000, status = "sold" } }
     ns.Market.InvalidateSales()
     local pts = Chart.Data(2589, "days")

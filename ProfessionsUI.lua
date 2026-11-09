@@ -24,6 +24,14 @@ end
 
 local function Colored(color, text) return (COLOR_HEX[color] or "") .. text .. "|r" end
 
+-- A cost column: the priced part, "+?" when some of it has no price, "?"
+-- when none has (narrow columns; the tooltip says how many).
+local function Amount(copper, unknown)
+    if not unknown or unknown <= 0 then return Money(copper or 0) end
+    if (copper or 0) > 0 then return Money(copper) .. HEX.bad .. "+?|r" end
+    return HEX.dim .. "?|r"
+end
+
 -- Professions in the cycle: the character's own first, then the rest.
 local function ProfOrder(charKey)
     local c = charKey and db().skills and db().skills[charKey]
@@ -93,11 +101,15 @@ MaterialRows = function(out, lines, indent)
         if line.buy then
             row.text = HEX.gold .. "Get " .. line.buy .. "|r x " .. ItemText(line.id) .. HEX.muted .. "  ·  " .. Prof.HowToGet(line.id)
                 .. (gotText and ("  (+" .. gotText .. ")") or "") .. "|r"
-            row.cols = { Money(line.cost or 0) }
+            row.cols = { Amount(line.cost, line.short) }
             row.tooltip = function(owner)
-                ns.Tooltip.Text(owner, { ItemText(line.id), string.format("This step needs %d.", line.n),
+                local tip = { ItemText(line.id), string.format("This step needs %d.", line.n),
                     gotText and ("Already: " .. gotText) or "You have none yet.",
-                    string.format("Get %d more: %s", line.buy, Prof.HowToGet(line.id)) })
+                    string.format("Get %d more: %s", line.buy, Prof.HowToGet(line.id)) }
+                if line.short then
+                    tip[#tip + 1] = HEX.bad .. string.format("No price for %d of them: more than the Auction House listed when you looked.", line.short) .. "|r"
+                end
+                ns.Tooltip.Text(owner, tip)
             end
         elseif line.make then
             row.craft = { recipe = line.recipe, count = line.make }
@@ -302,9 +314,23 @@ local function BuildView(parent)
             or (plan.source == "set" and (HEX.gold .. "  (start set by hand)|r")
             or (HEX.bad .. "  (your rank: not read yet, or not learned)|r"))
         self.left.title:SetText(string.format("Plan  %s%s|r  %d -> %d%s", HEX.accent, prof, plan.from, plan.to, startText))
+        local partly = (plan.unpriced or 0) > 0 or (plan.unknownLearn or 0) > 0 or (plan.unknownTraining or 0) > 0
+        -- The net with its sign: products worth more than the plan costs are a
+        -- gain, never "0c". Unpriced parts make the cost a lower bound, so a
+        -- gain is then at most that much.
+        local netText = ""
+        if plan.resale > 0 then
+            if plan.net >= 0 then
+                netText = string.format("  ·  sell the products: about -%s = %s%s%s|r", Money(plan.resale), HEX.good,
+                    partly and "at least " or "", Money(plan.net))
+            else
+                netText = string.format("  ·  sell the products: about -%s = %s%s+%s gain|r", Money(plan.resale), HEX.good,
+                    partly and "up to " or "", Money(-plan.net))
+            end
+        end
         self.left.sub:SetText(string.format("~%d crafts  ·  est. %s%s|r  (materials %s, recipes %s, training %s)%s",
-            plan.crafts, HEX.gold, Money(plan.total), Money(plan.materials), Money(plan.learn), Money(plan.training),
-            plan.resale > 0 and string.format("  ·  sell the products: -%s = %s%s|r", Money(plan.resale), HEX.good, Money(math.max(0, plan.net))) or ""))
+            plan.crafts, HEX.gold, Prof.TotalText(plan), Prof.MaterialsText(plan), Prof.LearnText(plan), Prof.TrainingText(plan),
+            netText))
 
         -- Shopping list.
         local rows = {}
@@ -322,11 +348,25 @@ local function BuildView(parent)
                 icon = Prof.ItemIcon(e.id),
                 text = ItemText(e.id) .. HEX.muted .. "  " .. Prof.HowToGet(e.id) .. "|r" .. supplyText,
                 cols = { (e.buy > 0 and (HEX.white .. e.buy .. "|r") or (HEX.good .. "0|r")) .. HEX.muted .. " / " .. e.need .. "|r",
-                    e.buy > 0 and (trust .. Money(e.buy * e.unit) .. "|r") or (HEX.good .. "have|r") },
+                    e.buy > 0 and (trust .. Amount(e.cost, e.short) .. "|r") or (HEX.good .. "have|r") },
                 tooltip = function(owner)
                     local lines = { ItemText(e.id),
                         string.format("Need %d  ·  have %d  ·  buy %d", e.need, e.have, e.buy),
-                        string.format("%s each  ·  %s", Money(e.unit), srcText) }
+                        e.unit and string.format("%s each at the lowest  ·  %s", Money(e.unit), srcText) or srcText }
+                    if e.buy > 0 then
+                        local priced = e.buy - (e.short or 0)
+                        if e.buySrc == "ladder" and priced > 0 then
+                            lines[#lines + 1] = string.format("%d along the listings you saw: %s (%s each on average)", priced,
+                                Money(e.cost), Money(e.cost / priced))
+                        elseif e.estimated and priced > 0 then
+                            lines[#lines + 1] = HEX.muted .. string.format("%s for %d at the lowest price: every listing not seen, so an estimate.",
+                                Money(e.cost), priced) .. "|r"
+                        end
+                        if (e.short or 0) > 0 then
+                            lines[#lines + 1] = HEX.bad .. string.format("No price for %d: %s", e.short, e.unit
+                                and "more than the Auction House listed when you looked." or "not seen anywhere yet.") .. "|r"
+                        end
+                    end
                     if listed then
                         lines[#lines + 1] = string.format("At your last look: %s%d units|r%s", short and HEX.bad or "", listed,
                             auctions and (" in " .. auctions .. " auctions") or "")
@@ -371,12 +411,21 @@ local function BuildView(parent)
             for _, p in ipairs(plan.products) do
                 rows[#rows + 1] = { icon = Prof.ItemIcon(p.id), text = ItemText(p.id) .. HEX.muted .. "  x" .. p.n .. "|r",
                     cols = { p.src and (HEX.muted .. (p.src == "ah" and "AH" or "vendor") .. "|r") or "",
-                        p.unit > 0 and (HEX.good .. Money(p.unit * p.n) .. "|r") or (HEX.dim .. "-|r") },
+                        (p.worth or 0) > 0 and (HEX.good .. Money(p.worth) .. "|r") or (HEX.dim .. "-|r") },
                     tooltip = function(owner)
                         local lines = { ItemText(p.id) .. "  x" .. p.n }
                         if p.src == "ah" then
-                            lines[#lines + 1] = string.format("%s each on the Auction House after the cut (seen %s)", Money(p.unit),
-                                ns.Prices.Age(p.seen))
+                            local _, how, info = ns.Market.SaleValue(p.id)
+                            lines[#lines + 1] = string.format("%s each: %s (seen %s)", Money(p.unit),
+                                ns.Market.SaleValueText(how, info), ns.Prices.Age(p.seen))
+                            if p.supplyUnknown then
+                                lines[#lines + 1] = HEX.gold .. string.format("How many are listed is unknown (no look of yours counted them): "
+                                    .. "counted at the vendor price (%s each), so worth at least this.", Money(p.vendor or 0)) .. "|r"
+                            elseif p.atAH and p.atAH < p.n then
+                                lines[#lines + 1] = HEX.gold .. string.format("Counted at that price: %d, as many as were listed when you looked. "
+                                    .. "The other %d at the vendor price (%s each): the market may not take more.",
+                                    p.atAH, p.n - p.atAH, Money(p.vendor or 0)) .. "|r"
+                            end
                         elseif p.src == "vendor" then
                             lines[#lines + 1] = Money(p.unit) .. " each from a vendor (not seen on the Auction House for more)."
                         else
@@ -387,7 +436,13 @@ local function BuildView(parent)
             end
         end
         if plan.unknownPrices > 0 then
-            rows[#rows + 1] = { text = HEX.muted .. "Items without a price are counted at " .. Money(2000) .. " each.|r" }
+            rows[#rows + 1] = { text = HEX.bad .. string.format("%d %s without a price for all you need: left out of the cost "
+                .. "(\"+?\"). Search %s on the Auction House.", plan.unknownPrices, plan.unknownPrices == 1 and "item" or "items",
+                plan.unknownPrices == 1 and "it" or "them") .. "|r" }
+        end
+        if (plan.unknownLearn or 0) > 0 then
+            rows[#rows + 1] = { text = HEX.gold .. string.format("%d %s without a price (dropped, quest, or no fee known): not in the cost.",
+                plan.unknownLearn, plan.unknownLearn == 1 and "recipe" or "recipes") .. "|r" }
         end
         self.shop:SetItems(rows)
 
@@ -410,14 +465,14 @@ local function BuildView(parent)
                 if step.known then learn = HEX.good .. "known|r"
                 elseif step.pattern then
                     learn = HEX.gold .. (r.patternPrice and ("pattern, vendor " .. Money(r.patternPrice)) or "pattern (drop / quest)") .. "|r"
-                else learn = "trainer" .. (r.guess and "?" or "") .. (step.learn and (" " .. Money(step.learn)) or "") end
+                else learn = "trainer" .. (r.guess and "?" or "") .. (step.learn and (" " .. Money(step.learn)) or (step.learnUnknown and " ?" or "")) end
                 -- Header: the stage. Then the to-do lines in order, ending with the craft.
                 out[#out + 1] = { recipe = r, craft = { recipe = r, count = step.crafts }, label = step.from .. "-" .. step.to,
                     icon = r.creates and Prof.ItemIcon(r.creates) or nil,
                     text = Colored(step.color, r.name)
                         .. (step.endColor ~= step.color and (HEX.muted .. " -> |r" .. Colored(step.endColor, step.endColor)) or "")
                         .. HEX.muted .. "  ·  |r" .. learn,
-                    cols = { Money(step.cost or 0) }, tint = { 1, 1, 1, 0.05 }, accent = COLORS.accent,
+                    cols = { Amount(step.cost, step.short) }, tint = { 1, 1, 1, 0.05 }, accent = COLORS.accent,
                     tooltip = function(owner) RecipeTooltip(owner, step) end }
                 MaterialRows(out, step.mats or {}, 14)
                 out[#out + 1] = { indent = 14, craft = { recipe = r, count = step.crafts }, label = "",
@@ -479,7 +534,10 @@ local function CraftLines(e, r)
     for _, rg in ipairs(r.reagents or {}) do
         lines[#lines + 1] = string.format("  %d x %s", rg[2] * e.n, ItemText(rg[1]))
     end
-    lines[#lines + 1] = string.format("Est. value of the materials: %s (%s each)", Money(Prof.ReagentCost(r) * e.n), Money(Prof.ReagentCost(r)))
+    local each, unpriced = Prof.ReagentCost(r)
+    lines[#lines + 1] = unpriced > 0
+        and ("Est. value of the materials: " .. Prof.MoneyKnown(each * e.n, unpriced, unpriced == 1 and "material without a price" or "materials without a price"))
+        or string.format("Est. value of the materials: %s (%s each)", Money(each * e.n), Money(each))
     if e.zone or e.level then
         lines[#lines + 1] = HEX.muted .. (e.zone or "?") .. (e.level and ("  ·  level " .. e.level) or "") .. "|r"
     end
@@ -495,7 +553,10 @@ local function CraftTotalRow(t)
         accent = selected and COLORS.accent or nil,
         tooltip = function(owner)
             ns.Tooltip.Text(owner, { t.r.name, string.format("Made %d times  ·  +%d skill", t.n, t.gain),
-                "Est. value of the materials: " .. Money(Prof.ReagentCost(t.r) * t.n), HEX.muted .. "Click: only this recipe in the log.|r" })
+                "Est. value of the materials: " .. (function()
+                    local each, unpriced = Prof.ReagentCost(t.r)
+                    return Prof.MoneyKnown(each * t.n, unpriced, unpriced == 1 and "material without a price" or "materials without a price")
+                end)(), HEX.muted .. "Click: only this recipe in the log.|r" })
         end,
     }
 end
@@ -507,7 +568,10 @@ local function CraftLogRow(e)
         text = HEX.white .. e.n .. "|r x " .. HEX.gold .. r.name .. "|r" .. HEX.muted .. "  ·  " .. r.prof
             .. (e.from and (" " .. e.from .. (Gain(e) > 0 and (" -> " .. e.to) or "")) or "") .. "|r"
             .. (Gain(e) > 0 and (HEX.good .. "  +" .. Gain(e) .. "|r") or ""),
-        cols = { HEX.muted .. Money(Prof.ReagentCost(r) * e.n) .. "|r" }, sort = { label = e.t },
+        cols = { HEX.muted .. (function()
+            local each, unpriced = Prof.ReagentCost(r)
+            return Amount(each * e.n, unpriced)
+        end)() .. "|r" }, sort = { label = e.t },
         tooltip = function(owner) ns.Tooltip.Text(owner, CraftLines(e, r)) end,
     }
 end
@@ -563,11 +627,11 @@ local function BuildLogView(parent)
         -- (or the range: a minute at most, "last 7 days" moves).
         local key = { ns.GearUI.CharKey(), logState.range, logState.recipe }
         local totals = ns.Data.List(self.totals, {
-            name = "crafts:totals", sources = { "crafts" }, key = key, maxAge = 60, row = CraftTotalRow,
+            name = "crafts:totals", sources = { "crafts", "prices" }, key = key, maxAge = 60, row = CraftTotalRow,
             empty = "Nothing crafted in this range yet.",
             build = function(add, raw)
                 local byProf, profOrder = {}, {}
-                local d = { crafts = 0, gain = 0, cost = 0 }
+                local d = { crafts = 0, gain = 0, cost = 0, unpriced = 0 }
                 for _, e in ipairs(crafts) do
                     local r = Prof.DATA.recipes[e.id]
                     if r and (e.t2 or e.t) >= since then
@@ -585,7 +649,9 @@ local function BuildLogView(parent)
                         end
                         t.n, t.gain, t.last = t.n + e.n, t.gain + Gain(e), math.max(t.last, e.t2 or e.t)
                         p.n, p.gain = p.n + e.n, p.gain + Gain(e)
-                        d.crafts, d.gain, d.cost = d.crafts + e.n, d.gain + Gain(e), d.cost + Prof.ReagentCost(r) * e.n
+                        local each, unpriced = Prof.ReagentCost(r)
+                        d.crafts, d.gain, d.cost = d.crafts + e.n, d.gain + Gain(e), d.cost + each * e.n
+                        if unpriced > 0 then d.unpriced = d.unpriced + e.n end
                     end
                 end
                 table.sort(profOrder)
@@ -598,11 +664,13 @@ local function BuildLogView(parent)
                 return d
             end,
         })
-        self.left.sub:SetText(string.format("%d crafts  ·  +%d skill  ·  materials ~%s", totals.crafts, totals.gain, Money(totals.cost)))
+        self.left.sub:SetText(string.format("%d crafts  ·  +%d skill  ·  materials ~%s", totals.crafts, totals.gain,
+            Prof.MoneyKnown(totals.cost, totals.unpriced or 0, (totals.unpriced or 0) == 1 and "craft with an unpriced material"
+                or "crafts with an unpriced material")))
 
         -- The log, newest first.
         ns.Data.List(self.log, {
-            name = "crafts:log", sources = { "crafts" }, key = key, maxAge = 60, row = CraftLogRow,
+            name = "crafts:log", sources = { "crafts", "prices" }, key = key, maxAge = 60, row = CraftLogRow,
             empty = "Crafts appear here as you make them.",
             build = function(add)
                 for i = #crafts, 1, -1 do

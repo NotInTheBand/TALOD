@@ -36,7 +36,9 @@ local function Status(node)
         parts[#parts + 1] = HEX.accent .. "make " .. node.crafts .. "x|r"
     elseif node.buy then
         parts[#parts + 1] = HEX.bad .. "buy " .. node.buy .. "|r" .. HEX.muted
-            .. (node.unit and ("  " .. Money(math.floor(node.unit + 0.5)) .. " each") or "  no price yet") .. "|r"
+            .. (node.unit and ("  " .. Money(math.floor(node.unit + 0.5)) .. ((node.src == "ladder" and node.buy > 1) and " each on average" or " each"))
+                or "  no price yet") .. "|r"
+            .. ((node.short and node.unit) and (HEX.bad .. "  ·  no price for " .. node.short .. "|r") or "")
     end
     return table.concat(parts, HEX.muted .. "  ·  |r")
 end
@@ -52,7 +54,9 @@ local function NodeRows(node, depth, out)
     end
     out[#out + 1] = {
         label = node.need .. " x", text = text, icon = ns.Professions.ItemIcon(node.id), indent = depth * 14,
-        cols = { node.buy and Money(node.cost and math.floor(node.cost + 0.5)) or (HEX.dim .. "-|r") },
+        cols = { node.buy and (node.cost and Money(math.floor(node.cost + 0.5))
+                or (node.unit and (Money(math.floor(node.unit * (node.buy - (node.short or 0)) + 0.5)) .. HEX.bad .. "+?|r") or Money(nil)))
+            or (HEX.dim .. "-|r") },
         id = node.id,
         tooltip = function(o)
             local lines = { Name(node.id), string.format("Need %d: %d in bags, %d in the mailbox from the Auction House, %d in other letters.",
@@ -61,6 +65,14 @@ local function NodeRows(node, depth, out)
                 lines[#lines + 1] = "Cheapest: make it (" .. Money(math.floor(node.unit + 0.5)) .. " each in materials)."
             elseif node.buy then
                 lines[#lines + 1] = "Buy: " .. ns.Professions.PriceText(node.id) .. "."
+                if node.src == "ladder" and node.cost then
+                    lines[#lines + 1] = string.format("%d along the listings you saw: %s.", node.buy, Money(math.floor(node.cost + 0.5)))
+                elseif node.estimated then
+                    lines[#lines + 1] = HEX.muted .. "Every listing not seen: the lowest price for each, an estimate.|r"
+                end
+                if node.short then
+                    lines[#lines + 1] = HEX.bad .. string.format("No price for %d: more than the Auction House listed when you looked.", node.short) .. "|r"
+                end
             end
             lines[#lines + 1] = HEX.muted .. "Click: its prices.|r"
             ns.Tooltip.Text(o, lines)
@@ -207,7 +219,7 @@ function UI.Refresh()
     local parts = { "Still to buy: " .. HEX.white .. Money(math.floor(plan.buyCost + 0.5)) .. "|r"
         .. (plan.unpriced > 0 and (HEX.bad .. " + " .. plan.unpriced .. " without a price|r") or "") }
     if plan.value then
-        parts[#parts + 1] = "sells for " .. Money(plan.value) .. " after the cut"
+        parts[#parts + 1] = "sells for " .. (plan.valueAtLeast and "at least " or "") .. Money(plan.value) .. " after the cut"
     end
     if plan.left <= 0 then parts = { HEX.good .. "Done: " .. plan.count .. " made.|r" } end
     frame.summary:SetText(table.concat(parts, HEX.muted .. "  ·  |r"))

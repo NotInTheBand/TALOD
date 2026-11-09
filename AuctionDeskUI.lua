@@ -27,6 +27,12 @@ local function Profit(c)
     return (c >= 0 and HEX.good or HEX.bad) .. Desk.Signed(c) .. "|r"
 end
 
+-- Listings' worth with those that have no buyout said apart: "at least X + 2 without a buyout".
+local function ListedWorth(value, unpriced)
+    if (unpriced or 0) == 0 then return Money(value) end
+    return ((value or 0) > 0 and "at least " or "") .. ns.Professions.MoneyKnown(value, unpriced, "without a buyout")
+end
+
 local function Pct(x, goodHigh)
     if not x then return HEX.dim .. "-|r" end
     local v = math.floor(x * 100 + (x >= 0 and 0.5 or -0.5))
@@ -56,6 +62,7 @@ end
 
 local STANDING = {
     lowest = HEX.good .. "lowest|r", undercut = HEX.bad .. "undercut|r", unknown = HEX.muted .. "?|r",
+    tied = HEX.gold .. "tied|r",
 }
 
 local function StandingText(e)
@@ -64,7 +71,31 @@ local function StandingText(e)
     if st.state == "undercut" then
         return HEX.bad .. "undercut|r" .. HEX.muted .. (st.ahead and (" · " .. st.ahead .. " under") or "") .. "|r"
     end
-    return STANDING[st.state]
+    -- Undercut at an old look: those auctions may be gone. Said with its age, no repost.
+    if st.oldUndercut and st.age then return HEX.muted .. "undercut " .. Prices.Age(time() - st.age) .. "? look again|r" end
+    return STANDING[st.state] or STANDING.unknown
+end
+
+-- The repost price as the price to type: the whole auction, floored so it
+-- stays under the other seller (a per-unit 19.999s shown as "20s" x 20 is
+-- 4g, over their 3g 99s 99c).
+-- Every coin shown (Money drops the copper from 1g): it is the price to type.
+local function RepostText(unit, count)
+    count = count or 1
+    local total = math.max(0, math.floor(unit * count + 1e-6))
+    local g, s, c = math.floor(total / 10000), math.floor(total / 100) % 100, total % 100
+    local parts = {}
+    if g > 0 then parts[#parts + 1] = g .. "g" end
+    if s > 0 then parts[#parts + 1] = s .. "s" end
+    if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
+    return table.concat(parts, " ") .. (count > 1 and (" for " .. count) or " each")
+end
+UI.RepostText = RepostText
+
+-- A reset step's relist price: per stack of the wall's size when it was one.
+local function RelistText(step)
+    if step.relistK and step.relistK > 1 then return RepostText(step.relist, step.relistK) end
+    return Money(step.relist) .. " each"
 end
 
 local function ListingTooltip(e)
@@ -75,14 +106,17 @@ local function ListingTooltip(e)
         if st.state == "undercut" then
             lines[#lines + 1] = HEX.bad .. (st.ahead and (st.ahead .. " units listed under yours") or "Listed under yours") .. "|r"
                 .. ", the lowest at " .. Money(st.lowest) .. "."
-            if st.repost then lines[#lines + 1] = "To be the lowest again: cancel and repost at " .. Money(st.repost) .. " each." end
+            if st.repost then lines[#lines + 1] = "To be the lowest again: cancel and repost at " .. RepostText(st.repost, e.count) .. "." end
         elseif st.state == "lowest" then
             lines[#lines + 1] = HEX.good .. "Nobody else is cheaper|r" .. (st.lowest and ("; the next seller asks " .. Money(st.lowest) .. ".") or ".")
+        elseif st.state == "tied" then
+            lines[#lines + 1] = HEX.gold .. "Another seller asks the same price|r; nobody is cheaper. Buyers may take theirs first."
         else
             lines[#lines + 1] = HEX.muted .. "No look at this item that tells: search it on the Auction House.|r"
         end
         if st.age then lines[#lines + 1] = HEX.muted .. "Market look " .. Prices.Age(time() - st.age) .. (st.partial and ", partial" or "") .. ".|r" end
-        if e.left then lines[#lines + 1] = "Time left: " .. (type(e.left) == "number" and (math.floor(e.left / 3600) .. " h " .. math.floor(e.left % 3600 / 60) .. " min") or e.left) end
+        if e.left then lines[#lines + 1] = "Time left: " .. (type(e.left) == "number" and (math.floor(e.left / 3600) .. " h " .. math.floor(e.left % 3600 / 60) .. " min")
+            or (e.left .. (e.seenAt and (" when read, " .. Prices.Age(e.seenAt)) or ""))) end
         if e.endsAt then lines[#lines + 1] = (e.overdue and "Should have ended " or "Ends about ") .. date("%b %d %H:%M", e.endsAt) .. (e.overdue and ": check your mail." or ".") end
         if e.deposit then lines[#lines + 1] = "Deposit paid: " .. Money(e.deposit) .. " (lost if it does not sell)."
         elseif e.depositGuess then lines[#lines + 1] = "Deposit about " .. Money(e.depositGuess) .. HEX.muted .. " (not in your posting log: from your deposit rate)|r" end
@@ -96,7 +130,7 @@ local function ListingTooltip(e)
 end
 
 local function ResetText(step)
-    return string.format("buy %d up to %s, relist at %s", step.units, Money(step.upTo), Money(step.relist))
+    return string.format("buy %d up to %s, relist at %s", step.units, Money(step.upTo), RelistText(step))
 end
 
 -- The list's plan is slim: the tooltip reads the item's full plan when shown.
@@ -107,12 +141,17 @@ local function PlanTooltip(slim)
         local L = plan.ladder
         lines[#lines + 1] = string.format("%d units in %d auctions, look %s%s", L.units, L.auctions or 0, Prices.Age(L.t),
             plan.atLeast and " (partial: costs are at least)" or "")
-        if plan.best then
-            local b = plan.best
+        local b = plan.best or plan.bestIfAll
+        if b then
             lines[#lines + 1] = string.format("Reset: buy %d units up to %s for %s.", b.units, Money(b.upTo), Money(b.cost))
-            lines[#lines + 1] = string.format("Relist all at %s: %s after the %d%% cut%s, deposit %s.", Money(b.relist), Money(b.revenue),
-                math.floor(Market.CUT * 100), plan.rate and (" and your " .. math.floor(plan.rate * 100 + 0.5) .. "% sell rate") or "", Money(b.deposit))
-            lines[#lines + 1] = "Profit if it all sells: " .. Profit(b.profit) .. (b.roi and ("  (" .. math.floor(b.roi * 100 + 0.5) .. "% on the money)") or "")
+            lines[#lines + 1] = string.format("Relist at %s, valued at %s each (never above the usual price), deposit %s.",
+                RelistText(b), b.value and Money(b.value) or "?", b.deposit and Money(b.deposit) or "?")
+            if b.profit then
+                lines[#lines + 1] = string.format("Expected with your %d%% sell rate: %s", math.floor(plan.rate * 100 + 0.5), Profit(b.profit))
+                    .. (b.roi and ("  (" .. math.floor(b.roi * 100 + 0.5) .. "% on the money and deposits)") or "")
+            end
+            lines[#lines + 1] = "If it all sells: " .. Profit(b.ifAll)
+            if not b.profit then lines[#lines + 1] = HEX.muted .. Desk.MissingText(plan, b) .. ": not an expected result.|r" end
             if b.overUsual and b.overUsual > 0.25 then
                 lines[#lines + 1] = HEX.gold .. "The relist is " .. math.floor(b.overUsual * 100 + 0.5) .. "% over the usual price: it may sit.|r"
             end
@@ -168,9 +207,11 @@ local function BuildOverview(parent)
         self.scan:SetLabel(wait > 0 and string.format("Full scan in %d:%02d", math.floor(wait / 60), wait % 60) or "Full scan")
         local sum = Desk.Summary()
         local rows = {}
-        rows[#rows + 1] = { header = true, text = "Your listings" .. HEX.muted .. "  (" .. (sum.listings.source == "game"
-            and ("as the Auction House showed them " .. Prices.Age(sum.listings.t)) or "from your posting log") .. ")|r" }
-        rows[#rows + 1] = { go = "listings", text = string.format("%d active, worth %s after the cut", sum.listed, Money(sum.value)),
+        rows[#rows + 1] = { header = true, text = "Your listings" .. HEX.muted .. "  (" .. (sum.listings.source ~= "log"
+            and ("as the Auction House showed them " .. Prices.Age(sum.listings.t)
+                .. (sum.listings.source == "game + log" and ", and your posts since" or "")) or "from your posting log") .. ")|r" }
+        rows[#rows + 1] = { go = "listings", text = string.format("%d active, worth %s after the cut", sum.listed,
+                ListedWorth(sum.value, sum.unpriced)),
             cols = { sum.undercut > 0 and (HEX.bad .. sum.undercut .. " undercut|r") or (HEX.good .. "none undercut|r"),
                 sum.overdue > 0 and (HEX.muted .. sum.overdue .. " should have ended|r") or "", HEX.muted .. "details >|r" } }
         local shown = 0
@@ -179,7 +220,7 @@ local function BuildOverview(parent)
             if not e.overdue and e.standing.state == "undercut" and e.id then
                 shown = shown + 1
                 local r = ItemRow(e.id, Market.ItemText(e.id) .. HEX.muted .. "  x" .. e.count .. "|r", { StandingText(e), Money(e.unit),
-                    e.standing.repost and (HEX.muted .. "repost|r " .. Money(e.standing.repost)) or "" }, ListingTooltip(e))
+                    e.standing.repost and (HEX.muted .. "repost|r " .. RepostText(e.standing.repost, e.count)) or "" }, ListingTooltip(e))
                 r.indent = 12
                 rows[#rows + 1] = r
             end
@@ -205,8 +246,10 @@ local function BuildOverview(parent)
         for i = 1, math.min(5, #deals) do
             local d = deals[i]
             rows[#rows + 1] = ItemRow(d.id, Market.ItemText(d.id) .. HEX.muted .. "  usual " .. Money(math.floor(d.usual + 0.5)) .. "|r",
-                { HEX.white .. Money(d.s.p) .. "|r", d.units and (d.units .. " units") or (HEX.muted .. "? units|r"),
-                    HEX.good .. "+" .. Money(d.totalGain or d.gain) .. "|r" })
+                { HEX.white .. Money(d.p or d.s.p) .. "|r", d.units and (d.units .. " units") or (HEX.muted .. "? units|r"),
+                    d.totalGain and Profit(d.totalGain)
+                        or (d.gainIfAll and (HEX.muted .. "if all |r" .. Profit(d.gainIfAll)))
+                        or (HEX.good .. "+" .. Money(d.gain) .. "|r" .. HEX.muted .. " each|r") })
         end
         if #deals == 0 then rows[#rows + 1] = { text = HEX.muted .. "None at your last looks.|r" } end
 
@@ -280,11 +323,12 @@ local function BuildListings(parent)
         local sums = ns.Data.List(self.list, {
             name = "desk:listingrows", sources = { "prices", "economy" }, key = tostring(data), maxAge = 60, row = ListingRow,
             build = function(add, raw)
-                local value, deposits, guessed, noDeposit, undercut = 0, 0, 0, 0, 0
+                local value, deposits, guessed, noDeposit, undercut, unpriced = 0, 0, 0, 0, 0, 0
                 raw({ header = true, text = "Item", cols = { "Standing", "Yours vs lowest", "After the cut" } })
                 for _, e in ipairs(data.list) do
                     if not e.overdue then
-                        value, deposits = value + (e.value or 0), deposits + (e.deposit or 0)
+                        if e.value then value = value + e.value else unpriced = unpriced + 1 end
+                        deposits = deposits + (e.deposit or 0)
                         if not e.deposit then
                             if e.depositGuess then guessed = guessed + e.depositGuess else noDeposit = noDeposit + 1 end
                         end
@@ -295,7 +339,7 @@ local function BuildListings(parent)
                 if #data.list == 0 then
                     raw({ text = HEX.muted .. "Nothing listed (or not seen yet: open the Auction House's Auctions tab once).|r" })
                 end
-                return { value = value, deposits = deposits, guessed = guessed, noDeposit = noDeposit, undercut = undercut }
+                return { value = value, deposits = deposits, guessed = guessed, noDeposit = noDeposit, undercut = undercut, unpriced = unpriced }
             end,
         })
         local value, deposits, guessed, noDeposit, undercut = sums.value, sums.deposits, sums.guessed, sums.noDeposit, sums.undercut
@@ -304,8 +348,9 @@ local function BuildListings(parent)
         if guessed > 0 then stake = stake .. (stake ~= "" and " + " or "") .. "about " .. Money(guessed) .. HEX.muted .. " (estimated)|r" end
         if noDeposit > 0 then stake = stake .. string.format(" + ?%s (%d not in your posting log)|r", HEX.muted, noDeposit) end
         self.card.sub:SetText(string.format("%s  ·  %d listings worth %s after the cut  ·  %d undercut  ·  deposits at stake %s",
-            data.source == "game" and ("as the Auction House showed them " .. Prices.Age(data.t)) or "from your posting log",
-            #data.list, Money(value), undercut, stake))
+            data.source ~= "log" and ("as the Auction House showed them " .. Prices.Age(data.t)
+                .. (data.source == "game + log" and ", and your posts since" or "")) or "from your posting log",
+            #data.list, ListedWorth(value, sums.unpriced), undercut, stake))
     end
     return v
 end
@@ -315,14 +360,17 @@ end
 ---------------------------------------------------------------------------
 local function DealRow(d)
     return ItemRow(d.id, Market.ItemText(d.id) .. HEX.muted .. "  usual " .. Money(math.floor(d.usual + 0.5)) .. "|r" .. Market.MoveTag(d.id),
-        { HEX.white .. Money(d.s.p) .. "|r",
+        { HEX.white .. Money(d.p or d.s.p) .. "|r",
             d.units and (d.units .. " for " .. Money(d.cost)) or (HEX.muted .. "one look: units ?|r"),
-            HEX.good .. "+" .. Money(d.totalGain or d.gain) .. "|r" .. (d.totalGain and "" or (HEX.muted .. " each|r")) },
+            d.totalGain and Profit(d.totalGain)
+                or (d.gainIfAll and (HEX.muted .. "if all resold |r" .. Profit(d.gainIfAll)))
+                or (HEX.good .. "+" .. Money(d.gain) .. "|r" .. HEX.muted .. " each|r") },
         function(owner)
             ns.Tooltip.Text(owner, { Market.ItemText(d.id),
-                string.format("Now %s, usual %s (%d looks).", Money(d.s.p), Money(math.floor(d.usual + 0.5)), d.s.looks),
+                string.format("Now %s, usual %s (%d looks).", Money(d.p or d.s.p), Money(math.floor(d.usual + 0.5)), d.s.looks),
                 string.format("Each resold at the usual price brings %s after the cut: +%s.", Money(Market.Net(d.usual)), Money(d.gain)),
-                d.units and string.format("%d units at the deal price cost %s; all resold: +%s (deposit counted).", d.units, Money(d.cost), Money(d.totalGain))
+                d.units and (d.totalGain and string.format("%d units at the deal price cost %s; expected with your sell rate: %s.", d.units, Money(d.cost), Desk.Signed(d.totalGain))
+                    or string.format("%d units at the deal price cost %s; if all resold: %s (no sell rate of yours yet).", d.units, Money(d.cost), Desk.Signed(d.gainIfAll)))
                     or "How many are listed at that price: search it on the Auction House.",
                 HEX.muted .. "Look " .. Prices.Age(d.s.t) .. ": check it is still there.|r" })
         end)
@@ -370,7 +418,7 @@ local function MarginRow(pr)
             for _, rg in ipairs(r.reagents or {}) do
                 lines[#lines + 1] = string.format("  %d x %s  %s", rg[2], Market.ItemText(rg[1]), HEX.muted .. ns.Professions.PriceText(rg[1]) .. "|r")
             end
-            lines[#lines + 1] = "Sells for " .. Money(pr.value) .. " after the cut" .. (pr.rate and (" and your " .. math.floor(pr.rate * 100 + 0.5) .. "% sell rate") or "") .. "."
+            lines[#lines + 1] = "Sells for " .. Money(pr.value) .. (pr.how == "vendor" and " at a vendor (more than the Auction House brings you)" or (" after the cut" .. (pr.rate and (" and your " .. (Market.RatePct(pr.rate) or 0) .. "% sell rate") or ""))) .. "."
             if pr.guessed then lines[#lines + 1] = HEX.muted .. "* some materials not seen on the AH: estimated.|r" end
             ns.Tooltip.Text(owner, lines)
         end)
@@ -447,7 +495,7 @@ local function DetailRows(plan)
         local ev = Market.MovementLines(mv)
         out[#out + 1] = { label = "Sells", text = mv.hex .. mv.label .. "|r" .. HEX.muted .. "  " .. ev[1] .. "|r",
             tooltip = function(o) local l = { "Does it sell?" } for _, x in ipairs(ev) do l[#l + 1] = x end
-                l[#l + 1] = HEX.muted .. "Your auctions decide once 2 have ended; else units leaving the AH between your looks (sold, cancelled or expired).|r"
+                l[#l + 1] = HEX.muted .. "Your auctions decide once " .. Market.SELL_MIN_ENDED .. " have sold or expired; else the change in units listed between your looks (sales, expiries and new posts all move it).|r"
                 ns.Tooltip.Text(o, l) end }
         if ev[2] then out[#out + 1] = { label = "", text = HEX.muted .. ev[2] .. "|r" } end
         if mv.key == "dead" then out[#out + 1] = { label = "", text = HEX.bad .. "Doesn't sell: a reset would only sit there.|r" } end
@@ -456,23 +504,35 @@ local function DetailRows(plan)
     local all = plan.all
     out[#out + 1] = { header = true, text = "Own it all" }
     out[#out + 1] = { label = "Buy", text = string.format("%s%s for %d units", plan.atLeast and "at least " or "", Money(all.cost), all.units) }
-    out[#out + 1] = { label = "Relist", text = string.format("at %s each%s  ·  deposit %s", Money(all.relist),
-        (plan.usual and all.relist <= plan.usual + 0.5) and " (usual)" or " (highest listed)", Money(all.deposit)), cols = { Profit(all.profit) } }
+    out[#out + 1] = { label = "Relist", text = all.relist and (string.format("at %s each (usual)  ·  deposit %s", Money(all.relist),
+        all.deposit and Money(all.deposit) or "?") .. (all.overDemand and (HEX.gold .. "  ·  more than sells in one listing|r") or ""))
+        or (HEX.muted .. (plan.usualOld and "the usual price is from old looks only|r" or "no usual price yet (4 looks needed)|r")),
+        cols = { all.profit and Profit(all.profit) or (all.ifAll and (HEX.muted .. "if all sells |r" .. Profit(all.ifAll)) or Profit(nil)) } }
 
-    out[#out + 1] = { header = true, text = "Resets" .. HEX.muted .. "  (relist 1c under the next seller)|r", sortId = "resets",
+    out[#out + 1] = { header = true, text = "Resets" .. HEX.muted .. "  (relist 1c under the next seller's auction)|r", sortId = "resets",
         label = "Buy up to", cols = { "Profit" } }
     if #plan.steps == 0 then out[#out + 1] = { text = HEX.muted .. "No gap in the ladder to relist under.|r" } end
     for _, s in ipairs(plan.steps) do
         local best = plan.best == s
-        out[#out + 1] = { label = "to " .. Money(s.upTo), text = string.format("%d for %s, relist %s", s.units, Money(s.cost), Money(s.relist))
+        out[#out + 1] = { label = "to " .. Money(s.upTo), text = string.format("%d for %s, relist %s", s.units, Money(s.cost), RelistText(s))
             .. (s.over and (HEX.bad .. "  overpriced|r") or "")
-            .. (s.overUsual and (HEX.muted .. "  (" .. Pct(s.overUsual, false) .. HEX.muted .. " vs usual)|r") or ""),
-            cols = { Profit(s.profit) }, accent = best and COLORS.accent or nil,
+            .. (s.overUsual and (HEX.muted .. "  (" .. Pct(s.overUsual, false) .. HEX.muted .. " vs usual)|r") or "")
+            .. ((s.overDemand and s.profit) and (HEX.gold .. "  more than sells in one listing|r") or ""),
+            cols = { s.profit and Profit(s.profit) or (s.ifAll and (HEX.muted .. "if all sells |r" .. Profit(s.ifAll)) or Profit(nil)) },
+            accent = best and COLORS.accent or nil,
             tooltip = function(o) ns.Tooltip.Text(o, { string.format("Buy every unit up to %s: %d units for %s.", Money(s.upTo), s.units, Money(s.cost)),
-                string.format("Relist all at %s: %s after the cut%s; deposit %s.", Money(s.relist), Money(s.revenue),
-                    plan.rate and " and your sell rate" or "", Money(s.deposit)),
-                "Profit if it all sells: " .. Profit(s.profit) .. (s.roi and ("  (" .. math.floor(s.roi * 100 + 0.5) .. "%)") or ""),
-                s.over and (HEX.bad .. "The next seller is over " .. Market.OUTLIER_FACTOR .. "x the usual price: nobody pays that, so this is never the best reset.|r") or nil }) end }
+                string.format("Relist at %s, valued at %s each (never above the usual price); deposit %s.", RelistText(s),
+                    s.value and Money(s.value) or "?", s.deposit and Money(s.deposit) or "?"),
+                s.profit and ("Expected with your sell rate: " .. Profit(s.profit) .. (s.roi and ("  (" .. math.floor(s.roi * 100 + 0.5) .. "%)") or ""))
+                    or ("No expected profit: " .. Desk.MissingText(plan, s) .. "."),
+                "If it all sells: " .. Profit(s.ifAll),
+                s.over and (HEX.bad .. "The next seller is over " .. Market.OUTLIER_FACTOR .. "x the usual price: nobody pays that, so this is never the best reset.|r") or nil,
+                -- The expected profit sells every unit at your auctions' rate: only
+                -- believable while the market has shown it takes that many.
+                s.overDemand and (HEX.gold .. (plan.demand
+                    and string.format("About %s a day sold lately (yours or the AH's): %d units is more than one listing takes, so this is never the best reset.",
+                        plan.demand >= 10 and tostring(math.floor(plan.demand + 0.5)) or string.format("%.1f", plan.demand), s.units)
+                    or "How many sell in one listing is unknown (no recent sales or looks): this is never the best reset.") .. "|r") or nil }) end }
     end
 
     out[#out + 1] = { header = true, text = "Ladder: units", sortId = "ladder", label = "Price", cols = { "Total to here" } }
@@ -540,7 +600,7 @@ local function BuildControl(parent)
     v.detail = Style.List(detailHolder, { labelWidth = 70, colWidths = { 90 } })
 
     function v:Footer()
-        return "From each item's last full look. Reset = buy the cheapest tiers, relist 1c under the next seller. "
+        return "From each item's last full look. Reset = buy the cheapest tiers, relist 1c under the next seller's auction (its whole stack). "
             .. "Profit assumes it all sells: an item someone holds, or a relist far over usual, may not."
     end
 

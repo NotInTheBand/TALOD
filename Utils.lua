@@ -166,6 +166,20 @@ function Utils.ScanBags(which)
     return out
 end
 
+-- Whether the item in one slot is bound to you: true / false, nil when the
+-- game does not say. The item's template only says how it binds; a
+-- bind-on-equip item you wore once is bound, and only a vendor takes it.
+function Utils.SlotBound(bag, slot)
+    local isBound = C_Item and C_Item.IsBound
+    local IL = ItemLocation
+    if type(isBound) ~= "function" or type(IL) ~= "table" or type(IL.CreateFromBagAndSlot) ~= "function" then return nil end
+    local ok, loc = pcall(IL.CreateFromBagAndSlot, IL, bag, slot)
+    if not ok or not loc then return nil end
+    local b = S.Call(isBound, loc)
+    if type(b) == "boolean" then return b end
+    return nil
+end
+
 -- How many of an item you carry (bags and reagent bag). The game's own
 -- count when it is higher than the scan (a bag the scan does not know).
 function Utils.ItemCount(id)

@@ -65,6 +65,12 @@ local function Money(c)
     return ns.Professions.Money(c)
 end
 
+-- A value from Fishing.Rates `r`: "at least X" when some catches have no known value.
+local function Worth(c, r)
+    if not c then return HEX.dim .. "?|r" end
+    return Fishing.ValueText(c, r and r.unknown)
+end
+
 local function Pct(x)
     if not x then return HEX.dim .. "?|r" end
     return math.floor(x * 100 + 0.5) .. "%"
@@ -112,8 +118,7 @@ local function ItemRows(rows, items, catches)
                 local lines = { Fishing.ItemName(it.id), string.format("%d caught%s", it.n,
                     (catches and catches > 0) and string.format(", %s of catches", Pct(it.n / catches)) or "") }
                 if v > 0 then
-                    lines[#lines + 1] = "Counted at " .. Money(v) .. " each: " .. (how == "ah" and "Auction House after the cut"
-                        .. ((info.rate and info.rate < 1) and " x your sell rate" or "") or "vendor")
+                    lines[#lines + 1] = "Counted at " .. Money(v) .. " each: " .. ns.Market.SaleValueText(how, info)
                 end
                 if info.p then lines[#lines + 1] = "AH: " .. Money(info.p) .. " (" .. (info.src == "auctionator" and "Auctionator, " or "") .. ns.Prices.Age(info.t, info.src) .. ")" end
                 local rate = ns.Market.SellRateText(info.sales)
@@ -142,7 +147,7 @@ local function LureRows(rows, lures, title)
         local avg = (e.t.mn or 0) > 0 and e.t.ms / e.t.mn or nil
         rows[#rows + 1] = { label = Fishing.LureLabel(e.key),
             text = Pct(e.r.catchPct) .. " caught" .. HEX.muted .. string.format("  ·  %d casts  ·  %s/h%s|r", e.r.casts,
-                e.r.gph and Money(e.r.gph) or "?", avg and string.format("  ·  skill +%d", math.floor(avg + 0.5)) or ""),
+                e.r.gph and Worth(e.r.gph, e.r) or "?", avg and string.format("  ·  skill +%d", math.floor(avg + 0.5)) or ""),
             tooltip = function(o) ns.Tooltip.Text(o, { Fishing.LureLabel(e.key), string.format("%d casts, %d caught, %d got away, %d missed",
                 e.r.casts, e.r.catches, e.r.escaped, e.r.missed), "Skill +N: the average skill modifier of these casts (lure and gear)." }) end }
     end
@@ -164,9 +169,9 @@ local function SpotRows(mapID, name, skill)
         tooltip = function(o) ns.Tooltip.Text(o, { "Catch rate", "Catches of catches plus fish that got away (\"Your fish got away!\": your skill lost the bite).",
             "Left out: missed clicks with nothing hooked, early stops, timeouts and interrupted casts: they say nothing about the spot.",
             "Casts logged before misses were told apart count early stops as \"got away\"." }) end }
-    rows[#rows + 1] = { label = "Per catch", text = Money(r.perCatch) .. (r.unpriced > 0 and (HEX.muted .. "  (" .. r.unpriced .. " kinds without a price)|r") or "")
+    rows[#rows + 1] = { label = "Per catch", text = Worth(r.perCatch, r) .. (r.unpriced > 0 and (HEX.muted .. "  (" .. r.unpriced .. " kinds without a price)|r") or "")
         .. (r.unseen > 0 and (HEX.gold .. "  · " .. r.unseen .. " not seen on the AH: vendor price, likely low|r") or "") }
-    rows[#rows + 1] = { label = "Per hour", text = (r.gph and (HEX.white .. Money(r.gph) .. "|r") or (HEX.dim .. "?|r"))
+    rows[#rows + 1] = { label = "Per hour", text = (r.gph and (HEX.white .. Worth(r.gph, r) .. "|r") or (HEX.dim .. "?|r"))
         .. HEX.muted .. "  ·  " .. (r.perHour and (math.floor(r.perHour + 0.5) .. " catches") or "?") .. "  ·  " .. Fishing.Minutes(r.hours * 60) .. " fished|r",
         tooltip = function(o) ns.Tooltip.Text(o, { "Per hour of fishing", "Channels plus the gaps between casts up to 30 s: breaks do not count.",
             "Shown after " .. Fishing.MIN_MINUTES .. " minutes fished." }) end }
@@ -192,7 +197,7 @@ local function SpotRows(mapID, name, skill)
         local mine = skill and type(e.b) == "number" and Fishing.Band(skill) == e.b
         rows[#rows + 1] = { label = type(e.b) == "number" and string.format("%d-%d", e.b, e.b + Fishing.BAND - 1) or "?",
             text = (mine and HEX.accent or "") .. Pct(br.catchPct) .. " caught" .. (mine and "  (you)|r" or "")
-                .. HEX.muted .. string.format("  ·  %d casts  ·  %s/h|r", br.casts, br.gph and Money(br.gph) or "?") }
+                .. HEX.muted .. string.format("  ·  %d casts  ·  %s/h|r", br.casts, br.gph and Worth(br.gph, br) or "?") }
     end
 
     LureRows(rows, spot.l, "By lure  " .. HEX.muted .. "(all skills)|r")
@@ -277,7 +282,7 @@ local function BuildNow(parent)
             rows[#rows + 1] = { label = "Casts", text = string.format("%d  ·  %s%d caught|r  ·  %d got away  ·  %d missed  ·  %d no bite  ·  %d interrupted",
                 s.n or 0, HEX.good, s.c or 0, s.a or 0, s.m or 0, s.t or 0, s.i or 0) }
             rows[#rows + 1] = { label = "Catch rate", text = Pct(r.catchPct) .. HEX.muted .. "  ·  " .. (r.perHour and (math.floor(r.perHour + 0.5) .. " catches/h") or "?/h") .. "|r" }
-            rows[#rows + 1] = { label = "Value", text = HEX.white .. Money(r.value) .. "|r" .. HEX.muted .. "  ·  " .. (r.gph and (Money(r.gph) .. "/h") or "?/h")
+            rows[#rows + 1] = { label = "Value", text = HEX.white .. Worth(r.value, r) .. "|r" .. HEX.muted .. "  ·  " .. (r.gph and (Worth(r.gph, r) .. "/h") or "?/h")
                 .. (r.unpriced > 0 and ("  ·  " .. r.unpriced .. " kinds without a price") or "") .. "|r"
                 .. (r.unseen > 0 and (HEX.gold .. "  ·  " .. r.unseen .. " not seen on the AH|r") or "") }
             local gained = (s.skill1 and s.skill0) and s.skill1 - s.skill0 or 0
@@ -346,7 +351,7 @@ local function SpotRow(e)
         text = (sel and HEX.accent or "") .. e.name .. (sel and "|r" or "") .. HEX.muted .. "  " .. (e.map ~= e.name and e.map or "")
             .. (e.basis == "higher" and "  (higher skill)" or "") .. "|r",
         cols = { state.sort == "skillups" and (e.rates.perHour and (math.floor(e.rates.perHour + 0.5) .. "/h") or (HEX.dim .. "?|r"))
-            or (e.rates.gph and Money(e.rates.gph) or (HEX.dim .. "?|r")), Pct(e.rates.catchPct), DangerShort(e.danger) },
+            or (e.rates.gph and Worth(e.rates.gph, e.rates) or (HEX.dim .. "?|r")), Pct(e.rates.catchPct), DangerShort(e.danger) },
         sort = { [2] = e.rates.catchPct,
             [3] = e.danger.minutes >= Fishing.MIN_MINUTES and e.danger.attacks / e.danger.minutes or nil },
         accent = sel and COLORS.accent or nil,
@@ -416,7 +421,7 @@ local function BuildSpots(parent)
         local list = ns.Data.Memo("fishing:spots", ns.Data.Key({ "fishing", "prices" }) .. "|" .. tostring(skill) .. "|" .. state.sort, function()
             local out = Fishing.SpotList(skill)
             local cmp = {
-                gph = function(a, b) return (a.rates.gph or -1) > (b.rates.gph or -1) end,
+                gph = function(a, b) return (not a.rates.partial and a.rates.gph or -1) > (not b.rates.partial and b.rates.gph or -1) end,
                 catch = function(a, b) return (a.rates.catchPct or -1) > (b.rates.catchPct or -1) end,
                 safe = function(a, b)
                     local ea = a.danger.minutes >= Fishing.MIN_MINUTES and a.danger.attacks / a.danger.minutes or math.huge
@@ -696,7 +701,7 @@ local function BuildMap(parent)
                 local rates = Fishing.Rates(t)
                 local lines = { string.format("%s  %.0f, %.0f", mapName, (e.cx + 0.5) * 2, (e.cy + 0.5) * 2),
                     string.format("%d casts, %d caught (%s), %s fished", t.n or 0, t.c or 0, Pct(rates.catchPct), Fishing.Minutes((t.s or 0) / 60)),
-                    "Value " .. Money(rates.value) .. (rates.gph and (", " .. Money(rates.gph) .. "/h") or "") }
+                    "Value " .. Worth(rates.value, rates) .. (rates.gph and (", " .. Worth(rates.gph, rates) .. "/h") or "") }
                 local attacks = (t.x or 0) + (t.p or 0) + (t.u or 0)
                 if attacks > 0 or (t.e or 0) > 0 then
                     lines[#lines + 1] = string.format("Attacks: %d NPC, %d player, %d ?  ·  enemies seen: %d", t.x or 0, t.p or 0, t.u or 0, t.e or 0)
@@ -761,14 +766,13 @@ end
 ---------------------------------------------------------------------------
 local function CastRow(e)
     local parts = {}
-    local value = 0
+    local value, _, _, unknown = Fishing.ItemsValue(e.items)
     for id, n in pairs(e.items) do
         parts[#parts + 1] = (n > 1 and (n .. "x ") or "") .. Fishing.ItemText(id)
-        value = value + Fishing.ItemValue(id) * n
     end
     return { label = Date(e.t), text = (e.result == "c" and table.concat(parts, ", ") or ResultText(e.result))
         .. HEX.muted .. "  ·  " .. (e.sub or "?") .. "|r",
-        cols = { e.result == "c" and value > 0 and Money(value) or "" },
+        cols = { e.result == "c" and (value > 0 or unknown > 0) and Fishing.ValueText(value, unknown) or "" },
         tooltip = function(owner)
             local lines = { ResultText(e.result), Date(e.t) .. "  ·  " .. (e.sub or "?")
                 .. (e.serverMin and string.format("  ·  server time %02d:%02d", e.serverHour, e.serverMin % 60) or ""),
@@ -847,7 +851,7 @@ local function SessionRow(x)
         text = (current and (HEX.accent .. "now  |r") or "") .. (s.zone or "?") .. HEX.muted .. string.format("  ·  %s  ·  %d/%d caught%s%s|r",
             Fishing.Minutes(r.hours * 60), s.c or 0, s.n or 0, attacks > 0 and string.format("  ·  %d attacks", attacks) or "",
             (s.e or 0) > 0 and string.format("  ·  %d enemies", s.e) or ""),
-        cols = { Money(r.value), r.gph and Money(r.gph) or (HEX.dim .. "?|r"), gained > 0 and (HEX.good .. "+" .. gained .. "|r") or (HEX.dim .. "-|r") },
+        cols = { Worth(r.value, r), r.gph and Worth(r.gph, r) or (HEX.dim .. "?|r"), gained > 0 and (HEX.good .. "+" .. gained .. "|r") or (HEX.dim .. "-|r") },
         accent = current and COLORS.accent or nil,
         tooltip = function(owner)
             local lines = { (s.zone or "?") .. "  ·  " .. (s.char or "?"), Fishing.SessionSummary(s) }
@@ -882,12 +886,13 @@ local function BuildSessions(parent)
         local data = ns.Data.List(self.list, {
             name = "fishing:sessions", sources = { "fishing", "prices" }, maxAge = 60, row = SessionRow, empty = "No sessions yet.",
             build = function(add)
-                local d = { value = 0, seconds = 0 }
+                local d = { value = 0, seconds = 0, unknown = 0 }
                 if f.session then add({ s = f.session, current = true }, { time = f.session.start }) end
                 for i = #f.sessions, 1, -1 do
                     local s = f.sessions[i]
                     add({ s = s }, { time = s.start, search = (s.zone or "") .. " " .. (s.char or "") })
-                    d.value = d.value + (Fishing.ItemsValue(s.it))
+                    local v, _, _, unknown = Fishing.ItemsValue(s.it)
+                    d.value, d.unknown = d.value + v, d.unknown + unknown
                     d.seconds = d.seconds + (s.s or 0)
                 end
                 return d
@@ -895,7 +900,7 @@ local function BuildSessions(parent)
         })
         local value, seconds = data.value, data.seconds
         self.card.sub:SetText(string.format("%d sessions  ·  %s fished  ·  %s caught at today's prices%s", #f.sessions,
-            Fishing.Minutes(seconds / 60), Money(value), seconds >= 600 and ("  ·  " .. Money(value / (seconds / 3600)) .. "/h") or ""))
+            Fishing.Minutes(seconds / 60), Fishing.ValueText(value, data.unknown), seconds >= 600 and ("  ·  " .. Fishing.ValueText(value / (seconds / 3600), data.unknown) .. "/h") or ""))
     end
     return v
 end
@@ -1214,9 +1219,9 @@ local function HUDLines(s, r)
             Fishing.Minutes(r.hours * 60), HEX.good, s.c or 0, s.n or 0, Pct(r.catchPct)),
             tip = { "This session", "Fishing time (channels and short gaps), catches of casts, catch rate (catches and fish that got away; "
                 .. "missed clicks, timeouts and interruptions left out)." } }
-        lines[#lines + 1] = { key = "value", label = "Value", value = Money(r.value) .. (r.gph and (HEX.muted .. "  ·  " .. Money(r.gph) .. " per hour|r") or "")
+        lines[#lines + 1] = { key = "value", label = "Value", value = Worth(r.value, r) .. (r.gph and (HEX.muted .. "  ·  " .. Worth(r.gph, r) .. " per hour|r") or "")
             .. (r.unseen > 0 and (HEX.gold .. "  ·  " .. r.unseen .. " not on AH|r") or ""),
-            tip = { "Value caught", "AH after the cut x your sell rate, or vendor, whichever is more.", "Per hour after 5 minutes fished." } }
+            tip = { "Value caught", "What selling brings: the AH after the cut (once your sell rate is known, the unsold share at the vendor price less the deposit), or the vendor, whichever is more.", "Per hour after 5 minutes fished." } }
         local need, capped = Fishing.NextPoint()
         lines[#lines + 1] = { key = "skill", label = "Skill", value = SkillText() .. (gained > 0 and (HEX.good .. "  +" .. gained .. "|r") or "")
             .. HEX.muted .. "  ·  next " .. (capped and (HEX.gold .. "train|r") or (need and ("~" .. need .. " catches") or "?")) .. "|r",

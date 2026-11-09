@@ -10,62 +10,142 @@ local check, boot = T.check, T.boot
 -- Oracle: the statistics and the plan as they were built before the slimming
 ---------------------------------------------------------------------------
 local OUTLIER_FACTOR, OUTLIER_LOOKS = 2, 3
+local DAYKEY   -- Prices.DayKey, set by OldBuildStats
 
 local function OldMedian(list)
     if #list == 0 then return nil end
     local v = {}
     for i, x in ipairs(list) do v[i] = x end
     table.sort(v)
-    local m = math.floor((#v + 1) / 2)
-    return #v % 2 == 1 and v[m] or (v[m] + v[m + 1]) / 2
+    return v[math.floor((#v + 1) / 2)]   -- the low median (Market.Median)
 end
 
-local function OldMark(points)
-    local all, exact = {}, {}
+local function TrueMedian(k)
+    table.sort(k)
+    return #k > 0 and ((#k % 2 == 0) and (k[#k / 2] + k[#k / 2 + 1]) / 2 or k[(#k + 1) / 2]) or nil
+end
+
+-- fromDay: only the days after it count (the usual price follows the market
+-- now); none of them: every day.
+local function OldMark(points, fromDay)
+    local all, exact, units = {}, {}, {}
     for _, pt in ipairs(points) do
         pt.over = nil
         all[#all + 1] = pt.p
         if not pt.b then exact[#exact + 1] = pt.p end
+        if type(pt.n) == "number" and pt.n > 0 then units[#units + 1] = pt.n end
     end
     local base = OldMedian(#exact >= 2 and exact or all)
-    local kept, over = {}, 0
-    for _, pt in ipairs(points) do
-        if #points >= OUTLIER_LOOKS and base and pt.p > base * OUTLIER_FACTOR then
+    -- The usual supply: the true median; thin by units when known, else one auction.
+    table.sort(units)
+    local medN = #units > 0 and ((#units % 2 == 0) and (units[#units / 2] + units[#units / 2 + 1]) / 2 or units[(#units + 1) / 2]) or nil
+    local lone = #exact == 1
+    local kept, keptExact, over = {}, {}, 0
+    local vals, valsX = {}, {}
+    local function Thin(pt)
+        if type(pt.n) == "number" then return medN ~= nil and pt.n <= medN * 0.25 end
+        return pt.a == 1
+    end
+    -- A high look held by a neighbour (both exact, a known normal supply) is the market, not overpriced.
+    local solid = {}
+    for i, pt in ipairs(points) do
+        solid[i] = base and pt.p > base * OUTLIER_FACTOR and not pt.b and type(pt.n) == "number" and pt.n > 0 and not Thin(pt) or false
+    end
+    for i, pt in ipairs(points) do
+        pt.under = nil
+        -- A lone exact look is never judged by browse rows; a cheap look is a throwaway only when thin.
+        local judged = #points >= OUTLIER_LOOKS and base and not (lone and not pt.b)
+        local thin = Thin(pt)
+        local held = solid[i] and (solid[i - 1] or solid[i + 1])
+        if judged and pt.p > base * OUTLIER_FACTOR and not held then
             pt.over, over = true, over + 1
+        elseif judged and pt.p * OUTLIER_FACTOR < base and thin then
+            pt.under = true
         else
-            kept[#kept + 1] = pt.p
+            -- One value per day: that day's lowest kept look (the usual price)
+            -- and the true median of its kept looks (the trend's yardstick).
+            local d = DAYKEY(pt.t)
+            kept[d] = math.min(kept[d] or pt.p, pt.p)
+            vals[d] = vals[d] or {}
+            table.insert(vals[d], pt.p)
+            if not pt.b then
+                keptExact[d] = math.min(keptExact[d] or pt.p, pt.p)
+                valsX[d] = valsX[d] or {}
+                table.insert(valsX[d], pt.p)
+            end
         end
     end
-    return OldMedian(kept), base, over
+    local byDay, byVals = kept, vals
+    if next(keptExact) then byDay, byVals = keptExact, valsX end
+    local function Pick(recent)
+        local lows, mids = {}, {}
+        for d, v in pairs(byDay) do
+            if not recent or not fromDay or d > fromDay then
+                lows[#lows + 1] = v
+                mids[#mids + 1] = TrueMedian(byVals[d])
+            end
+        end
+        return lows, mids
+    end
+    local lows, mids = Pick(true)
+    local stale = #lows == 0 and next(byDay) ~= nil
+    if #lows == 0 then lows, mids = Pick(false) end
+    table.sort(lows)
+    return OldMedian(lows), base, over, TrueMedian(mids), stale
 end
 
 local function OldBuildStats(ns, e)
+    DAYKEY = ns.Prices.DayKey
     local points = ns.Prices.Looks(e)
     for _, x in ipairs(points) do x.c, x.b = nil, x.b and true or nil end
     points[#points + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, b = e.b and true or nil }
-    local usualBefore
+    -- Trend and usual supply against the earlier looks: the true median of the
+    -- kept prices, the true median of the counted units (2+).
+    -- Recent days only: those within Market.USUAL_DAYS of the latest look.
+    local fromDay = DAYKEY(e.t) - ns.Market.USUAL_DAYS
+    local usualBefore, trendBase, usualN, usualBeforeStale
     if #points > 1 then
-        local before = {}
-        for i = 1, #points - 1 do before[i] = points[i] end
-        usualBefore = OldMark(before)
+        local before, counted, dayMax = {}, 0, {}
+        for i = 1, #points - 1 do
+            before[i] = points[i]
+            -- The usual supply: one value per day (its most units), the true median of the days.
+            if type(points[i].n) == "number" and points[i].n > 0 then
+                counted = counted + 1
+                local d = DAYKEY(points[i].t)
+                dayMax[d] = math.max(dayMax[d] or 0, points[i].n)
+            end
+        end
+        local u, _, _, mid, stale = OldMark(before, fromDay)
+        if #points - 1 >= OUTLIER_LOOKS then usualBefore, usualBeforeStale = u, stale end
+        trendBase = mid
+        if counted >= 2 then
+            local units = {}
+            for _, v in pairs(dayMax) do units[#units + 1] = v end
+            usualN = TrueMedian(units)
+        end
     end
-    local usual, _, over = OldMark(points)
+    local usual, _, over = OldMark(points, fromDay)
+    -- A browse row as the latest look while exact looks exist: no trend.
+    if points[#points].b then
+        for i = 1, #points - 1 do if not points[i].b then trendBase = nil break end end
+    end
     local low, high, highAll, sumN, countN = nil, nil, nil, 0, 0
     for _, pt in ipairs(points) do
-        if not pt.over then
+        if not pt.over and not pt.under then
             low = (not low or pt.p < low) and pt.p or low
             high = (not high or pt.p > high) and pt.p or high
         end
         highAll = (not highAll or pt.p > highAll) and pt.p or highAll
         if type(pt.n) == "number" and pt.n > 0 then sumN, countN = sumN + pt.n, countN + 1 end
     end
-    local avgN = countN > 0 and sumN / countN or nil
+    local nowN = (type(e.n) == "number" and e.n > 0) and e.n or nil
     return {
         p = e.p, t = e.t, n = e.n, a = e.a, looks = #points, usual = usual, usualBefore = usualBefore,
+        usualBeforeStale = usualBeforeStale,
         low = low, high = high, highAll = highAll, over = over, overNow = points[#points].over or false,
         prev = #points > 1 and points[#points - 1].p or nil,
-        trend = (#points > 1 and usual and usual > 0) and (e.p - usual) / usual or nil,
-        avgN = avgN, supplyTrend = (countN > 1 and avgN and avgN > 0 and e.n) and (e.n - avgN) / avgN or nil,
+        trend = (trendBase and trendBase > 0) and (e.p - trendBase) / trendBase or nil,
+        avgN = usualN, supplyTrend = (usualN and usualN > 0 and nowN) and (nowN - usualN) / usualN or nil,
         points = points,
     }
 end
@@ -87,9 +167,22 @@ local function OldPlan(ns, id, stats)
     local Desk, Market, Prices = ns.AuctionDesk, ns.Market, ns.Prices
     local L = Prices.Ladder(id)
     if not (L and #L.tiers > 0) then return nil end
-    local usual = (stats and stats.looks >= 2) and stats.usualBefore or nil
+    -- A usual price from old looks only is no yardstick for a plan.
+    local usual = stats and not stats.usualBeforeStale and stats.usualBefore or nil
+    -- What one listing period takes (unknown: never the best reset).
+    local demand = Market.Demand(id)
+    local demandCap = demand and demand * Desk.DEMAND_DAYS or nil
     local sales = Market.MySales(id)
     local rate = sales.rate
+    local _, _, _, sell = Market.ItemInfo(id)
+    -- Posting once (worked out here on its own, not through the desk):
+    -- r x units x net + (1 - r) x (units x vendor - deposit); and if all sells.
+    local function Value(netUnit, units, deposit)
+        if not netUnit then return nil, nil end
+        local ifAll = math.floor(netUnit * units + 1e-6)
+        if not rate or not deposit then return nil, ifAll end
+        return math.floor(rate * ifAll + (1 - rate) * ((sell or 0) * units - deposit)), ifAll
+    end
     local cut = 1 - Market.CUT
     local plan = { id = id, ladder = L, stats = stats, usual = usual, rate = rate, age = time() - L.t,
         atLeast = L.partial or L.more > 0, holders = Desk.Holders(L), steps = {}, moves = Market.Movement(id) }
@@ -98,33 +191,35 @@ local function OldPlan(ns, id, stats)
     for k, t in ipairs(L.tiers) do
         local q = t.q - t.m
         cost, units = cost + q * t.u, units + q
-        local wall
+        local wall, wallK
         for j = k + 1, #L.tiers do
-            if L.tiers[j].q - L.tiers[j].m > 0 then wall = L.tiers[j].u break end
+            if L.tiers[j].q - L.tiers[j].m > 0 then wall, wallK = L.tiers[j].u, L.tiers[j].k break end
         end
-        if wall and q > 0 and wall - 1 > t.u then
-            local relist = wall - 1
+        -- 1c under the wall's auction as it can be posted (its whole stack).
+        local relist = wall and Market.Undercut(wall, wallK)
+        if wall and q > 0 and relist > t.u + 1e-6 then
             local deposit = Desk.Deposit(id, units)
-            local revenue = math.floor(math.floor(relist * cut) * units * (rate or 1))
-            local profit = revenue - cost - deposit
-            plan.steps[#plan.steps + 1] = { k = k, upTo = t.u, units = units, cost = cost, relist = relist, deposit = deposit,
-                revenue = revenue, profit = profit, roi = cost > 0 and profit / cost or nil,
+            local value = usual and math.min(relist, usual) or nil
+            local revenue, ifAll = Value(value and value * cut or nil, units, deposit)
+            local profit = revenue and revenue - cost or nil
+            plan.steps[#plan.steps + 1] = { k = k, upTo = t.u, units = units, cost = cost, relist = relist, value = value, deposit = deposit,
+                revenue = revenue, profit = profit, ifAll = ifAll and ifAll - cost or nil,
+                roi = (profit and cost + (deposit or 0) > 0) and profit / (cost + (deposit or 0)) or nil,
                 overUsual = usual and usual > 0 and (relist - usual) / usual or nil,
                 over = usual and relist > usual * Market.OUTLIER_FACTOR or nil }
         end
     end
     for _, step in ipairs(plan.steps) do
-        if step.profit > 0 and not step.over and (not plan.best or step.profit > plan.best.profit) then plan.best = step end
+        if step.profit and step.profit > 0 and not step.over and (step.roi or 0) >= Desk.MIN_ROI
+            and demandCap and step.units <= demandCap
+            and (not plan.best or step.profit > plan.best.profit) then plan.best = step end
     end
-    local top = 0
-    for _, t in ipairs(L.tiers) do
-        if not (usual and t.u > usual * Market.OUTLIER_FACTOR) then top = t.u end
-    end
-    local relist = math.max(math.floor(usual or 0), top)
     local deposit = Desk.Deposit(id, units)
-    local revenue = math.floor(math.floor(relist * cut) * units * (rate or 1))
-    plan.all = { units = units, cost = cost, relist = relist, deposit = deposit, revenue = revenue,
-        profit = revenue - cost - deposit, roi = cost > 0 and (revenue - cost - deposit) / cost or nil }
+    local revenue, ifAll = Value(usual and usual * cut or nil, units, deposit)
+    local profit = revenue and revenue - cost or nil
+    plan.all = { units = units, cost = cost, relist = usual, deposit = deposit, revenue = revenue,
+        profit = profit, ifAll = ifAll and ifAll - cost or nil,
+        roi = (profit and cost + (deposit or 0) > 0) and profit / (cost + (deposit or 0)) or nil }
     return plan
 end
 
@@ -137,8 +232,8 @@ local function SameFields(a, b, fields, what)
     end
 end
 
-local STEP_FIELDS = { "k", "upTo", "units", "cost", "relist", "deposit", "revenue", "profit", "roi", "overUsual", "over" }
-local ALL_FIELDS = { "units", "cost", "relist", "deposit", "revenue", "profit", "roi" }
+local STEP_FIELDS = { "k", "upTo", "units", "cost", "relist", "value", "deposit", "revenue", "profit", "ifAll", "roi", "overUsual", "over" }
+local ALL_FIELDS = { "units", "cost", "relist", "deposit", "revenue", "profit", "ifAll", "roi" }
 local HOLDER_FIELDS = { "share", "name", "sellers", "mine" }
 
 ---------------------------------------------------------------------------
@@ -234,7 +329,7 @@ local function makeAuctions(ns, ids, now)
     local list = {}
     for _, id in ipairs(ids) do
         if math.random() < 0.3 then
-            for _ = 1, math.random(1, 6) do
+            for _ = 1, math.random(1, 14) do   -- some items reach the 5 ended auctions a sell rate needs
                 local status = pick({ "sold", "sold", "expired", "cancelled", "listed" })
                 local t = now - math.random(1, 40) * 86400
                 local a = { id = #list + 1, t = t, name = MOCK.ItemLink(id, "Item " .. id), count = math.random(1, 20),
@@ -294,7 +389,7 @@ scenarios.market_slim_stats = function()
         for _, x in ipairs(copy) do x.c, x.b = nil, x.b and true or nil end
         copy[#copy + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, b = e.b and true or nil }
         local usual, base, over = M.MarkOverpriced(copy)
-        local ousual, obase, oover = OldMark(old.points)
+        local ousual, obase, oover = OldMark(old.points, Pr.DayKey(e.t) - M.USUAL_DAYS)
         check(usual == ousual and base == obase and over == oover, "MarkOverpriced " .. id)
     end
     check(withPoints > 2000 and overs > 40, "the data has looks and outliers: " .. withPoints .. " " .. overs)
@@ -347,6 +442,7 @@ scenarios.market_slim_plans = function()
     Desk.Invalidate()
 
     local oldPlans, bests, withSteps, withHolders = {}, 0, 0, 0
+    local rated, usualed, priced = 0, 0, 0
     local kinds = {}
     for _, id in ipairs(ladderIds) do
         local e = Pr.Entry(id)
@@ -394,11 +490,15 @@ scenarios.market_slim_plans = function()
                 and (full.moves.market == nil) == (old.moves.market == nil), "detail movement " .. id)
             check(full.move.key == full.moves.key, "detail move " .. id)
             if old.best then bests = bests + 1 end
+            if old.rate then rated = rated + 1 end
+            if old.usual then usualed = usualed + 1 end
+            for _, st in ipairs(old.steps) do if st.profit then priced = priced + 1 end end
             if #old.steps > 0 then withSteps = withSteps + 1 end
             if old.holders then withHolders = withHolders + 1 end
         end
     end
-    check(bests > 20 and withSteps > 40 and withHolders > 20, "the data has resets and sellers: " .. bests .. " " .. withSteps .. " " .. withHolders)
+    check(priced > 20 and withSteps > 40 and withHolders > 20, "the data has priced resets and sellers: " .. bests .. " " .. withSteps .. " " .. withHolders
+        .. " (rated " .. rated .. ", usual " .. usualed .. ", priced steps " .. priced .. ")")
     local nk = 0
     for _ in pairs(kinds) do nk = nk + 1 end
     check(nk >= 3, "several movement verdicts covered: " .. nk)
@@ -465,16 +565,25 @@ scenarios.market_slim_deals = function()
     for _, id in ipairs(order) do
         local s = OldBuildStats(ns, Pr.Entry(id))
         local usual = s.usualBefore
-        if usual and s.looks >= M.DEAL_LOOKS and s.p <= usual * M.DEAL_FACTOR then
-            local gain = M.Net(usual) - s.p
-            if gain > 0 then list[#list + 1] = { id = id, s = s, gain = gain, usual = usual } end
+        if usual and s.looks >= M.DEAL_LOOKS and s.p <= usual * M.DEAL_FACTOR and time() - s.t <= M.DEAL_MAX_AGE then
+            -- The price to buy at: the cheapest unit not yours on the same look's ladder.
+            local p = s.p
+            local L = Pr.Ladder(id)
+            if L and math.abs(L.t - s.t) <= 600 then
+                p = false
+                for _, t in ipairs(L.tiers) do if t.q - t.m > 0 then p = t.u break end end
+            end
+            if p and p <= usual * M.DEAL_FACTOR then
+                local gain = M.Net(usual) - p
+                if gain > 0 then list[#list + 1] = { id = id, s = s, p = p, gain = gain, usual = usual } end
+            end
         end
     end
-    ns.Utils.SortBy(list, function(d) return ns.Utils.NumKey(d.gain / math.max(1, d.s.p) * 1e6, true) end)
+    ns.Utils.SortBy(list, function(d) return ns.Utils.NumKey(d.gain / math.max(1, d.p) * 1e6, true) end)
     local deals = M.Deals()
-    check(#deals == #list and #list > 20, "market deals: " .. #deals .. " vs " .. #list)
+    check(#deals == #list and #list > 10, "market deals: " .. #deals .. " vs " .. #list)
     for i, d in ipairs(list) do
-        check(deals[i].id == d.id and deals[i].gain == d.gain and deals[i].usual == d.usual and deals[i].s.p == d.s.p, "market deal " .. i)
+        check(deals[i].id == d.id and deals[i].gain == d.gain and deals[i].usual == d.usual and deals[i].p == d.p, "market deal " .. i)
     end
 
     local depth = 0
@@ -483,19 +592,32 @@ scenarios.market_slim_deals = function()
         if L and math.abs(L.t - d.s.t) <= 600 then
             local limit = d.usual * M.DEAL_FACTOR
             local net = M.Net(d.usual)
-            local units, cost, gain = 0, 0, 0
+            local units, cost = 0, 0
             for _, t in ipairs(L.tiers) do
                 if t.u > limit then break end
                 local q = t.q - t.m
-                units, cost, gain = units + q, cost + q * t.u, gain + q * (net - t.u)
+                units, cost = units + q, cost + q * t.u
             end
-            d.units, d.cost, d.totalGain = units, cost, gain - Desk.Deposit(d.id, units)
+            local rate = M.MySales(d.id).rate
+            local _, _, _, sell = M.ItemInfo(d.id)
+            local deposit = Desk.Deposit(d.id, units)
+            d.units, d.cost = units, cost
+            d.gainIfAll = math.floor(net * units + 1e-6) - cost
+            if rate and deposit then
+                d.totalGain = math.floor(rate * math.floor(net * units + 1e-6) + (1 - rate) * ((sell or 0) * units - deposit)) - cost
+            end
             depth = depth + 1
         end
     end
+    -- Nothing to buy that is not yours: no deal.
+    for i = #list, 1, -1 do if list[i].units == 0 then table.remove(list, i) end end
     for i, d in ipairs(list) do d.at = i end
+    -- Expected gains first (most first), then "if all resold" ones, then expected losses.
     table.sort(list, function(a, b)
-        local ga, gb = a.totalGain or a.gain, b.totalGain or b.gain
+        local ka = a.totalGain and (a.totalGain > 0 and 0 or 2) or 1
+        local kb = b.totalGain and (b.totalGain > 0 and 0 or 2) or 1
+        if ka ~= kb then return ka < kb end
+        local ga, gb = a.totalGain or a.gainIfAll or a.gain, b.totalGain or b.gainIfAll or b.gain
         if ga ~= gb then return ga > gb end
         return a.at < b.at
     end)
@@ -504,6 +626,6 @@ scenarios.market_slim_deals = function()
     check(depth > 5, "some deals have depth: " .. depth)
     for i, d in ipairs(list) do
         check(got[i].id == d.id and got[i].units == d.units and got[i].cost == d.cost and got[i].totalGain == d.totalGain
-            and got[i].gain == d.gain, "desk deal " .. i .. " " .. d.id .. " vs " .. tostring(got[i].id))
+            and got[i].gainIfAll == d.gainIfAll and got[i].gain == d.gain, "desk deal " .. i .. " " .. d.id .. " vs " .. tostring(got[i].id))
     end
 end

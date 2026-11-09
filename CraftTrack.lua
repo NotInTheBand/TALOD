@@ -2,10 +2,11 @@
 -- (buy each material, or make it when you can and that is cheaper), and your
 -- progress as materials reach your bags or your mailbox.
 --
--- Route: an item is bought at its best known price (Professions.ItemPrice:
--- vendor, your AH looks, else Wowhead's average) or made by a recipe this
--- character can make (the profession at its skill and, once the profession
--- window was read, the recipe known), whichever is cheaper per unit. What you
+-- Route: an item is bought (Professions.BuyCost: along the listings you saw,
+-- a vendor when cheaper, else the lowest price or Wowhead's average) or made
+-- by a recipe this character can make (the profession at its skill and, once
+-- the profession window was read, the recipe known), whichever is cheaper for
+-- the amount needed; a part with no price is never counted as one. What you
 -- hold counts first (bags, then the mailbox), from the top of the tree down.
 --
 -- Purchases: a buyout on the Auction House (PlaceAuctionBid at the buyout,
@@ -75,42 +76,31 @@ function Track.CanCraft(r, charKey)
     return true, "unread"
 end
 
--- Cheapest way to get one unit: { unit, how = "buy" / "craft" / nil, r,
--- src, cannot = { recipes you cannot make } }. unit nil = no price at all.
-local function Best(id, ctx, depth)
-    local m = ctx.best[id]
+-- The recipes this character can make an item with, and those it cannot
+-- (shown as "you can't make it"): { can = { r }, cannot = { r } | nil }.
+local function Makers(id, ctx)
+    local m = ctx.makers[id]
     if m then return m end
-    if m == false then return { cycle = true } end
-    ctx.best[id] = false
-    local unit, src = P().ItemPrice(id)
-    if src == "unknown" then unit = nil end
-    local best = { unit = unit, how = unit and "buy" or nil, src = src }
-    if depth < MAX_DEPTH then
-        for _, r in ipairs(ns.Market.MadeBy(id)) do
-            if Track.CanCraft(r, ctx.char) then
-                local cost, ok = 0, true
-                for _, rg in ipairs(r.reagents or {}) do
-                    local b = Best(rg[1], ctx, depth + 1)
-                    if not b.unit then ok = false break end
-                    cost = cost + rg[2] * b.unit
-                end
-                local each = ok and cost / math.max(r.makes or 1, 1) or nil
-                if each and (not best.unit or each < best.unit) then
-                    best = { unit = each, how = "craft", r = r, src = src, buyUnit = unit }
-                end
-            else
-                best.cannot = best.cannot or {}
-                best.cannot[#best.cannot + 1] = r
-            end
+    m = { can = {} }
+    for _, r in ipairs(ns.Market.MadeBy(id)) do
+        if Track.CanCraft(r, ctx.char) then
+            m.can[#m.can + 1] = r
+        else
+            m.cannot = m.cannot or {}
+            m.cannot[#m.cannot + 1] = r
         end
     end
-    if best.how == "craft" and best.buyUnit == nil then best.buyUnit = unit end
-    ctx.best[id] = best
-    return best
+    ctx.makers[id] = m
+    return m
 end
 
--- One node: { id, need, have, mailA, mailO, left, how, unit, buy, cost,
--- r, crafts, children, cannot }.
+-- One node: { id, need, have, mailA, mailO, left, how, unit (copper each:
+-- the buying average, or the materials when made; nil = no price), buy,
+-- cost (nil when part has no price), short (units without a price), src, r,
+-- crafts, children, cannot }.
+-- Make or buy is decided for the whole amount: buying 20 walks up the
+-- listings (after what other parts of the tree already bought), so a cheap
+-- first tier that wins for one unit can lose for twenty.
 local function Expand(id, need, ctx, depth)
     local node = { id = id, need = need }
     local have = math.min(ctx.bags[id] or 0, need)
@@ -124,21 +114,37 @@ local function Expand(id, need, ctx, depth)
     if m then m.o = m.o - o end
     rest = rest - o
     node.have, node.mailA, node.mailO, node.left = have, a, o, rest
-    local best = Best(id, ctx, depth)
-    node.unit, node.how, node.cannot, node.src = best.unit, best.how, best.cannot, best.src
+    local makers = Makers(id, ctx)
+    node.cannot = makers.cannot
+    local unit, src = P().ItemPrice(id)
+    node.src = src
+    node.unit = src ~= "unknown" and unit or nil
+    node.how = node.unit and "buy" or nil
     if rest > 0 then
-        if best.how == "craft" and depth < MAX_DEPTH then
-            local r = best.r
-            node.r, node.crafts, node.children = r, math.ceil(rest / math.max(r.makes or 1, 1)), {}
+        local from = ctx.bought[id] or 0
+        local cost, r
+        if depth < MAX_DEPTH and makers.can[1] then
+            -- Reagents priced after what the tree already bought of them.
+            cost, r = P().RouteCost(id, rest, ctx.MakersOf, 0, MAX_DEPTH - depth, nil, from, ctx.bought)
+        end
+        if r then
+            node.r, node.crafts, node.children, node.how = r, math.ceil(rest / math.max(r.makes or 1, 1)), {}, "craft"
+            node.unit = cost / rest
             for _, rg in ipairs(r.reagents or {}) do
                 node.children[#node.children + 1] = Expand(rg[1], rg[2] * node.crafts, ctx, depth + 1)
             end
             ctx.steps[#ctx.steps + 1] = node
         else
-            node.buy = rest
-            node.cost = best.unit and best.unit * rest or nil
+            local c, info = P().BuyCost(id, rest, from)
+            ctx.bought[id] = from + rest
+            local priced = rest - info.short
+            node.buy, node.cost, node.src = rest, c, info.src
+            node.short = info.short > 0 and info.short or nil
+            node.estimated = info.estimated or nil
+            node.unit = priced > 0 and info.partial / priced or nil
             ctx.shop[#ctx.shop + 1] = node
-            if best.unit then ctx.buyCost = ctx.buyCost + node.cost else ctx.unpriced = ctx.unpriced + 1 end
+            ctx.buyCost = ctx.buyCost + info.partial
+            if info.short > 0 then ctx.unpriced = ctx.unpriced + 1 end
         end
     end
     return node
@@ -177,8 +183,9 @@ function Track.Plan(r, count, charKey)
     local left = math.max(0, (count or 1) - done)
     local bags = {}
     for id, b in pairs(ns.Data.Bags()) do bags[id] = b.n end
-    local ctx = { char = charKey, best = {}, bags = bags, mail = tracked and Track.Mail(t) or {}, steps = {}, shop = {},
+    local ctx = { char = charKey, makers = {}, bought = {}, bags = bags, mail = tracked and Track.Mail(t) or {}, steps = {}, shop = {},
         buyCost = 0, unpriced = 0 }
+    function ctx.MakersOf(id) return Makers(id, ctx).can end
     local root = { id = r.creates, need = left * (r.makes or 1), r = r, crafts = left, children = {}, how = "craft", root = true,
         have = 0, mailA = 0, mailO = 0, left = left }
     for _, rg in ipairs(r.reagents or {}) do
@@ -188,8 +195,18 @@ function Track.Plan(r, count, charKey)
     local ok, why = Track.CanCraft(r, charKey)
     local plan = { r = r, count = count or 1, done = done, left = left, root = root, steps = ctx.steps, shop = ctx.shop,
         buyCost = ctx.buyCost, unpriced = ctx.unpriced, canCraft = ok, why = why, tracked = tracked }
-    local pr = ns.Market.CraftProfit(r)
-    plan.value = pr.value and pr.value * left or nil
+    -- What the products bring, by the planner's rule: the AH value only for as
+    -- many as the market listed at your last look, the rest at the vendor.
+    if r.creates then
+        local v, src, _, vendor, listed = P().SellValue(r.creates)
+        if src then
+            local units = left * (r.makes or 1)
+            local atAH = src == "ah" and math.min(units, listed or 0) or units
+            plan.value = atAH * v + (units - atAH) * (vendor or 0)
+            -- Supply unknown: the vendor part is all that is sure (at least).
+            plan.valueAtLeast = (src == "ah" and listed == nil) or nil
+        end
+    end
     -- Each step ready when every material it needs is in your bags.
     for _, step in ipairs(plan.steps) do
         step.ready = true

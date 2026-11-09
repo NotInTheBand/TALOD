@@ -97,12 +97,19 @@ local function db() return ns.DB() end
 local function Num(v) return type(v) == "number" and v or nil end
 
 function Economy.Char(key)
+    local mine = key == nil
     key = key or (ns.Gear and ns.Gear.CharKey())
     if not key then return nil end
     local c = db().economy[key]
     if not c then
         c = { log = {}, days = {} }
         db().economy[key] = c
+    end
+    -- Your name the server's way: on WoW Forever mail and trades name you
+    -- "First Surname", which the key ("First-Realm") does not hold.
+    if mine and ns.Guild and ns.Guild.Me then
+        local full = ns.Guild.Me()
+        if type(full) == "string" and c.full ~= full then c.full = full end
     end
     return c, key
 end
@@ -215,19 +222,47 @@ local MAIL_DAYS = 30
 -- [VERIFY] The sale letter comes an hour after the sale (vanilla); an expired / cancelled letter at once.
 local SOLD_MAIL_DELAY = 3600
 
+-- "Linen Cloth (5)" -> "Linen Cloth", 5: a stack's letter may name its count.
+local function SplitCount(name)
+    if type(name) ~= "string" then return nil, nil end
+    local base, n = name:match("^(.-)%s*%((%d+)%)$")
+    if base and base ~= "" then return base, tonumber(n) end
+    return name, nil
+end
+
+-- Units returned by an expired / cancelled letter: every attachment summed. A
+-- modern commodity listing can be larger than a stack, and comes back split
+-- into stacks: the first one alone would close a smaller listing instead.
+-- [VERIFY] how Forever returns a large expired commodity listing.
+local function AttachedCount(index)
+    local max = type(ATTACHMENTS_MAX_RECEIVE) == "number" and ATTACHMENTS_MAX_RECEIVE or 16
+    local total, any = 0, false
+    for j = 1, max do
+        local count = Num(select(4, S.CallMulti(4, GetInboxItem, index, j)))
+        if count then total, any = total + count, true end
+    end
+    return any and total or nil
+end
+
 function Economy.DescribeMail(index)
     local _, _, sender, subject, money, cod, daysLeft = S.CallMulti(7, GetInboxHeaderInfo, index)
-    local invoiceType, itemName, playerName = S.CallMulti(3, GetInboxInvoiceInfo, index)
+    -- Classic invoices also carry the sale (bid), buyout, deposit and the house's cut, and on
+    -- newer clients the count: they tell two listings of one item apart. [VERIFY] on Forever.
+    local invoiceType, itemName, playerName, bid, buyout, deposit, cut, _, _, _, count = S.CallMulti(11, GetInboxInvoiceInfo, index)
     local arrived = (type(daysLeft) == "number" and daysLeft >= 0 and daysLeft <= MAIL_DAYS)
         and math.floor(time() - (MAIL_DAYS - daysLeft) * 86400) or nil
     -- The buyer's name can be empty (seen on Forever).
     if playerName == "" then playerName = nil end
+    local named
+    itemName, named = SplitCount(itemName)
+    count = Num(count) or named
     if invoiceType == "seller" then
         return "Auction sold: " .. tostring(itemName or "?") .. (playerName and (" to " .. playerName) or ""), "auction",
-            { status = "sold", item = itemName, arrived = arrived }
+            { status = "sold", item = itemName, arrived = arrived, count = count, bid = Num(bid), buyout = Num(buyout),
+              deposit = Num(deposit), cut = Num(cut) }
     elseif invoiceType == "buyer" then
         return "Auction won: " .. tostring(itemName or "?") .. (playerName and (" from " .. playerName) or ""), "auction",
-            { status = "won", item = itemName }
+            { status = "won", item = itemName, count = count }
     elseif invoiceType == "seller_temp_invoice" then
         return "Auction sold (pending): " .. tostring(itemName or "?"), "auction", { status = "pending", item = itemName }
     end
@@ -237,10 +272,12 @@ function Economy.DescribeMail(index)
             local item = subj:sub(#prefix + 1):gsub("^[:%s]+", "")
             local lower = prefix:lower()
             local status = lower:find("expire") and "expired" or lower:find("cancel") and "cancelled" or lower:find("outbid") and "outbid" or nil
-            return subj, "auction", { status = status, item = item ~= "" and item or nil, arrived = arrived }
+            local base, n = SplitCount(item)
+            if status == "expired" or status == "cancelled" then n = AttachedCount(index) or n end
+            return subj, "auction", { status = status, item = base ~= "" and base or nil, arrived = arrived, count = n }
         end
     end
-    if type(sender) == "string" and Economy.OwnNames()[sender] then
+    if type(sender) == "string" and Economy.IsOwn(sender) then
         return "from " .. sender .. (subj ~= "" and (": " .. subj) or ""), "transfer"
     end
     if type(cod) == "number" and cod > 0 then
@@ -328,39 +365,129 @@ end
 local function ShortName(link) return type(link) == "string" and (link:match("|h%[(.-)%]|h") or link) or "?" end
 Economy.ShortName = ShortName
 
--- Marks the oldest open listing of this item as sold / expired / cancelled.
--- arrived: when its letter came; closedAt = when it really sold / ended
--- (ended = when you took the letter).
-local function SettleListing(c, itemName, status, received, arrived)
+-- How well a letter's facts fit an open listing: count, deposit and buyout
+-- each count when both sides know them; a count that differs weighs most
+-- (still a candidate: a commodity can sell part of its stack). Our deposit is
+-- the post's paid deposits spread over its listings, so it may be off by rounding.
+local function Fit(a, hint)
+    if not hint then return 0 end
+    local score = 0
+    if hint.count and a.count then
+        score = score + (hint.count == a.count and 4 or -8)
+    end
+    if hint.deposit and a.deposit then
+        if math.abs(hint.deposit - a.deposit) <= math.max(1, hint.deposit * 0.05) then score = score + 2 else score = score - 2 end
+    end
+    if hint.buyout and hint.buyout > 0 and a.buyout then
+        if hint.buyout == a.buyout then score = score + 2 else score = score - 1 end
+    end
+    return score
+end
+
+-- Closes the open listing of this item that a letter is about: the one whose
+-- count / deposit / buyout fit the letter best (hint, from the invoice, the
+-- subject or the returned stack), oldest first among equals. Without any of
+-- those it is the oldest listing of the item. arrived: when its letter came;
+-- closedAt = when it really sold / ended (ended = when you took the letter).
+local function SettleListing(c, itemName, status, received, arrived, hint)
     if not c.auctions or not itemName then return nil end
+    -- When the letter says when it came: the auction ended before that (a sale
+    -- an hour before its letter). A listing posted after that time cannot be
+    -- the one (a sale before the post is the wrong listing, not a sell time
+    -- of 0); one whose duration covers that time fits better. SOLD_MAIL_DELAY
+    -- of slack: `arrived` comes from the letter's days left, not exact.
+    local at = arrived and (arrived - (status == "sold" and SOLD_MAIL_DELAY or 0)) or nil
+    local best, bestScore
     for _, a in ipairs(c.auctions) do
-        if a.status == "listed" and ShortName(a.name) == itemName then
-            a.status, a.ended = status, time()
-            Changed()
-            if arrived then
-                a.closedAt = math.max(a.t or 0, arrived - (status == "sold" and SOLD_MAIL_DELAY or 0))
-            end
-            if received then
-                a.received = received
-                a.profit = received - (a.deposit or 0)
-            end
-            return a
+        if a.status == "listed" and ShortName(a.name) == itemName
+            and not (at and a.t and a.t > at + SOLD_MAIL_DELAY) then
+            local score = Fit(a, hint)
+            local hours = at and a.t and type(a.duration) == "string" and tonumber(a.duration:match("^(%d+)"))
+            if hours and at <= a.t + hours * 3600 + SOLD_MAIL_DELAY then score = score + 1 end
+            if not bestScore or score > bestScore then best, bestScore = a, score end
         end
     end
-    return nil
+    local a = best
+    if not a then return nil end
+    -- A commodity sold in parts: the letter is for some of the listing. That
+    -- part becomes its own sold row with its share of the deposit; the rest
+    -- stays listed for the next letter.
+    if status == "sold" and hint and hint.count and a.count and hint.count < a.count then
+        local k = hint.count
+        local share = a.deposit and math.floor(a.deposit * k / a.count + 0.5) or nil
+        c.nextAuction = (c.nextAuction or 0) + 1
+        local part = {}
+        for f, v in pairs(a) do part[f] = v end
+        part.id, part.count, part.deposit = c.nextAuction, k, share
+        -- Every row of the posting names it (id and posting time: ids are per
+        -- character): the sell rate counts the posting once, not each part.
+        a.of = a.of or ((a.id or 0) .. "@" .. (a.t or 0))
+        part.of = a.of
+        part.buyout = a.buyout and math.floor(a.buyout * k / a.count + 0.5) or nil
+        a.count, a.deposit = a.count - k, a.deposit and (a.deposit - share) or nil
+        a.buyout = a.buyout and (a.buyout - part.buyout) or nil
+        for i, x in ipairs(c.auctions) do
+            if x == a then table.insert(c.auctions, i + 1, part) break end
+        end
+        a = part
+    end
+    a.status, a.ended = status, time()
+    Changed()
+    if hint and hint.deposit and not a.deposit then a.deposit = hint.deposit end
+    if arrived then
+        a.closedAt = math.max(a.t or 0, arrived - (status == "sold" and SOLD_MAIL_DELAY or 0))
+    end
+    if received then
+        a.received = received
+        a.profit = received - (a.deposit or 0)
+    end
+    return a
 end
 Economy.SettleListing = SettleListing
 
--- Names of your characters (any realm), for transfers.
+-- A post's paid deposits over its listings in whole copper that add up to
+-- what was paid: floor(paid / n) each and 1c more for the first paid % n
+-- (100c over 3 is 34 + 33 + 33, not 33 x 3 = 99).
+local function SpreadDeposit(post)
+    local n = post.made and #post.made or 0
+    if n == 0 or not post.paid then return end
+    local base, extra = math.floor(post.paid / n), post.paid % n
+    for i, a in ipairs(post.made) do a.deposit = base + (i <= extra and 1 or 0) end
+end
+
+-- Names of your characters, for transfers: "name-realm" (lower case, realm
+-- without spaces or hyphens), from the character keys and, on WoW Forever,
+-- the server's "First Surname-Realm" each character noted (economy[key].full).
+-- A name alone is a different player on another realm.
+local function NameKey(name, realm)
+    return (tostring(name) .. "-" .. tostring(realm):gsub("[%s%-]", "")):lower()
+end
+
 function Economy.OwnNames()
     local names = {}
     for _, store in ipairs({ db().economy or {}, db().gear or {} }) do
-        for key in pairs(store) do
-            local name = key:match("^([^-]+)")
-            if name then names[name] = true end
+        for key, c in pairs(store) do
+            local name, realm = tostring(key):match("^([^-]+)%-(.+)$")
+            if name then names[NameKey(name, realm)] = true end
+            if type(c) == "table" and type(c.full) == "string" then
+                local fn, fr = c.full:match("^(.+)%-([^%-]+)$")
+                if fn then names[NameKey(fn, fr)] = true end
+            end
         end
     end
     return names
+end
+
+-- Whether a mail sender / recipient or trade partner is one of your
+-- characters. A name without a realm is on yours (mail and trade reach only it).
+function Economy.IsOwn(name)
+    if type(name) ~= "string" or name == "" then return false end
+    local G = ns.Guild
+    if G and G.Normal then name = G.Normal(name) or name end
+    local n, realm = name:match("^(.+)%-([^%-]+)$")
+    if not n then n, realm = name, S.Call(GetRealmName) end
+    if type(realm) ~= "string" then return false end
+    return Economy.OwnNames()[NameKey(n, realm)] == true
 end
 
 -- Letters taken from, oldest first, each waiting for its money / items. The
@@ -369,6 +496,7 @@ end
 -- give that money the next letter's name and leave the last one unnamed.
 local MAIL_WAIT = 60
 local mailQueue = {}
+local sendMoney                -- copper set on the letter being written (SetSendMailMoney)
 
 local function HookMail()
     HookAuctions()
@@ -386,12 +514,20 @@ local function HookMail()
     if type(TakeInboxMoney) == "function" then hooksecurefunc("TakeInboxMoney", function(i) Taking(i, true, false) end) end
     if type(TakeInboxItem) == "function" then hooksecurefunc("TakeInboxItem", function(i) Taking(i, false, true) end) end
     if type(AutoLootMailItem) == "function" then hooksecurefunc("AutoLootMailItem", function(i) Taking(i, true, true) end) end
+    -- The gold put on a letter: the mail frame sets it just before sending.
+    if type(SetSendMailMoney) == "function" then
+        hooksecurefunc("SetSendMailMoney", function(copper) sendMoney = Num(copper) end)
+    end
     if type(SendMail) == "function" then
         hooksecurefunc("SendMail", function(recipient, subject)
             if not db().economyEnabled then return end
-            local own = type(recipient) == "string" and Economy.OwnNames()[(recipient:match("^([^-]+)"))]
+            local own = Economy.IsOwn(recipient)
             detail.mail = "to " .. tostring(recipient or "?") .. ((type(subject) == "string" and subject ~= "") and (": " .. subject) or "")
             detail.mailAs, detail.mailInfo = own and "transfer" or nil, nil
+            -- How much of the letter's cost is gold sent (the rest is postage). [VERIFY] whether
+            -- GetSendMailMoney still holds it once SendMail returned.
+            detail.mailMoney = sendMoney or Num(S.Call(GetSendMailMoney))
+            sendMoney = nil
         end)
     end
 end
@@ -415,13 +551,16 @@ local function SetWindow(kind, isOpen)
             local name = S.Call(UnitName, "target")
             detail.loot = (S.Call(UnitIsDead, "target") and type(name) == "string") and name or nil
         elseif kind == "trade" then
-            local name = S.Call(UnitName, "NPC")
-            trade = { partner = type(name) == "string" and name or "?", give = {}, get = {}, giveMoney = 0, getMoney = 0 }
+            local name, second = S.CallMulti(2, UnitName, "NPC")
+            -- The partner's full name the server's way (on Forever the second value is the surname).
+            local full = type(name) == "string" and ns.Guild and ns.Guild.FullName and ns.Guild.FullName(name, type(second) == "string" and second or nil) or nil
+            trade = { partner = type(name) == "string" and name or "?", full = full, give = {}, get = {}, giveMoney = 0, getMoney = 0 }
         end
     else
         if not open[kind] then return end
         open[kind] = nil
         closed[kind] = GetTime()
+        if kind == "mail" then sendMoney = nil end
     end
 end
 
@@ -436,7 +575,11 @@ Economy.SetWindow = SetWindow
 ---------------------------------------------------------------------------
 local function Today(t) return date("%Y-%m-%d", t) end
 
-local function AddDay(c, t, amount, kind, money)
+-- refund: the part of a gain that is your own money coming back (an outbid
+-- bid, a sold auction's deposit). It is kept apart (d.ref) and taken off the
+-- spending when totals are read, so a bid and its return are neither income
+-- nor spending; the day's net and by-kind figures are unchanged.
+local function AddDay(c, t, amount, kind, money, refund)
     Changed()
     local key = Today(t)
     local d = c.days[key]
@@ -454,8 +597,12 @@ local function AddDay(c, t, amount, kind, money)
     if kind == "transfer" then
         -- Between your own characters: not income or spending for the account.
         if amount > 0 then d.tin = (d.tin or 0) + amount elseif amount < 0 then d.tout = (d.tout or 0) - amount end
+        -- Nor for this session's net (always the current character's data).
+        if session and amount ~= 0 then session.moved = (session.moved or 0) + amount end
     else
-        if amount > 0 then d.inc = d.inc + amount elseif amount < 0 then d.exp = d.exp - amount end
+        refund = (amount > 0 and refund and refund > 0) and math.min(refund, amount) or 0
+        if refund > 0 then d.ref = (d.ref or 0) + refund end
+        if amount > 0 then d.inc = d.inc + amount - refund elseif amount < 0 then d.exp = d.exp - amount end
     end
     if amount ~= 0 then d.by[kind] = (d.by[kind] or 0) + amount end
     d.money = money
@@ -472,7 +619,10 @@ end
 local function Record(c, e)
     -- Keep looting in one zone as one entry.
     local last = c.log[#c.log]
-    if e.kind == "loot" and last and last.kind == "loot" and last.zone == e.zone and e.t - (last.t2 or last.t) <= LOOT_MERGE then
+    -- Never across midnight: the entry's whole amount is shown on its day, as
+    -- the day totals book each part on its own.
+    if e.kind == "loot" and last and last.kind == "loot" and last.zone == e.zone and e.t - (last.t2 or last.t) <= LOOT_MERGE
+        and Today(e.t) == Today(last.t) then
         last.amount, last.t2 = last.amount + e.amount, e.t
         last.count = (last.count or 1) + 1
         last.value = (last.value or 0) + (e.value or 0)
@@ -490,18 +640,51 @@ end
 
 -- The letters a money / item change came from, taken off the queue: the one
 -- with exactly this money, else the oldest ones that add up to it (several
--- answers in one settle), else the oldest one.
-local function TakeLetters(dMoney)
+-- answers in one settle), else the oldest one with money the same way. A take
+-- that moves no money (or money the other way) never explains a money change:
+-- it would swallow gold you mailed out under another sender's name.
+-- exact: only a letter with exactly this money (a sent letter is the other candidate).
+-- ItemLetters(gained): the letters that move no money but whose items arrived
+-- in this settle ({ link, n } gained), every one of them, taken off the queue:
+-- with Open All several returned auctions (and a sale's money) land in one
+-- settle, and each closes its own listing.
+local function ItemLetters(gained)
+    local now = GetTime()
+    while mailQueue[1] and now - mailQueue[1].at > MAIL_WAIT do table.remove(mailQueue, 1) end
+    local units = {}
+    for _, it in ipairs(gained or {}) do
+        local name = ShortName(it[1])
+        units[name] = (units[name] or 0) + it[2]
+    end
+    local out, i = {}, 1
+    while next(units) and mailQueue[i] do
+        local m = mailQueue[i]
+        local item = m.amount == 0 and m.info and m.info.item
+        local need = item and (m.info.count or 1)
+        if item and units[item] and units[item] >= need then
+            units[item] = units[item] - need
+            if units[item] <= 0 then units[item] = nil end
+            out[#out + 1] = table.remove(mailQueue, i)
+        else
+            i = i + 1
+        end
+    end
+    return out
+end
+
+local function TakeLetters(dMoney, exact)
     local now = GetTime()
     while mailQueue[1] and now - mailQueue[1].at > MAIL_WAIT do table.remove(mailQueue, 1) end
     if #mailQueue == 0 then return {} end
     if dMoney ~= 0 then
+        local function Same(m) return m.amount ~= 0 and (m.amount > 0) == (dMoney > 0) end
         for i, m in ipairs(mailQueue) do
             if m.amount == dMoney then return { table.remove(mailQueue, i) } end
         end
+        if exact then return {} end
         local sum, n = 0, 0
         for _, m in ipairs(mailQueue) do
-            if m.amount ~= 0 then
+            if Same(m) then
                 sum, n = sum + m.amount, n + 1
                 if sum == dMoney then break end
             end
@@ -509,15 +692,18 @@ local function TakeLetters(dMoney)
         if n > 1 and sum == dMoney then
             local out, i = {}, 1
             while #out < n do
-                if mailQueue[i].amount ~= 0 then out[#out + 1] = table.remove(mailQueue, i) else i = i + 1 end
+                if Same(mailQueue[i]) then out[#out + 1] = table.remove(mailQueue, i) else i = i + 1 end
             end
             return out
         end
-    else
-        -- Items only: the oldest take that moves no money.
         for i, m in ipairs(mailQueue) do
-            if m.amount == 0 then return { table.remove(mailQueue, i) } end
+            if Same(m) then return { table.remove(mailQueue, i) } end
         end
+        return {}
+    end
+    -- Items only: the oldest take that moves no money, else the oldest one.
+    for i, m in ipairs(mailQueue) do
+        if m.amount == 0 then return { table.remove(mailQueue, i) } end
     end
     return { table.remove(mailQueue, 1) }
 end
@@ -540,13 +726,31 @@ function Economy.Settle()
         detail = kind and detail[kind] or nil, gained = ItemsOf(diff, 1), lost = ItemsOf(diff, -1) }
     if e.kind == "vendor" and dMoney < 0 and not e.gained and not e.lost then e.kind = "repair" end
     if e.kind == "mail" then
-        local letters = TakeLetters(dMoney)
-        if #letters == 0 and detail.mail then
-            -- Sent mail (postage, COD sent): named by the SendMail hook.
-            letters = { { text = detail.mail, as = detail.mailAs } }
+        local itemLetters = ItemLetters(e.gained)
+        local letters
+        if dMoney == 0 and #itemLetters > 0 then
+            letters = {}
+        elseif dMoney < 0 and detail.mail then
+            -- Money going out right after SendMail is that letter's (postage, gold sent),
+            -- unless a taken letter asks exactly this much (COD).
+            letters = TakeLetters(dMoney, true)
+        else
+            letters = TakeLetters(dMoney)
         end
-        detail.mail, detail.mailAs, detail.mailInfo = nil, nil, nil
-        if #letters == 0 then letters = { {} } end
+        if #letters == 0 and detail.mail and not (dMoney == 0 and #itemLetters > 0) then
+            -- Sent mail (postage, COD sent): named by the SendMail hook. Gold sent to one of
+            -- your characters is a transfer; the postage is still a mail cost.
+            local sent = detail.mailMoney
+            if detail.mailAs == "transfer" and sent and sent > 0 and dMoney < -sent then
+                letters = { { text = detail.mail, as = "transfer", amount = -sent }, { text = detail.mail .. " (postage)" } }
+            else
+                letters = { { text = detail.mail, as = detail.mailAs } }
+            end
+        end
+        detail.mail, detail.mailAs, detail.mailInfo, detail.mailMoney = nil, nil, nil, nil
+        if #letters == 0 and (dMoney ~= 0 or #itemLetters == 0) then letters = { {} } end
+        -- The letters that moved no money first: the money goes to the last one.
+        for i = #itemLetters, 1, -1 do table.insert(letters, 1, itemLetters[i]) end
         local left = dMoney
         for i, m in ipairs(letters) do
             local le = i == 1 and e or { t = now, kind = "mail", zone = e.zone, level = e.level }
@@ -555,19 +759,37 @@ function Economy.Settle()
             le.detail = m.text
             if m.as then le.kind = m.as end
             local info = m.info
+            local refund
             if le.kind == "auction" and info then
                 le.sub = info.status
                 local a = (info.status == "sold" or info.status == "expired" or info.status == "cancelled")
-                    and SettleListing(c, info.item, info.status, info.status == "sold" and le.amount > 0 and le.amount or nil, info.arrived)
+                    and SettleListing(c, info.item, info.status, info.status == "sold" and le.amount > 0 and le.amount or nil, info.arrived, info)
                 if a then le.listing = a.id end
+                if le.amount > 0 then
+                    -- A sale letter pays the deposit back with the sale; an outbid letter returns your bid.
+                    if info.status == "sold" then refund = info.deposit or (a and a.deposit)
+                    elseif info.status == "outbid" then refund = le.amount end
+                end
             end
-            AddDay(c, now, le.amount, le.kind, money)
+            if refund and refund > 0 then le.refund = math.min(refund, le.amount) end
+            AddDay(c, now, le.amount, le.kind, money, le.refund)
             Record(c, le)
         end
         return
     elseif e.kind == "auction" then
         local nowT = GetTime()
-        if pendingPost and nowT - pendingPost.at < 15 then
+        if pendingPost and pendingPost.done and nowT - pendingPost.at < 15 and dMoney < 0 and not e.lost
+            and not (pendingBuy and nowT - pendingBuy.at < 15) then
+            -- A deposit charged after the post's last listing was made: the server
+            -- charges in batches that need not match the items, so the last one can
+            -- come in the next settle. It is the same post's (no new listing).
+            local post = pendingPost
+            post.paid = (post.paid or 0) - dMoney
+            SpreadDeposit(post)
+            local listing = post.made[#post.made]
+            e.sub, e.listing = "posted", listing and listing.id
+            e.detail = "deposit for " .. tostring(listing and listing.name or post.name)
+        elseif pendingPost and not pendingPost.done and nowT - pendingPost.at < 15 then
             local post = pendingPost
             -- Several stacks (classic numStacks) are separate auctions with
             -- their own deposit and their own letter: one listing each. The
@@ -582,7 +804,8 @@ function Economy.Settle()
             if left - posted > 0 then
                 post.stacks, post.at = left - posted, nowT
             else
-                pendingPost = nil
+                -- Every listing is made; a deposit can still follow (above).
+                post.stacks, post.at, post.done = 0, nowT, true
             end
             c.auctions = c.auctions or {}
             -- The server charges the deposits in batches that need not match
@@ -599,8 +822,7 @@ function Economy.Settle()
                 c.auctions[#c.auctions + 1] = listing
                 post.made[#post.made + 1] = listing
             end
-            local deposit = post.paid and math.floor(post.paid / #post.made + 0.5) or nil
-            for _, a in ipairs(post.made) do a.deposit = deposit end
+            SpreadDeposit(post)
             while #c.auctions > 1000 do table.remove(c.auctions, 1) end
             e.sub, e.listing = "posted", listing.id
             e.detail = "Listed " .. tostring(listing.name) .. (listing.count and listing.count > 1 and (" x" .. listing.count) or "")
@@ -618,7 +840,7 @@ function Economy.Settle()
         elseif dMoney < 0 then
             e.sub, e.detail = "bid", "bid or buyout"
         elseif dMoney > 0 then
-            e.sub, e.detail = "refund", "refund"
+            e.sub, e.detail, e.refund = "refund", "refund", dMoney
         end
     end
     if e.kind == "trade" and trade then
@@ -627,7 +849,7 @@ function Economy.Settle()
         e.gaveMoney, e.gotMoney = trade.giveMoney, trade.getMoney
     end
     -- After the partner is known: a trade with one of your own characters is a transfer.
-    if e.kind == "trade" and e.detail and Economy.OwnNames()[(tostring(e.detail):match("^([^-]+)"))] then e.kind = "transfer" end
+    if e.kind == "trade" and e.detail and Economy.IsOwn((trade and trade.full) or tostring(e.detail)) then e.kind = "transfer" end
     if e.kind == "loot" then
         -- Only money and uncommon or better items are economy.
         local keep = {}
@@ -642,7 +864,7 @@ function Economy.Settle()
         if dMoney == 0 and not e.gained then return end
     end
     if e.kind == "other" and dMoney == 0 then return end
-    AddDay(c, now, dMoney, e.kind, money)
+    AddDay(c, now, dMoney, e.kind, money, e.refund)
     Record(c, e)
 end
 
@@ -694,12 +916,62 @@ end
 -- Summaries
 ---------------------------------------------------------------------------
 -- Net since tracking started this session, and per hour (nil under 5 min).
+-- Gold moved to or from your own characters is left out (like the account
+-- totals) and returned fourth.
 function Economy.Session()
     local now = Money()
     if not session or not now then return nil end
-    local net = now - session.money
+    local moved = session.moved or 0
+    local net = now - session.money - moved
     local hours = (GetTime() - session.at) / 3600
-    return net, hours >= 5 / 60 and math.floor(net / hours + 0.5) or nil, hours
+    return net, hours >= 5 / 60 and math.floor(net / hours + 0.5) or nil, hours, moved
+end
+
+-- Local midnight `back` days before the day of `t` (now by default). Built
+-- from the calendar date, not by subtracting hours: on a clock-change day a
+-- day is 23 or 25 hours long.
+function Economy.DayStart(t, back)
+    local d = date("*t", t or time())
+    return time({ year = d.year, month = d.month, day = d.day - (back or 0), hour = 0, min = 0, sec = 0 })
+end
+
+-- A listing no letter closed whose time is up (its duration and the mail's
+-- delay past its post): it cannot still be listed, and how it ended is
+-- unknown. An unknown duration counts as the longest (48 h).
+function Economy.ListingOver(a, now)
+    if not a or a.status ~= "listed" or not a.t then return false end
+    local hours = type(a.duration) == "string" and tonumber(a.duration:match("^(%d+)")) or 48
+    return (now or time()) > a.t + hours * 3600 + SOLD_MAIL_DELAY
+end
+
+-- What a set of listings came to: counts by outcome, what sales paid,
+-- deposits lost (unsold: expired or cancelled; a sold auction's deposit comes
+-- back with the sale) and profit = sum over sold of (received - deposit)
+-- minus the deposits lost. Listings still up are not counted in the money.
+function Economy.AuctionTotals(auctions)
+    local t = { listed = 0, sold = 0, expired = 0, cancelled = 0, income = 0, lost = 0, profit = 0, unknown = 0 }
+    local now = time()
+    for _, a in ipairs(auctions or {}) do
+        if Economy.ListingOver(a, now) then t.unknown = t.unknown + 1
+        elseif a.status == "listed" then t.listed = t.listed + 1
+        elseif a.status == "sold" then
+            t.sold = t.sold + 1
+            -- What the sale kept after the cut: the letter also pays your own
+            -- deposit back, which is not sale money. A sale whose payment is
+            -- unknown is counted apart (unpriced), never as 0.
+            if a.received then
+                t.income = t.income + (a.received - (a.deposit or 0))
+            else
+                t.unpriced = (t.unpriced or 0) + 1
+            end
+            t.profit = t.profit + (a.received and (a.received - (a.deposit or 0)) or 0)
+        elseif a.status == "expired" or a.status == "cancelled" then
+            t[a.status] = t[a.status] + 1
+            t.lost = t.lost + (a.deposit or 0)
+            t.profit = t.profit - (a.deposit or 0)
+        end
+    end
+    return t
 end
 
 -- Last known gold of every character with economy data, and the total.
@@ -746,20 +1018,38 @@ function Economy.FormatMoney(copper, signed)
 end
 local FormatMoney = Economy.FormatMoney
 
--- Income, expense and by-kind net over days since `since` (time; nil = all)
--- for one character's data. withTransfers: count money moved between your
--- characters (a single character's view).
-function Economy.Totals(c, since, withTransfers)
-    local inc, exp, by = 0, 0, {}
+-- Refunds (your own money back) come off the spending; more back than was
+-- spent in the period (a bid placed before it) is income. Net is unchanged.
+local function NetRefunds(inc, exp, ref)
+    if not ref or ref <= 0 then return inc, exp end
+    exp = exp - ref
+    if exp < 0 then inc, exp = inc - exp, 0 end
+    return inc, exp
+end
+Economy.NetRefunds = NetRefunds
+
+-- Raw sums: income, expense, by kind, refunds.
+local function RawTotals(c, since, withTransfers)
+    local inc, exp, ref, by = 0, 0, 0, {}
     local from = since and Today(since) or nil
     for day, d in pairs(c and c.days or {}) do
         if not from or day >= from then
             inc, exp = inc + d.inc + (withTransfers and (d.tin or 0) or 0), exp + d.exp + (withTransfers and (d.tout or 0) or 0)
+            ref = ref + (d.ref or 0)
             for k, v in pairs(d.by) do
                 if withTransfers or k ~= "transfer" then by[k] = (by[k] or 0) + v end
             end
         end
     end
+    return inc, exp, by, ref
+end
+
+-- Income, expense and by-kind net over days since `since` (time; nil = all)
+-- for one character's data. withTransfers: count money moved between your
+-- characters (a single character's view).
+function Economy.Totals(c, since, withTransfers)
+    local inc, exp, by, ref = RawTotals(c, since, withTransfers)
+    inc, exp = NetRefunds(inc, exp, ref)
     return inc, exp, by
 end
 
@@ -794,13 +1084,14 @@ function Economy.ScopeTotals(key, since)
 end
 
 function Economy.BuildScopeTotals(key, since)
-    local inc, exp, by = 0, 0, {}
+    local inc, exp, ref, by = 0, 0, 0, {}
     local single = key and key ~= "all"
     for _, c in pairs(Economy.Scope(key)) do
-        local i, e, b = Economy.Totals(c, since, single)
-        inc, exp = inc + i, exp + e
+        local i, e, b, r = RawTotals(c, since, single)
+        inc, exp, ref = inc + i, exp + e, ref + r
         for k, v in pairs(b) do by[k] = (by[k] or 0) + v end
     end
+    inc, exp = NetRefunds(inc, exp, ref)
     return inc, exp, by
 end
 
@@ -822,10 +1113,11 @@ function Economy.BuildScopeDays(key)
         -- This character's days with a gold reading, oldest first.
         local withMoney = {}
         for day, d in pairs(c.days or {}) do
-            local o = out[day] or { inc = 0, exp = 0, by = {} }
+            local o = out[day] or { inc = 0, exp = 0, ref = 0, by = {} }
             out[day] = o
             o.inc = o.inc + d.inc + (single and (d.tin or 0) or 0)
             o.exp = o.exp + d.exp + (single and (d.tout or 0) or 0)
+            o.ref = o.ref + (d.ref or 0)
             for kind, v in pairs(d.by) do
                 if single or kind ~= "transfer" then o.by[kind] = (o.by[kind] or 0) + v end
             end
@@ -835,19 +1127,27 @@ function Economy.BuildScopeDays(key)
         chars[#chars + 1] = { days = c.days, withMoney = withMoney, i = 0 }
     end
     local days = {}
-    for day in pairs(out) do days[#days + 1] = day end
+    for day, o in pairs(out) do
+        days[#days + 1] = day
+        o.inc, o.exp = NetRefunds(o.inc, o.exp, o.ref)
+    end
     table.sort(days)
     -- One pass over the days: each character's pointer moves to its last
     -- reading on or before the day.
+    -- Before a character's first reading its gold is unknown, not 0: a sum
+    -- over several characters is known only from the day each of them has one
+    -- (an alt first logged in with 1000g is not a 1000g gain).
+    local readers = 0
+    for _, ch in ipairs(chars) do if #ch.withMoney > 0 then readers = readers + 1 end end
     for _, day in ipairs(days) do
-        local total, any = 0, false
+        local total, have = 0, 0
         for _, ch in ipairs(chars) do
             local list = ch.withMoney
             while list[ch.i + 1] and list[ch.i + 1] <= day do ch.i = ch.i + 1 end
             local best = list[ch.i]
-            if best then total, any = total + ch.days[best].money, true end
+            if best then total, have = total + ch.days[best].money, have + 1 end
         end
-        out[day].money = any and total or nil
+        out[day].money = (have > 0 and have == readers) and total or nil
     end
     return out, days
 end

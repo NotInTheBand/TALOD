@@ -22,7 +22,7 @@
 -- Ladders: when a look shows every auction of an item (a full scan, an
 -- exact search on one page, a commodity / item result list) its whole price
 -- ladder is kept too, newest only: TALODDB.ladders["Realm-Faction"]
--- [itemID] = { t, l = "unit:qty[:mine],...", a, s, top, tn, my, part, bid,
+-- [itemID] = { t, l = "unit:qty[:mine[:stack]],...", a, s, top, tn, my, part, bid,
 -- more, c }: price tiers cheapest first (at most MAX_TIERS; `more` units above
 -- them), auctions, distinct sellers / the top seller's units and name (only
 -- when every row named its seller), your own units, part = some auctions
@@ -69,35 +69,118 @@ local function Realm(create)
     return all[key]
 end
 
+-- Copper per unit kept to 1/10000 copper: a stack's buyout over its count
+-- (20 for 39c is 1.95c each, 20 for 21c is 1.05c). Whole copper per unit made
+-- cheap stacks look up to twice as dear, merged different prices into one
+-- and undercut by a whole copper a unit; amounts are rounded once, where they
+-- are summed or shown. Never 0: a 9c stack of 200 is not free.
+local function Exact(x) return math.max(1e-4, math.floor(x * 10000 + 0.5) / 10000) end
+Prices.Exact = Exact
+
+-- The player's calendar day of `t` as a day number (t / 86400 is the UTC
+-- day: for a player at UTC-7 it ends at 5 pm, splitting one evening's looks
+-- into two days and joining it to the next day's). The offset is read once
+-- per hour (date() is slow, a walk over every item asks thousands of times).
+local function CivilDays(y, m, d)
+    y = m <= 2 and y - 1 or y
+    local era = math.floor(y / 400)
+    local yoe = y - era * 400
+    local doy = math.floor((153 * ((m + 9) % 12) + 2) / 5) + d - 1
+    return era * 146097 + yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy - 719468
+end
+local offsets, nOffsets = {}, 0
+local function UtcOffset(t)
+    local h = math.floor(t / 3600)
+    local off = offsets[h]
+    if not off then
+        local l, u = date("*t", h * 3600), date("!*t", h * 3600)
+        off = (CivilDays(l.year, l.month, l.day) - CivilDays(u.year, u.month, u.day)) * 86400
+            + (l.hour - u.hour) * 3600 + (l.min - u.min) * 60
+        if nOffsets >= 4096 then offsets, nOffsets = {}, 0 end
+        offsets[h], nOffsets = off, nOffsets + 1
+    end
+    return off
+end
+function Prices.DayKey(t) return math.floor((t + UtcOffset(t)) / 86400) end
+-- Local noon of a day key: where that day's point is drawn (and dated).
+function Prices.DayNoon(day)
+    local t = day * 86400 + 43200
+    return t - UtcOffset(t)
+end
+
 -- Days of a daily summary string: { [day] = { day, low, high, units } }.
 local function ParseDays(d)
     local out = {}
-    for day, lo, hi, n in (type(d) == "string" and d or ""):gmatch("(%d+):(%d+):(%d+):(%d+)") do
+    -- Units may be empty: no look that day said how many were listed.
+    for day, lo, hi, n in (type(d) == "string" and d or ""):gmatch("(%d+):([%d%.]+):([%d%.]+):(%d*)") do
         day = tonumber(day)
         out[day] = { day, tonumber(lo), tonumber(hi), tonumber(n) }
     end
     return out
 end
 
--- Folds one look into the daily summary: lowest, highest, most units that day.
-local function FoldDay(d, t, p, n)
-    local days = ParseDays(d)
-    local day = math.floor(t / 86400)
-    local e = days[day]
-    if e then
-        e[2], e[3], e[4] = math.min(e[2], p), math.max(e[3], p), math.max(e[4], n or 0)
-    else
-        days[day] = { day, p, p, n or 0 }
-    end
+-- The larger of two unit counts where nil is unknown (never 0: an unknown
+-- count read as 0 would look like every unit sold).
+local function MaxN(a, b)
+    if a == nil then return b end
+    if b == nil then return a end
+    return math.max(a, b)
+end
+Prices.MaxN = MaxN
+
+-- A daily summary as its string, the last MAX_DAYS days.
+local function DaysText(days)
     local order = {}
     for k in pairs(days) do order[#order + 1] = k end
     table.sort(order)
     local parts = {}
     for i = math.max(1, #order - MAX_DAYS + 1), #order do
         local x = days[order[i]]
-        parts[#parts + 1] = x[1] .. ":" .. x[2] .. ":" .. x[3] .. ":" .. x[4]
+        parts[#parts + 1] = x[1] .. ":" .. x[2] .. ":" .. x[3] .. ":" .. (x[4] or "")
     end
     return table.concat(parts, ",")
+end
+
+-- Folds one look into the daily summary: lowest, highest, most units that day.
+local function FoldDay(d, t, p, n)
+    local days = ParseDays(d)
+    local day = Prices.DayKey(t)
+    local e = days[day]
+    if e then
+        e[2], e[3], e[4] = math.min(e[2], p), math.max(e[3], p), MaxN(e[4], n)
+    else
+        days[day] = { day, p, p, n }
+    end
+    return DaysText(days)
+end
+
+-- Older saves keyed the daily summary by the UTC day (t / 86400);
+-- the looks are now folded by the local day, so the two keys of one evening
+-- would merge another day's units into it (Store migration v4). The days the
+-- kept looks cover are folded again from them by the local day; older days
+-- keep their key (only the day number was saved: they cannot be moved).
+function Prices.RekeyDays(d)
+    for _, realm in pairs(type(d) == "table" and d or {}) do
+        for _, e in pairs(type(realm) == "table" and realm or {}) do
+            if type(e) == "table" and type(e.d) == "string" then
+                local looks = Prices.Looks(e)
+                local t0
+                for _, x in ipairs(looks) do t0 = math.min(t0 or x.t, x.t) end
+                if t0 then
+                    local days = ParseDays(e.d)
+                    local cut = math.min(math.floor(t0 / 86400), Prices.DayKey(t0))
+                    for day in pairs(days) do if day >= cut then days[day] = nil end end
+                    for _, x in ipairs(looks) do
+                        local day = Prices.DayKey(x.t)
+                        local y = days[day]
+                        if y then y[2], y[3], y[4] = math.min(y[2], x.p), math.max(y[3], x.p), MaxN(y[4], x.n)
+                        else days[day] = { day, x.p, x.p, x.n } end
+                    end
+                    e.d = DaysText(days)
+                end
+            end
+        end
+    end
 end
 
 -- Every write here bumps the "prices" source (Data.lua): prices, ladders and
@@ -207,23 +290,39 @@ end
 
 -- One sighting: `unit` copper each, `qty` units in `auctions` auctions.
 -- rough: the price comes from a browse row (not checked per unit).
-function Prices.Record(id, unit, qty, now, auctions, name, rough)
+-- fresh: a new complete read of the item (an exact search's first page, a
+-- commodity / item result list, a full scan): it shows the market as it is
+-- now, so inside the visit it replaces the price and counts instead of
+-- keeping the visit's lowest (an auction bought out since is not the price).
+function Prices.Record(id, unit, qty, now, auctions, name, rough, fresh)
     if not db().auctionPrices or type(id) ~= "number" or type(unit) ~= "number" or unit <= 0 then return end
     local realm = Realm(true)
     if not realm then return end
     Bumped()
     now = now or time()
-    unit = math.floor(unit + 0.5)
+    unit = Exact(unit)
     local e = realm[id]
     if type(name) ~= "string" or name == "" then name = e and e.name or nil end
-    if e and now - e.t <= SESSION then
-        e.p, e.t = math.min(e.p, unit), now
-        e.n = math.max(e.n or 0, qty or 0)
-        if auctions then e.a = math.max(e.a or 0, auctions) end
+    -- One look = one visit: sightings within SESSION of the look's first one
+    -- merge. The window does not slide (e.t stays): a sighting every 9 minutes
+    -- for hours would otherwise be one look holding the lowest of all of them.
+    if e and now >= e.t and now - e.t <= SESSION then
+        if rough and not e.b then
+            -- A browse row may not be per unit: it never changes an exact look's price.
+        elseif not rough and e.b then
+            -- The first exact read replaces the rough price.
+            e.p, e.b = unit, nil
+        elseif fresh and not rough then
+            e.p, e.n, e.a = unit, qty, auctions
+        else
+            e.p = math.min(e.p, unit)
+        end
+        if not (fresh and not rough) then
+            e.n = MaxN(e.n, qty)
+            if auctions then e.a = math.max(e.a or 0, auctions) end
+        end
         e.name = name
         e.c = ns.Store.Me() or e.c
-        -- One exact read in the look makes it exact.
-        if not rough then e.b = nil end
         return e
     end
     local h = e and e.h
@@ -232,7 +331,7 @@ function Prices.Record(id, unit, qty, now, auctions, name, rough)
         h = AddLook(h, e)
         d = FoldDay(d, e.t, e.p, e.n)
     end
-    e = { p = unit, t = now, n = qty or 0, a = auctions, name = name, h = h, d = d, c = ns.Store.Me(),
+    e = { p = unit, t = now, n = qty, a = auctions, name = name, h = h, d = d, c = ns.Store.Me(),
         b = rough and 1 or nil }
     realm[id] = e
     return e
@@ -307,18 +406,25 @@ function Prices.History(id, mode)
     if e then looks[#looks + 1] = { t = e.t, p = e.p, n = e.n, a = e.a, c = e.c, b = e.b and true or nil } end
     if #old > 0 then table.sort(looks, function(a, b) return a.t < b.t end) end
     if mode ~= "days" then return looks end
-    local days = ParseDays(e and e.d or oldDays)
+    -- The archived daily summary and the live one together: an item that came
+    -- back after the cleanup archived it has both (min / max / most units
+    -- per day: folding a day twice changes nothing).
+    local days = ParseDays(oldDays)
+    for day, x in pairs(ParseDays(e and e.d)) do
+        local y = days[day]
+        if y then y[2], y[3], y[4] = math.min(y[2], x[2]), math.max(y[3], x[3]), MaxN(y[4], x[4]) else days[day] = x end
+    end
     for _, pt in ipairs(looks) do
-        local day = math.floor(pt.t / 86400)
+        local day = Prices.DayKey(pt.t)
         local x = days[day]
         if x then
-            x[2], x[3], x[4] = math.min(x[2], pt.p), math.max(x[3], pt.p), math.max(x[4], pt.n or 0)
+            x[2], x[3], x[4] = math.min(x[2], pt.p), math.max(x[3], pt.p), MaxN(x[4], pt.n)
         else
-            days[day] = { day, pt.p, pt.p, pt.n or 0 }
+            days[day] = { day, pt.p, pt.p, pt.n }
         end
     end
     local out = {}
-    for day, x in pairs(days) do out[#out + 1] = { t = day * 86400 + 43200, day = day, p = x[2], hi = x[3], n = x[4] } end
+    for day, x in pairs(days) do out[#out + 1] = { t = Prices.DayNoon(day), day = day, p = x[2], hi = x[3], n = x[4] } end
     table.sort(out, function(a, b) return a.day < b.day end)
     return out
 end
@@ -367,8 +473,11 @@ end
 
 -- rows: { { unit, qty, owner, mine } }: unit nil = bid only; owner nil =
 -- not said (then no seller counts); mine = units of yours in the row (or
--- true: all of them).
-function Prices.RecordLadder(id, rows, partial, now)
+-- true: all of them). whole: every row is one auction bought whole (the
+-- legacy list, an item's auctions); without it rows are a commodity's prices,
+-- bought by the unit. A whole ladder keeps the stack size per tier (one tier
+-- per price and stack size): 3 Linen out of a stack of 20 cost the stack.
+function Prices.RecordLadder(id, rows, partial, now, whole)
     if not db().auctionPrices or type(id) ~= "number" or type(rows) ~= "table" then return end
     local store = Ladders(true)
     if not store then return end
@@ -379,11 +488,13 @@ function Prices.RecordLadder(id, rows, partial, now)
         if type(qty) == "number" and qty > 0 then
             auctions = auctions + 1
             if type(unit) == "number" and unit > 0 then
-                unit = math.floor(unit + 0.5)
+                unit = Exact(unit)
                 local mine = r[4] == true and qty or (type(r[4]) == "number" and math.min(qty, r[4]) or 0)
-                local t = tiers[unit] or { 0, 0 }
+                local k = whole and math.floor(qty) or nil
+                local key = k and (unit .. "/" .. k) or unit
+                local t = tiers[key] or { 0, 0, unit, k }
                 t[1], t[2] = t[1] + qty, t[2] + mine
-                tiers[unit] = t
+                tiers[key] = t
                 my = my + mine
             else
                 bid = bid + qty
@@ -396,13 +507,16 @@ function Prices.RecordLadder(id, rows, partial, now)
         end
     end
     local order = {}
-    for unit in pairs(tiers) do order[#order + 1] = unit end
-    table.sort(order)
+    for _, t in pairs(tiers) do order[#order + 1] = t end
+    table.sort(order, function(a, b)
+        if a[3] ~= b[3] then return a[3] < b[3] end
+        return (a[4] or 0) < (b[4] or 0)
+    end)
     local parts, more = {}, 0
-    for i, unit in ipairs(order) do
-        local t = tiers[unit]
+    for i, t in ipairs(order) do
         if i <= MAX_TIERS then
-            parts[#parts + 1] = unit .. ":" .. t[1] .. (t[2] > 0 and (":" .. t[2]) or "")
+            -- "unit:qty[:mine[:stack]]"
+            parts[#parts + 1] = t[3] .. ":" .. t[1] .. ((t[2] > 0 or t[4]) and (":" .. t[2]) or "") .. (t[4] and (":" .. t[4]) or "")
         else
             more = more + t[1]
         end
@@ -421,7 +535,12 @@ function Prices.RecordLadder(id, rows, partial, now)
     return e
 end
 
--- { t, tiers = { { u, q, m } } cheapest first, units (with a buyout),
+-- A ladder's tiers, cheapest first: unit, qty, mine, stack ("": by the unit).
+local function EachTier(l)
+    return l:gmatch("([%d%.]+):(%d+):?(%d*):?(%d*)")
+end
+
+-- { t, tiers = { { u, q, m, k (stack size: whole auctions only) } } cheapest first, units (with a buyout),
 -- auctions, sellers, top, topName, mine, partial, bidOnly, more } or nil.
 function Prices.Ladder(id)
     local store = Ladders(false)
@@ -429,13 +548,95 @@ function Prices.Ladder(id)
     if type(e) ~= "table" or type(e.l) ~= "string" then return nil end
     local out = { t = e.t, tiers = {}, units = 0, auctions = e.a, sellers = e.s, top = e.top, topName = e.tn,
         mine = e.my or 0, partial = e.part and true or false, bidOnly = e.bid or 0, more = e.more or 0 }
-    for u, q, m in e.l:gmatch("(%d+):(%d+):?(%d*)") do
-        local tier = { u = tonumber(u), q = tonumber(q), m = tonumber(m) or 0 }
+    for u, q, m, k in EachTier(e.l) do
+        local tier = { u = tonumber(u), q = tonumber(q), m = tonumber(m) or 0, k = tonumber(k) }
         out.tiers[#out.tiers + 1] = tier
         out.units = out.units + tier.q
     end
     out.units = out.units + out.more
     return out
+end
+
+-- Covering `need` units from the tiers (other sellers' units only): cost,
+-- units got. A commodity tier sells by the unit; a tier of whole auctions
+-- only whole stacks (the legacy list buys the whole auction or nothing).
+-- Units short are covered by the vendor at maxUnit (not bought here: the
+-- caller adds the vendor part); without one, covering more units always wins
+-- over paying less.
+-- Whole stacks need every count of a tier weighed, none included: taking as
+-- many as fit first is not the cheapest (two 19-stacks at 100c a unit then a
+-- 20-stack at 105c cost 3800c for 20 units; the 20-stack alone costs 2100c).
+-- A min-cost cover (bounded knapsack, each tier's stacks split 1, 2, 4, ...)
+-- over units got, capped at need: cost[g] / got[g] = the cheapest way to hold
+-- g units (or `need` and more). By the unit only (no stack over 1), the
+-- cheapest units first is already the best.
+local function Cover(tiers, need, maxUnit)
+    if need <= 0 then return 0, 0 end
+    local use, stacked = {}, false
+    for _, t in ipairs(tiers) do
+        local q = math.max(0, t.q - (t.m or 0))
+        if q > 0 and not (maxUnit and t.u > maxUnit) then
+            use[#use + 1] = t
+            if t.k and t.k > 1 then stacked = true end
+        end
+    end
+    if not stacked then
+        local cost, got = 0, 0
+        for _, t in ipairs(use) do
+            if got >= need then break end
+            local take = math.min(math.max(0, t.q - (t.m or 0)), need - got)
+            cost, got = cost + take * t.u, got + take
+        end
+        return cost, got
+    end
+    local cost, got = { [0] = 0 }, { [0] = 0 }
+    for _, t in ipairs(use) do
+        local q = math.max(0, t.q - (t.m or 0))
+        local k = (t.k and t.k > 0) and t.k or 1
+        local left = math.min(math.floor(q / k), math.ceil(need / k))
+        local piece = 1
+        while left > 0 do
+            local p = math.min(piece, left)
+            local units, c = p * k, p * k * t.u
+            for g = need, 0, -1 do
+                local base = cost[g]
+                if base then
+                    local ng, nc = math.min(need, g + units), base + c
+                    if not cost[ng] or nc < cost[ng] - 1e-9 then cost[ng], got[ng] = nc, got[g] + units end
+                end
+            end
+            left, piece = left - p, piece * 2
+        end
+    end
+    -- Units short are bought from the vendor at maxUnit; without one, the most
+    -- units the ladder can give win, then the cheapest.
+    local bestG
+    for g = need, 0, -1 do
+        if cost[g] then
+            if not bestG then
+                bestG = g
+                if not maxUnit then break end
+            elseif cost[g] + (need - g) * maxUnit < cost[bestG] + (need - bestG) * maxUnit - 1e-9 then
+                bestG = g
+            end
+        end
+    end
+    return cost[bestG], got[bestG]
+end
+
+-- Buying `n` units along the price ladder (cheapest first, other sellers'
+-- auctions only): copper you pay (rounded up once, for the whole), units you
+-- get (more than n when only a whole stack covers the rest: the surplus is
+-- yours, the money is spent all the same), ladder age (s), partial (more
+-- pages / more tiers than kept). maxUnit (optional): stop at tiers dearer
+-- than this (a vendor that sells it cheaper). nil without a ladder.
+-- The lowest price times n assumes every unit is as cheap as the cheapest
+-- auction: wrong as soon as the cheapest tier holds fewer than n.
+function Prices.LadderBuy(id, n, maxUnit)
+    local L = Prices.Ladder(id)
+    if not L or type(n) ~= "number" then return nil end
+    local cost, got = Cover(L.tiers, math.floor(n), maxUnit)
+    return math.ceil(cost - 0.05), got, time() - (L.t or 0), (L.partial or (L.more or 0) > 0) and true or false
 end
 
 -- Prices.Ladder as columns, no table per tier (the desk reads thousands of
@@ -448,11 +649,13 @@ function Prices.LadderColumns(id, into)
     if type(e) ~= "table" or type(e.l) ~= "string" then return nil end
     local c = into or { u = {}, q = {}, m = {} }
     local U, Q, M = c.u, c.q, c.m
+    c.k = c.k or {}
+    local K = c.k
     local count, units = 0, 0
-    for u, q, m in e.l:gmatch("(%d+):(%d+):?(%d*)") do
+    for u, q, m, k in EachTier(e.l) do
         count = count + 1
         q = tonumber(q)
-        U[count], Q[count], M[count] = tonumber(u), q, tonumber(m) or 0
+        U[count], Q[count], M[count], K[count] = tonumber(u), q, tonumber(m) or 0, tonumber(k) or false
         units = units + q
     end
     c.count = count
@@ -467,7 +670,7 @@ function Prices.AllLadders() return Ladders(false) or {} end
 ---------------------------------------------------------------------------
 -- Bids: auctions whose next bid is under the item's lowest buyout
 ---------------------------------------------------------------------------
--- TALODDB.ahBids["Realm-Faction"][itemID] = { t, api, low, c, l =
+-- TALODDB.ahBids["Realm-Faction"][itemID] = { t, api, low, c, part, l =
 -- { "count:next:buyout:band:flags", ... } }: the newest look of each item,
 -- its BID_ROWS cheapest auctions per unit to bid on (others' only). next =
 -- the least the game takes as your bid (the whole auction), buyout 0 = none,
@@ -515,19 +718,24 @@ end
 -- rows: { { count, next, buyout, band, high, bids } } of others' auctions (next
 -- and buyout for the whole auction, nil = none / unknown). api "legacy" or
 -- "modern" (which bands). merge: a later page of the same search adds to
--- the look instead of replacing it.
-function Prices.RecordBids(id, rows, api, now, merge, store)
+-- the look instead of replacing it. partial: the search had pages not read,
+-- so `low` may not be the item's cheapest buyout (Market.Bids: no saving).
+function Prices.RecordBids(id, rows, api, now, merge, store, partial)
     if not db().auctionPrices or type(id) ~= "number" or type(rows) ~= "table" then return end
     store = store or BidStore(true)
     if not store then return end
     now = now or time()
-    local list, seen, low = {}, {}, nil
+    -- Every row of this read is an auction of its own (two sellers' identical
+    -- stacks are two chances to bid). Merging with the earlier read keeps,
+    -- per identical row, the larger count of the two reads: a page read again
+    -- is not new auctions.
+    local list, low = {}, nil
+    local oldRows, newCount = {}, {}
     local old = store[id]
     if merge and type(old) == "table" and old.api == api and now - (old.t or 0) <= BID_MERGE then
         low = old.low
         for _, s in ipairs(type(old.l) == "table" and old.l or {}) do
-            local r = ParseBid(s)
-            if r and not seen[s] then seen[s] = true list[#list + 1] = r end
+            if ParseBid(s) then oldRows[#oldRows + 1] = s end
         end
     end
     for _, r in ipairs(rows) do
@@ -545,8 +753,15 @@ function Prices.RecordBids(id, rows, api, now, merge, store)
                 band = (type(r[4]) == "number" and r[4] >= 1 and r[4] <= 4) and math.floor(r[4]) or nil,
                 high = r[5] == true, bids = r[6] == true }
             local s = BidString(row)
-            if not seen[s] then seen[s] = true list[#list + 1] = row end
+            newCount[s] = (newCount[s] or 0) + 1
+            list[#list + 1] = row
         end
+    end
+    -- Earlier rows beyond what this read holds of the same kind stay.
+    local used = {}
+    for _, s in ipairs(oldRows) do
+        used[s] = (used[s] or 0) + 1
+        if used[s] > (newCount[s] or 0) then list[#list + 1] = ParseBid(s) end
     end
     -- A bid is worth a look only under the cheapest buyout (with none listed:
     -- every one, Market compares it with the usual price).
@@ -563,7 +778,7 @@ function Prices.RecordBids(id, rows, api, now, merge, store)
     local parts = {}
     for i = 1, math.min(#keep, BID_ROWS) do parts[i] = BidString(keep[i]) end
     Bumped()
-    local e = { t = now, api = api, low = low and math.floor(low + 0.5) or nil, l = parts, c = ns.Store.Me() }
+    local e = { t = now, api = api, low = low and Exact(low) or nil, l = parts, c = ns.Store.Me(), part = partial and true or nil }
     store[id] = e
     return e
 end
@@ -587,7 +802,7 @@ function Prices.Bids(id, now)
     local e = store and store[id]
     if type(e) ~= "table" or type(e.l) ~= "table" then return nil end
     now = now or time()
-    local out = { t = e.t, api = e.api, low = e.low, rows = {} }
+    local out = { t = e.t, api = e.api, low = e.low, partial = e.part and true or false, rows = {} }
     for _, s in ipairs(e.l) do
         local r = ParseBid(s)
         if r then
@@ -645,12 +860,14 @@ end
 -- addon), from a hook on QueryAuctionItems: { text, page, exact, all, at }.
 -- Pages of one exact search add up to one ladder: { text, id, rows, at }.
 local PAGE_SIZE = 50
-local lastQuery, pages
+local lastQuery, pages, bidPages
 local function HookQueries()
     if type(QueryAuctionItems) ~= "function" or type(hooksecurefunc) ~= "function" then return end
-    hooksecurefunc("QueryAuctionItems", function(text, _, _, page, _, _, getAll, exact)
+    hooksecurefunc("QueryAuctionItems", function(text, minLevel, maxLevel, page, usable, rarity, getAll, exact, filters)
         lastQuery = { text = type(text) == "string" and text or "", page = type(page) == "number" and page or 0,
-            exact = exact and true or false, all = getAll and true or false, at = GetTime() }
+            exact = exact and true or false, all = getAll and true or false, at = GetTime(),
+            -- Any filter beyond the text: an empty answer then proves nothing about the item.
+            filtered = (minLevel or maxLevel or usable or (rarity and rarity ~= -1 and rarity ~= 0) or filters) and true or false }
     end)
 end
 Prices.HookQueries = HookQueries
@@ -661,13 +878,28 @@ function Prices.LastQuery() return lastQuery end
 local function ReadLegacyList()
     if type(GetNumAuctionItems) ~= "function" or type(GetAuctionItemInfo) ~= "function" then return 0 end
     local n, total = S.CallMulti(2, GetNumAuctionItems, "list")
-    if type(n) ~= "number" or n <= 0 then return 0 end
+    if type(n) == "number" and n <= 0 then
+        -- A search for one item by its name that found nothing: none of its
+        -- auctions is up, so the bids kept from an earlier look are gone too
+        -- (as a full scan or an empty item result clears them).
+        local q = lastQuery
+        if q and not q.all and not q.filtered and (q.page or 0) == 0 and q.text ~= "" then
+            local want = q.text:lower()
+            for id, e in pairs(Realm(false) or {}) do
+                if type(e) == "table" and type(e.name) == "string" and e.name:lower() == want then
+                    Prices.RecordBids(id, {}, "legacy")
+                end
+            end
+        end
+        return 0
+    end
+    if type(n) ~= "number" then return 0 end
     -- A full scan's list (getAll): the AH helper reads it in chunks, and the
     -- game fires this event again for it as item info loads, during and after
     -- that read. Reading it here would read every row at once.
     if (lastQuery and lastQuery.all) or n > PAGE_SIZE or Prices.Bulk() then return 0 end
     local low, qty, auctions, names, rows, bids = {}, {}, {}, {}, {}, {}
-    local only
+    local only, freshID
     local me = Prices.PlayerName()
     for i = 1, n do
         local v = { S.CallMulti(17, GetAuctionItemInfo, "list", i) }
@@ -701,23 +933,79 @@ local function ReadLegacyList()
     local q = lastQuery
     local named = q and only and (q.exact or (names[only] and q.text:lower() == tostring(names[only]):lower()))
     if only and (named or not more) then
-        if more then auctions[only] = total end
-        -- Page by page: the ladder adds this page to the earlier ones of the same search.
+        -- The game's total counts the whole query: that item's own auctions only
+        -- for an exact search (a name search also finds "Bolt of Linen Cloth").
+        if more then auctions[only] = (q and q.exact) and total or nil end
+        -- Page by page: the ladder joins this page to the earlier ones of the same
+        -- search. Each page once: the game fires this event again for a page as
+        -- item info loads (and a page can be read again), which replaces it.
         local page = q and q.page or 0
-        if page > 0 and pages and pages.id == only and pages.text == (q and q.text) and GetTime() - pages.at < 300 then
-            for _, r in ipairs(rows) do pages.rows[#pages.rows + 1] = r end
-            pages.at = GetTime()
-        else
-            pages = { id = only, text = q and q.text, rows = rows, at = GetTime() }
+        -- A new query for the first page starts over; the same query firing again does not.
+        local queryAt = q and q.at
+        if not (pages and pages.id == only and pages.text == (q and q.text) and GetTime() - pages.at < 300)
+            or (page == 0 and pages.firstAt ~= queryAt) then
+            pages = { id = only, text = q and q.text, byPage = {}, at = GetTime(), firstAt = page == 0 and queryAt or nil }
+            -- A new search's first page: a new read of the item (Prices.Record's
+            -- fresh). Only for a search the hook saw start: without it, a page
+            -- cannot be told from a later page of the same search.
+            freshID = (page == 0 and queryAt) and only or nil
         end
-        Prices.RecordLadder(only, pages.rows, more and #pages.rows < total)
+        pages.byPage[page], pages.at = rows, GetTime()
+        local all = {}
+        for _, list in pairs(pages.byPage) do
+            for _, r in ipairs(list) do all[#all + 1] = r end
+        end
+        local partial = more and #all < total
+        Prices.RecordLadder(only, all, partial, nil, true)
+        -- The supply: every page of this search so far, not this page alone;
+        -- unknown until the pages read cover every auction (a part read as the
+        -- whole would look like units sold between two looks).
+        local units = 0
+        for _, r in ipairs(all) do units = units + (r[2] or 0) end
+        qty[only] = (not partial) and units or nil
     end
-    -- Every item on the page: its bids (the next page of the search adds to them).
+    -- Other items of a search over several pages: this page holds part of
+    -- their supply, so the count is unknown (a part read as the whole would
+    -- look like units sold between two looks).
+    if more then
+        for id in pairs(qty) do
+            if not (only and named and id == only) then qty[id], auctions[id] = nil, nil end
+        end
+    end
+    -- Every item on the page: its bids. Pages of one search add up; a page
+    -- read again (the list reloads after a bid) replaces what that page gave,
+    -- or one auction whose bid changed would be kept twice. The look's time
+    -- is its first page's, so the time left is never stretched by a re-read.
+    -- Until every page of the search is read, the cheapest buyout of an item
+    -- may be on a page not read: its bids are marked partial.
     local now = time()
-    for id, b in pairs(bids) do Prices.RecordBids(id, b, "legacy", now, true) end
+    local qa = q and q.at
+    -- A new query for the first page starts over; the same query firing again does not.
+    if not (q and bidPages and bidPages.text == q.text and bidPages.exact == q.exact and now - bidPages.t <= 300)
+        or ((q.page or 0) == 0 and bidPages.firstAt ~= qa) then
+        bidPages = q and { text = q.text, exact = q.exact, t = now, firstAt = (q.page or 0) == 0 and qa or nil, byPage = {}, sizes = {} } or nil
+    end
+    if bidPages then
+        local page = q.page or 0
+        bidPages.byPage[page], bidPages.sizes[page] = bids, n
+        local read = 0
+        for _, size in pairs(bidPages.sizes) do read = read + size end
+        local complete = not (type(total) == "number" and total > read)
+        local merged = {}
+        for _, list in pairs(bidPages.byPage) do
+            for id, b in pairs(list) do
+                local m = merged[id] or {}
+                merged[id] = m
+                for _, r in ipairs(b) do m[#m + 1] = r end
+            end
+        end
+        for id, b in pairs(merged) do Prices.RecordBids(id, b, "legacy", bidPages.t, false, nil, not complete) end
+    else
+        for id, b in pairs(bids) do Prices.RecordBids(id, b, "legacy", now, false, nil, more or nil) end
+    end
     local recorded = 0
     for id, unit in pairs(low) do
-        Prices.Record(id, unit, qty[id], nil, auctions[id], names[id])
+        Prices.Record(id, unit, qty[id], nil, auctions[id], names[id], nil, id == freshID)
         recorded = recorded + 1
     end
     return recorded
@@ -741,7 +1029,9 @@ function Prices.ReadBulk(count, row, first, onDone, onFail)
     local total = count() or 0
     if type(total) ~= "number" then total = 0 end
     bulk = { i = first, last = first + total - 1, total = total, low = {}, qty = {}, auctions = {}, names = {}, rows = {},
-        bids = {}, me = Prices.PlayerName(), onDone = onDone, clock = GetTime() }
+        bids = {}, me = Prices.PlayerName(), onDone = onDone, clock = GetTime(),
+        -- The legacy getAll list is whole auctions; the modern replicate list prices commodities by the unit.
+        whole = first == 1 }
     local Step
     local function Chunk()
         local b = bulk
@@ -791,11 +1081,11 @@ function Prices.ReadBulk(count, row, first, onDone, onFail)
         for id, unit in pairs(b.low) do
             local before = Prices.Entry(id)
             local oldP = before and before.p
-            Prices.Record(id, unit, b.qty[id], now, b.auctions[id], b.names[id])
+            Prices.Record(id, unit, b.qty[id], now, b.auctions[id], b.names[id], nil, true)
             local e = Prices.Entry(id)
             if e then e.scan = now end
-            Prices.RecordLadder(id, b.rows[id], false, now)
-            if not before then new = new + 1 elseif oldP ~= math.floor(unit + 0.5) then changed = changed + 1 end
+            Prices.RecordLadder(id, b.rows[id], false, now, b.whole)
+            if not before then new = new + 1 elseif oldP ~= Exact(unit) then changed = changed + 1 end
             items = items + 1
         end
         -- The scan saw every auction: no row for an item = nothing to bid on.
@@ -854,6 +1144,8 @@ local function ReadCommodity(id)
     if type(id) ~= "number" or type(AH) ~= "table" or type(AH.GetCommoditySearchResultInfo) ~= "function" then return 0 end
     local n = type(AH.GetNumCommoditySearchResults) == "function" and S.Call(AH.GetNumCommoditySearchResults, id) or 0
     local low, qty, rows = nil, 0, 0
+    -- A row whose quantity cannot be read makes the supply unknown, never 0.
+    local known = true
     local ladder = {}
     for i = 1, (type(n) == "number" and n or 0) do
         local info = S.Call(AH.GetCommoditySearchResultInfo, id, i)
@@ -861,7 +1153,7 @@ local function ReadCommodity(id)
         if type(unit) == "number" and unit > 0 then
             if not low or unit < low then low = unit end
             local q = S.Value(info.quantity)
-            qty = qty + (type(q) == "number" and q or 0)
+            if type(q) == "number" and q > 0 then qty = qty + q else known = false end
             -- A row can be several sellers: a name only when it is one.
             local owners = S.Value(info.owners)
             local owner = type(owners) == "table" and #owners == 1 and S.Value(owners[1]) or nil
@@ -874,9 +1166,11 @@ local function ReadCommodity(id)
         end
     end
     if low then
-        Prices.Record(id, low, qty, nil, rows)
+        -- Part of the results: the lowest is right (cheapest first), the supply unknown.
         local full = type(AH.HasFullCommoditySearchResults) == "function" and S.Call(AH.HasFullCommoditySearchResults, id)
-        Prices.RecordLadder(id, ladder, full == false)
+        local whole = type(AH.HasFullCommoditySearchResults) ~= "function" or full ~= false
+        Prices.Record(id, low, (whole and known) and qty or nil, nil, whole and rows or nil, nil, nil, whole and known)
+        Prices.RecordLadder(id, ladder, full == false or not known)
         return 1
     end
     return 0
@@ -888,7 +1182,7 @@ local function ReadItemResults(key)
     local id = ItemIDOfKey(key)
     if not id or type(AH) ~= "table" or type(AH.GetItemSearchResultInfo) ~= "function" then return 0 end
     local n = type(AH.GetNumItemSearchResults) == "function" and S.Call(AH.GetNumItemSearchResults, key) or 0
-    local low, qty, rows = nil, 0, 0
+    local low, qty, rows, known = nil, 0, 0, true
     local ladder, bids = {}, {}
     local myGuid = S.Call(UnitGUID, "player")
     for i = 1, (type(n) == "number" and n or 0) do
@@ -904,13 +1198,15 @@ local function ReadItemResults(key)
                 (type(bidder) == "string" and bidder ~= "") or (type(bid) == "number" and bid > 0) }
         end
         local buyout = type(info) == "table" and S.Value(info.buyoutAmount)
-        local count = type(info) == "table" and S.Value(info.quantity) or 1
+        local count = type(info) == "table" and S.Value(info.quantity) or nil
+        -- Supply counts every auction, bid-only ones too (as the full scan and the
+        -- legacy list do): one definition of units across looks, or a bid-only
+        -- stack read here and in a scan would look like units gone. A quantity
+        -- that cannot be read makes the supply unknown.
+        if type(count) == "number" and count > 0 then qty = qty + count else known = false end
         count = type(count) == "number" and math.max(1, count) or 1
         local unit = (type(buyout) == "number" and buyout > 0) and buyout / count or nil
-        if unit then
-            if not low or unit < low then low = unit end
-            qty = qty + count
-        end
+        if unit and (not low or unit < low) then low = unit end
         local owners = type(info) == "table" and S.Value(info.owners)
         local owner = type(owners) == "table" and #owners == 1 and S.Value(owners[1]) or nil
         ladder[#ladder + 1] = { unit, count, type(owner) == "string" and owner or nil,
@@ -918,9 +1214,10 @@ local function ReadItemResults(key)
     end
     local hadBids = Prices.RecordBids(id, bids, "modern")
     if low then
-        Prices.Record(id, low, qty, nil, rows)
         local full = type(AH.HasFullItemSearchResults) == "function" and S.Call(AH.HasFullItemSearchResults, key)
-        Prices.RecordLadder(id, ladder, full == false)
+        local whole = type(AH.HasFullItemSearchResults) ~= "function" or full ~= false
+        Prices.Record(id, low, (whole and known) and qty or nil, nil, whole and rows or nil, nil, nil, whole and known)
+        Prices.RecordLadder(id, ladder, full == false or not known, nil, true)
         return 1
     end
     return hadBids and 1 or 0
@@ -954,7 +1251,8 @@ local function ReadOwnedLegacy()
         if type(id) == "number" and type(count) == "number" and count > 0 then
             local left = type(GetAuctionItemTimeLeft) == "function" and S.Call(GetAuctionItemTimeLeft, "owner", i) or nil
             list[#list + 1] = { id = id, name = type(v[1]) == "string" and v[1] or nil, count = count,
-                unit = (type(buyout) == "number" and buyout > 0) and math.floor(buyout / count + 0.5) or nil,
+                -- Exact like the ladder's tiers, so the two compare on one basis.
+                unit = (type(buyout) == "number" and buyout > 0) and Exact(buyout / count) or nil,
                 bid = type(v[8]) == "number" and v[8] or nil, left = LEGACY_LEFT[left], sold = v[16] == 1 or nil }
         end
     end

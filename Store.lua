@@ -535,8 +535,9 @@ Store.DEFS = {
         count = function(d) local n = 0 for _, c in pairs(d) do n = n + #(c.log or {}) end return n end,
         byChar = function(d, add) ByName(d, add, function(c) return #(c.log or {}) end) end },
     -- v3: each item's earlier looks packed into one string (Prices.Looks).
-    { key = "prices", scope = "realm", label = "Auction prices", version = 3,
-        migrate = { [3] = function(d) ns.Prices.PackStore(d) end },
+    -- v4: daily summaries re-keyed from the UTC day to the local day (Prices.RekeyDays).
+    { key = "prices", scope = "realm", label = "Auction prices", version = 4,
+        migrate = { [3] = function(d) ns.Prices.PackStore(d) end, [4] = function(d) ns.Prices.RekeyDays(d) end },
         check = function(d)
             d = Map("prices", "prices", d, Tab, "not a realm's prices")
             for realm, items in pairs(d or {}) do

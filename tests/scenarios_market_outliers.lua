@@ -109,7 +109,12 @@ scenarios.market_craft_price = function()
     Pr.Record(2589, 30, 200, now, 10, "Linen Cloth")
     Pr.Record(2996, 100, 20, now, 4, "Bolt of Linen Cloth")
     c = M.CraftCost(2996)
-    check(c and c.each == 60 and c.r.creates == 2996 and not c.estimated, "bolt crafts at 2 x 30c: " .. tostring(c and c.each))
+    -- No ladder: the lowest price times two, marked as thin data.
+    check(c and c.each == 60 and c.r.creates == 2996 and c.estimated, "bolt crafts at 2 x 30c (estimated): " .. tostring(c and c.each))
+    -- With the ladder: one linen at 30c, the next at 50c: a bolt costs 80c, not 60c.
+    Pr.RecordLadder(2589, { { 30, 1, "Al" }, { 50, 10, "Bo" } }, false, now)
+    c = M.CraftCost(2996)
+    check(c and c.each == 80 and not c.estimated, "bolt along the ladder: " .. tostring(c and c.each))
     check(M.CraftCost(2589) == nil, "linen is not crafted")
     -- The window draws the craft line without errors.
     ns.MarketUI.Show("prices", "bolt")

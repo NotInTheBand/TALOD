@@ -49,6 +49,8 @@ scenarios.ah_scan_robust = function()
     local ladder = Pr.RecordLadder
     Pr.RecordLadder = function() error("bad ladder") end
     panel.scanButton:Fire("OnClick", "LeftButton")
+    -- The list held before the click has the same count: only the answer's event reads it.
+    MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
     for _ = 1, 15 do MOCK.Tick(0.3) end
     MOCK.RunTimers() MOCK.RunTimers() MOCK.RunTimers()
     Pr.RecordLadder = ladder
@@ -65,6 +67,7 @@ scenarios.ah_scan_robust = function()
     -- The read stops moving (a timer never comes back): failed after the stall time.
     TALODDB.ahFullScan = {}
     panel.scanButton:Fire("OnClick", "LeftButton")
+    MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
     MOCK.Tick(2.5)
     check(H.state.scan and H.state.scan.reading, "reading")
     MOCK.timers = {}
@@ -92,6 +95,7 @@ scenarios.ah_scan_closed_midread = function()
 
     TALODDB.ahFullScan = {}
     panel.scanButton:Fire("OnClick", "LeftButton")
+    MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
     MOCK.Tick(2.5)
     check(H.state.scan and H.state.scan.reading and Pr.Bulk(), "reading")
     MOCK.FireEvent("AUCTION_HOUSE_CLOSED")
@@ -104,6 +108,7 @@ scenarios.ah_scan_closed_midread = function()
     MOCK.RunTimers()
     TALODDB.ahFullScan = {}
     H.Panel().scanButton:Fire("OnClick", "LeftButton")
+    MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
     MOCK.Tick(2.5)
     check(H.state.scan and H.state.scan.reading, "reading again")
     rows.extra = -700

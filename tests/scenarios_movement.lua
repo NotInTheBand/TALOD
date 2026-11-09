@@ -38,7 +38,7 @@ scenarios.movement = function()
     Pr.Record(2592, 300, 20, now - 900, 2, "Wool Cloth")
     check(M.Movement(2592).key == "unknown", "one look: unknown")
 
-    -- Your auctions decide once 2 have ended: wool posted twice, never sold.
+    -- Your auctions decide once 5 have ended: wool posted five times, never sold.
     local key = ns.Gear.CharKey()
     TALODDB.economy[key] = TALODDB.economy[key] or { log = {}, days = {} }
     local c = TALODDB.economy[key]
@@ -46,6 +46,9 @@ scenarios.movement = function()
     c.auctions = {
         { id = 1, t = now - 3 * 86400, name = wool, count = 20, deposit = 99, status = "expired", ended = now - 2 * 86400 },
         { id = 2, t = now - 2 * 86400, name = wool, count = 20, deposit = 99, status = "expired", ended = now - 86400 },
+        { id = 4, t = now - 2 * 86400, name = wool, count = 20, deposit = 99, status = "expired", ended = now - 86400 },
+        { id = 5, t = now - 2 * 86400, name = wool, count = 20, deposit = 99, status = "expired", ended = now - 86400 },
+        { id = 6, t = now - 2 * 86400, name = wool, count = 20, deposit = 99, status = "expired", ended = now - 86400 },
         { id = 3, t = now - 10 * 3600, name = MOCK.ItemLink(2589, "Linen Cloth"), count = 10, status = "listed" },
     }
     M.InvalidateSales()
@@ -83,7 +86,7 @@ scenarios.movement = function()
 
     -- Desk: what you posted that doesn't sell, with the deposits it cost.
     local waste = ns.AuctionDesk.NotWorthIt()
-    check(#waste == 1 and waste[1].id == 2592 and waste[1].sales.depositLost == 198, "not worth posting: wool")
+    check(#waste == 1 and waste[1].id == 2592 and waste[1].sales.depositLost == 495, "not worth posting: wool")
     check(M.MoveTag(4289):find("doesn't sell") and M.MoveTag(2589) == "", "list tags")
     ns.AuctionDeskUI.Show("overview")
     local found

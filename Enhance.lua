@@ -446,14 +446,20 @@ local function BuildView(parent)
                 end
                 -- What it costs: materials at your Auction House prices (vendor when cheaper).
                 if ns.Professions and r and r.reagents and #r.reagents > 0 then
-                    local cost, guessed = 0, false
+                    -- Bought in the amounts the recipe takes (along the listings
+                    -- you saw); a material with no price makes the total unknown.
+                    local P = ns.Professions
+                    local cost, guessed, unpriced = 0, false, 0
                     for _, rg in ipairs(r.reagents) do
-                        local unit, how = ns.Professions.ItemPrice(rg[1])
-                        if how == "ah" or how == "unknown" then guessed = true end
-                        cost = cost + unit * rg[2]
+                        local _, info = P.BuyCost(rg[1], rg[2])
+                        if info.src == "ah" then guessed = true end
+                        if info.short > 0 then unpriced = unpriced + 1 end
+                        cost = cost + info.partial
                     end
-                    out[#out + 1] = { label = "Cost", text = HEX.gold .. ns.Professions.Money(cost) .. "|r" .. HEX.muted .. "  materials"
-                        .. (guessed and "  (some not seen on the Auction House: estimated)" or "  (your Auction House prices)") .. "|r" }
+                    out[#out + 1] = { label = "Cost", text = HEX.gold .. P.MoneyKnown(cost, unpriced,
+                            unpriced == 1 and "material without a price" or "materials without a price") .. "|r" .. HEX.muted .. "  materials"
+                        .. (unpriced > 0 and "  (search the rest on the Auction House)"
+                            or (guessed and "  (some not seen on the Auction House: estimated)" or "  (your Auction House prices)")) .. "|r" }
                 end
                 out[#out + 1] = { text = "" }
             end

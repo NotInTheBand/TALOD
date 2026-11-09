@@ -1,8 +1,9 @@
 -- TALOD - price graph: one item's history on the Auction House.
 --   * the lowest price at each look (or each day, with the day's highest as
 --     a band), and the usual price as a faint line; overpriced points
---     (Market.MarkOverpriced) in red, held at the top so the scale stays on
---     the prices that count;
+--     (the looks the usual price left out, Market.Points) in red, held at the
+--     top so the scale stays on the prices that count; thin throwaway looks
+--     (left out of the usual price too) in gold;
 --   * volume under it: units listed (bars), units gone since the look
 --     before (sold, cancelled or expired: the AH does not say which; in the
 --     hover readout) and the units you sold (green bars, Economy's log).
@@ -20,6 +21,8 @@ ns.PriceChart = Chart
 local PRICE = COLORS.accent
 local OVER = { 1, 0.31, 0.31, 1 }
 local OVER_HEX = "|cffff5050"
+local UNDER = { 1, 0.82, 0, 1 }
+local UNDER_HEX = "|cffffd100"
 local BAND = { 1, 0.5, 0.25, 0.22 }
 local USUAL = { 1, 1, 1, 0.18 }
 local LISTED = { 0.35, 0.55, 0.85, 0.6 }
@@ -43,29 +46,55 @@ function Chart.Data(id, mode)
     local sold = Market.SoldList(id)
     local byDay = {}
     for _, s in ipairs(sold) do
-        local day = math.floor(s.t / 86400)
+        local day = Prices.DayKey(s.t)
         byDay[day] = (byDay[day] or 0) + s.units
     end
     for i, pt in ipairs(pts) do
         local prev = pts[i - 1]
-        if prev and (prev.n or 0) > (pt.n or 0) then pt.gone = prev.n - (pt.n or 0) end
+        -- A count per day needs the day before: across a gap of days the drop
+        -- is not one day's (Market.MarketMovement pairs consecutive days only).
+        local follows = prev and (mode ~= "days" or pt.day - prev.day == 1)
+        -- An unknown count is unknown, not 0 (read as 0, every unit before would look sold);
+        -- a look with a lowest price has units listed, so 0 is unknown too.
+        if follows and type(prev.n) == "number" and type(pt.n) == "number" and pt.n > 0 and prev.n > pt.n then pt.gone = prev.n - pt.n end
         if mode == "days" then
             pt.sold = byDay[pt.day]
-        else
-            local from, n = prev and prev.t or -math.huge, 0
-            for _, s in ipairs(sold) do if s.t > from and s.t <= pt.t then n = n + s.units end end
+        elseif prev then
+            -- Since the look before; the first look has no "before" (every
+            -- older sale would pile up on it).
+            local n = 0
+            for _, s in ipairs(sold) do if s.t > prev.t and s.t <= pt.t then n = n + s.units end end
             pt.sold = n > 0 and n or nil
         end
     end
+    -- The marks are the usual price's own (Market.Points: each look judged
+    -- with its auction count, browse flag and neighbours), so a point drawn as
+    -- left out is one the usual price left out. A day is overpriced or a
+    -- throwaway only when every look of it was; hiOver: some look of it was.
     local s = Market.Stats(id)
     local usual = (s and s.looks > 1) and s.usual or nil
-    local cap = usual and s.looks >= Market.OUTLIER_LOOKS and usual * Market.OUTLIER_FACTOR or nil
-    if mode ~= "days" then
-        Market.MarkOverpriced(pts)
-    elseif cap then
-        for _, pt in ipairs(pts) do
-            pt.over = pt.p > cap or nil
-            pt.hiOver = pt.hi and pt.hi > cap or nil
+    local cap = (s and s.looks >= Market.OUTLIER_LOOKS and s.base) and s.base * Market.OUTLIER_FACTOR or nil
+    local byT, dayMarks = {}, {}
+    for _, x in ipairs(Market.Points(id) or {}) do
+        byT[x.t] = x.over and "over" or (x.under and "under") or "kept"
+        local d = Prices.DayKey(x.t)
+        local m = dayMarks[d] or { all = 0, over = 0, under = 0 }
+        dayMarks[d] = m
+        m.all = m.all + 1
+        if x.over then m.over = m.over + 1 elseif x.under then m.under = m.under + 1 end
+    end
+    for _, pt in ipairs(pts) do
+        pt.over, pt.under, pt.hiOver = nil, nil, nil
+        if mode == "days" then
+            local m = dayMarks[pt.day]
+            if m then
+                pt.over = m.over == m.all or nil
+                pt.under = m.under == m.all or nil
+                pt.hiOver = (m.over > 0 and m.over < m.all) or nil
+            end
+        else
+            local mark = byT[pt.t]
+            pt.over, pt.under = mark == "over" or nil, mark == "under" or nil
         end
     end
     return pts, usual, cap
@@ -80,10 +109,12 @@ local function PointLines(pt, mode)
     end
     if pt.over then
         lines[#lines + 1] = OVER_HEX .. "Overpriced (over " .. Market.OUTLIER_FACTOR .. "x usual): left out of the usual price|r"
+    elseif pt.under then
+        lines[#lines + 1] = UNDER_HEX .. "Under half the usual with few units (a throwaway): left out of the usual price|r"
     elseif pt.hiOver then
         lines[#lines + 1] = OVER_HEX .. "The day's highest look is overpriced: left out|r"
     end
-    lines[#lines + 1] = LISTED_HEX .. "Listed: " .. (pt.n or 0) .. " units|r" .. (pt.a and (" in " .. pt.a .. " auctions") or "")
+    lines[#lines + 1] = LISTED_HEX .. "Listed: " .. ((type(pt.n) == "number" and pt.n > 0) and pt.n or "?") .. " units|r" .. (pt.a and (" in " .. pt.a .. " auctions") or "")
     if pt.gone then lines[#lines + 1] = HEX.muted .. pt.gone .. " fewer than the " .. (mode == "days" and "day" or "look") .. " before (sold, cancelled or expired)|r" end
     if pt.sold then lines[#lines + 1] = SOLD_HEX .. "You sold " .. pt.sold .. "|r" end
     return lines
@@ -171,11 +202,15 @@ function Chart.New(parent, opts)
             end
         end
         local pts, usual, cap = Chart.Data(id, mode)
-        local anyOver = false
-        for _, pt in ipairs(pts) do if pt.over or pt.hiOver then anyOver = true end end
+        local anyOver, anyUnder = false, false
+        for _, pt in ipairs(pts) do
+            if pt.over or pt.hiOver then anyOver = true end
+            if pt.under then anyUnder = true end
+        end
         self.legend:SetText(HEX.accent .. "lowest price|r" .. HEX.muted .. (mode == "days" and " (band: highest)" or "") .. "  ·  |r"
             .. LISTED_HEX .. "units listed|r" .. HEX.muted .. "  ·  |r" .. SOLD_HEX .. "you sold|r"
-            .. (anyOver and (HEX.muted .. "  ·  |r" .. OVER_HEX .. "overpriced|r") or ""))
+            .. (anyOver and (HEX.muted .. "  ·  |r" .. OVER_HEX .. "overpriced|r") or "")
+            .. (anyUnder and (HEX.muted .. "  ·  |r" .. UNDER_HEX .. "throwaway|r") or ""))
         if #pts < 2 then
             self.empty:SetText(#pts == 1 and "One look so far: the graph starts with the second." or "Not seen on the Auction House yet.")
             return
@@ -257,11 +292,11 @@ function Chart.New(parent, opts)
                 l:SetEndPoint("BOTTOMLEFT", plot, x, y)
             end
             local d = Pool(self.dots, i, function() return Style.Texture(plot, "OVERLAY", PRICE) end)
-            local col = pt.over and OVER or PRICE
+            local col = pt.over and OVER or (pt.under and UNDER) or PRICE
             d:SetColorTexture(col[1], col[2], col[3], col[4] or 1)
             d:ClearAllPoints()
             d:SetPoint("CENTER", plot, "BOTTOMLEFT", x, y)
-            local size = (self.compact and 3 or 4) + (pt.over and 2 or 0)
+            local size = (self.compact and 3 or 4) + ((pt.over or pt.under) and 2 or 0)
             d:SetSize(size, size)
             prevX, prevY = x, y
         end
