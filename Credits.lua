@@ -1,6 +1,6 @@
--- TALOD - Credits page: who made it, the Discord, how to send gold if
--- you want to, and the work it builds on. Copy buttons go through
--- ns.Utils.Copy (addons cannot write the clipboard).
+-- TALOD - Credits: who made it, the Discord, how to send gold if you want
+-- to, and the work it builds on; the About page shows it on its Credits tab.
+-- Copy buttons go through ns.Utils.Copy (addons cannot write the clipboard).
 
 local ADDON_NAME, ns = ...
 local Style, Utils = ns.Style, ns.Utils
@@ -16,12 +16,10 @@ local DISCORD = "https://discord.gg/2FYCFyRczN"
 local DONATE = { name = "Send Coin", faction = "Alliance", ruleset = "PvP realm" }
 UI.AUTHOR, UI.DISCORD, UI.DONATE = AUTHOR, DISCORD, DONATE
 
-local PAD = 16
 -- One reading column, centered: on a wide window the rows would otherwise
 -- stretch and leave each copy button far from what it copies.
 local MAX_WIDTH = 720
 local GAP = 10
-local frame
 
 -- label | value ........ [button]
 local function Row(parent, y, label, value, button)
@@ -47,65 +45,67 @@ local function Paragraph(parent, y, text)
 end
 
 -- offset: from the top of the first card (Layout places them under the header).
-local function Card(title, sub, offset, height)
-    local card = Style.Card(frame, title)
+local function Card(v, title, sub, offset, height)
+    local card = Style.Card(v, title)
     card:SetHeight(height)
     card.sub:SetText(sub)
     card.offset = offset
-    frame.cards[#frame.cards + 1] = card
+    v.cards[#v.cards + 1] = card
     return card
 end
 
--- The header goes in a short window so the cards keep their room.
-local function Layout()
-    local width = frame:GetWidth() or 900
-    local column = math.min(width - 2 * PAD, MAX_WIDTH)
+-- The header goes when the view is short, so the cards keep their room.
+local function Layout(v)
+    local width = v:GetWidth() or 900
+    local column = math.min(width, MAX_WIDTH)
     local left = math.floor((width - column) / 2)
-    local last = frame.cards[#frame.cards]
+    local last = v.cards[#v.cards]
     local cardsHeight = last.offset + last:GetHeight()
-    local headerTop = 39 + 12
-    local cardsTop = headerTop + Style.BRAND_HEADER_HEIGHT + 12
-    local full = (frame:GetHeight() or 620) >= cardsTop + cardsHeight + 12
-    frame.header:SetShown(full)
-    frame.header:ClearAllPoints()
-    frame.header:SetPoint("TOPLEFT", left, -headerTop)
-    frame.header:SetWidth(column)
-    local top = full and -cardsTop or -52
-    for _, card in ipairs(frame.cards) do
+    local cardsTop = Style.BRAND_HEADER_HEIGHT + 12
+    local full = (v:GetHeight() or 500) >= cardsTop + cardsHeight
+    v.header:SetShown(full)
+    v.header:ClearAllPoints()
+    v.header:SetPoint("TOPLEFT", left, 0)
+    v.header:SetWidth(column)
+    local top = full and -cardsTop or 0
+    for _, card in ipairs(v.cards) do
         card:ClearAllPoints()
         card:SetPoint("TOPLEFT", left, top - card.offset)
         card:SetWidth(column)
     end
 end
+UI.Layout = Layout
 
-local function Build()
-    frame = Style.Window(ns.FRAME .. "CreditsWindow", "Credits", nil, nil, { nav = "credits" })
-    frame.cards = {}
-    frame.header = Style.BrandHeader(frame)
-    Style.Border(frame.header, COLORS.cardBorder)
-    frame.header.sub:SetText("v" .. tostring(ns.VERSION or "?") .. "  ·  " .. tostring(ns.FLAVOR_NAME or ""))
+-- The credits, built into a page (About > Credits): returns the view.
+function UI.Build(parent)
+    local v = CreateFrame("Frame", nil, parent)
+    v:SetAllPoints()
+    v.cards = {}
+    v.header = Style.BrandHeader(v)
+    Style.Border(v.header, COLORS.cardBorder)
+    v.header.sub:SetText("v" .. tostring(ns.VERSION or "?") .. "  ·  " .. tostring(ns.FLAVOR_NAME or ""))
 
     -- Made by
-    local made = Card("Made by " .. HEX.accent .. AUTHOR .. "|r", "Questions, bug reports and ideas are welcome on the Discord.", 0, 112)
+    local made = Card(v, "Made by " .. HEX.accent .. AUTHOR .. "|r", "Questions, bug reports and ideas are welcome on the Discord.", 0, 112)
     local c = made.content
-    frame.copyInvite = Utils.CopyButton(c, "Copy invite", 110, DISCORD, "invite link",
+    v.copyInvite = Utils.CopyButton(c, "Copy invite", 110, DISCORD, "invite link",
         "Shows the invite link ready to copy (Ctrl+C), to paste into your browser or Discord.")
-    Row(c, -6, "Discord", HEX.white .. DISCORD .. "|r", frame.copyInvite)
-    frame.copyAuthor = Utils.CopyButton(c, "Copy name", 110, AUTHOR, "name")
-    Row(c, -34, "Discord name", HEX.white .. AUTHOR .. "|r", frame.copyAuthor)
+    Row(c, -6, "Discord", HEX.white .. DISCORD .. "|r", v.copyInvite)
+    v.copyAuthor = Utils.CopyButton(c, "Copy name", 110, AUTHOR, "name")
+    Row(c, -34, "Discord name", HEX.white .. AUTHOR .. "|r", v.copyAuthor)
 
     -- Support
-    local support = Card("Support " .. ns.NAME, "Free, and it stays free. Gold is welcome, never expected.", 112 + GAP, 128)
+    local support = Card(v, "Support " .. ns.NAME, "Free, and it stays free. Gold is welcome, never expected.", 112 + GAP, 128)
     c = support.content
     Paragraph(c, -6, "If " .. ns.NAME .. " helped you, you can mail gold to " .. HEX.gold .. DONATE.name .. "|r. Mail does not cross "
         .. "factions: send it from an " .. DONATE.faction .. " character on the " .. DONATE.ruleset .. ". Thank you!")
-    frame.copyDonate = Utils.CopyButton(c, "Copy name", 110, DONATE.name, "name",
+    v.copyDonate = Utils.CopyButton(c, "Copy name", 110, DONATE.name, "name",
         "Shows the character name ready to copy (Ctrl+C), for the mailbox's To: line.")
     Row(c, -44, "Character", HEX.gold .. DONATE.name .. "|r  " .. HEX.muted .. DONATE.faction .. " · " .. DONATE.ruleset .. "|r",
-        frame.copyDonate)
+        v.copyDonate)
 
     -- Where the game data comes from
-    local built = Card("Data sources", "Where the game data in " .. ns.NAME .. " comes from, with thanks.", 240 + 2 * GAP, 132)
+    local built = Card(v, "Data sources", "Where the game data in " .. ns.NAME .. " comes from, with thanks.", 240 + 2 * GAP, 132)
     c = built.content
     local lines = {
         HEX.white .. "Wowhead Classic|r " .. HEX.muted .. "- enchants, recipes, profession leveling, fishing gear.|r",
@@ -115,21 +115,28 @@ local function Build()
     }
     for i, text in ipairs(lines) do Paragraph(c, -6 - (i - 1) * 20, text) end
 
-    Layout()
-    frame:HookScript("OnSizeChanged", Layout)
+    Layout(v)
+    v:SetScript("OnSizeChanged", Layout)
+    function v:Refresh() Layout(self) end
+    function v:Footer() return "Copy buttons show the text ready to copy (Ctrl+C): the game cannot put text on the clipboard itself." end
+    return v
 end
+
+-- The credits live on the About page (Credits tab); these keep the old calls.
+local function About() return ns.AboutUI end
 
 function UI.Show()
-    if not frame then Build() end
-    if not frame:IsShown() then frame:Show() end
-    if frame.Raise then frame:Raise() end
+    if About() then About().ShowPage("credits") end
 end
+
+function UI.IsShown() return About() ~= nil and About().IsShown("credits") end
 
 function UI.Toggle()
-    if frame and frame:IsShown() then frame:Hide() else UI.Show() end
+    if UI.IsShown() then About().Hide() else UI.Show() end
 end
 
-function UI.IsShown() return frame ~= nil and frame:IsShown() end
+-- The view on the About page, once built.
+function UI.View() return About() and About().views and About().views.credits or nil end
 
 local function Slash(command)
     if command ~= "credits" then return false end

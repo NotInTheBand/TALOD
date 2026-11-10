@@ -1,7 +1,11 @@
--- TALOD - Market window (/talod price): Prices (every item you have seen
--- on the Auction House, searchable, with its price graph and detail), Sell (your bags: AH or
--- vendor), Crafting (profit per craft for your professions) and Deals
--- (listed well under the usual price). Numbers come from Market.lua.
+-- TALOD - the Auction House page (Trade > Auction House), ordered the way a
+-- visit goes: Today (what needs you), Buy (Deals | Bids), Sell (your bags),
+-- My auctions (Auctions | By item) and Prices (every item you have seen, with
+-- the price graph, and for an item with a full look its ladder, own-it-all
+-- and reset plans). Numbers come from Market.lua and AuctionDesk.lua; Today,
+-- My auctions and the control plan are built in AuctionDeskUI.lua, which
+-- loads later and hands its parts in at build time. Nothing here buys or
+-- posts; a search at the Auction House is one per click.
 
 local ADDON_NAME, ns = ...
 local Style = ns.Style
@@ -12,9 +16,26 @@ local UI = {}
 ns.MarketUI = UI
 
 local PAD = 12
-local state = { view = "prices", search = "", selected = nil, craftMode = "all", craftFilter = "all" }
+-- view: the shown view (today, deals, bids, sell, mine, sellthrough, prices);
+-- the tab follows from it. buyView / mineView: each tab's last view.
+local state = { view = "today", search = "", selected = nil, buyView = "deals", mineView = "mine",
+    mineFilter = "all", priceFilter = "all" }
 local frame
 local views = {}
+
+local TABS = {
+    { key = "today", label = "Today" }, { key = "buy", label = "Buy" }, { key = "sell", label = "Sell" },
+    { key = "mine", label = "My auctions" }, { key = "prices", label = "Prices" },
+}
+local TAB_VIEWS = {
+    buy = { { key = "deals", label = "Deals" }, { key = "bids", label = "Bids" } },
+    mine = { { key = "mine", label = "Auctions" }, { key = "sellthrough", label = "By item" } },
+}
+local VIEW_TAB = { today = "today", deals = "buy", bids = "buy", sell = "sell", mine = "mine", sellthrough = "mine",
+    prices = "prices" }
+UI.TABS, UI.TAB_VIEWS, UI.VIEW_TAB = TABS, TAB_VIEWS, VIEW_TAB
+
+local function db() return ns.DB() end
 
 local function Money(c)
     if not c then return HEX.dim .. "-|r" end
@@ -45,6 +66,7 @@ local function ShowOnAH(id)
     local ok, msg = ns.AHHelper.Lookup(id)
     if not ok and msg then ns.Print(msg) end
 end
+UI.ShowOnAH = ShowOnAH
 
 local function Supply(n, a)
     local parts = {}
@@ -53,35 +75,38 @@ local function Supply(n, a)
     return #parts > 0 and table.concat(parts, ", ") or "supply ?"
 end
 
----------------------------------------------------------------------------
--- Prices: list + detail
----------------------------------------------------------------------------
-local function SearchBox(parent, onChange)
-    local box = CreateFrame("EditBox", nil, parent)
-    box:SetHeight(22)
-    box:SetAutoFocus(false)
-    box:SetFontObject("GameFontHighlightSmall")
-    box:SetTextInsets(8, 8, 0, 0)
-    Style.Surface(box, "button")
-    Style.Border(box, COLORS.border)
-    box.hint = Style.Text(box, "GameFontDisableSmall")
-    box.hint:SetPoint("LEFT", 8, 0)
-    box.hint:SetText("Search items...")
-    box:SetScript("OnTextChanged", function(self)
-        local text = self:GetText() or ""
-        self.hint:SetShown(text == "")
-        onChange(text)
-    end)
-    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-    return box
+local function Signed(c)
+    if not c then return HEX.dim .. "-|r" end
+    return (c >= 0 and HEX.good or HEX.bad) .. (ns.AuctionDesk and ns.AuctionDesk.Signed(c) or Money(c)) .. "|r"
 end
 
-local function DetailRows(id)
+-- One item on Prices, from anywhere on the page (its detail opens there).
+local function OpenPrices(id, full)
+    if id then state.selected = id end
+    if full and id and Prices.Ladder(id) then state.priceFilter, state.focusControl = "full", true
+    elseif id and not Prices.Ladder(id) then state.priceFilter = "all" end
+    if id and state.search ~= "" then
+        state.search = ""
+        if views.prices then views.prices.search:SetText("") end
+    end
+    state.view = "prices"
+    UI.Refresh()
+end
+UI.OpenPrices = OpenPrices
+
+---------------------------------------------------------------------------
+-- Prices: list + detail (with the control plan for an item with a full look)
+---------------------------------------------------------------------------
+-- extra: rows put in before "Every look" (the control plan).
+local function DetailRows(id, extra)
     local out = {}
     local s = Market.Stats(id)
     local name, _, _, sell, bind = Market.ItemInfo(id)
-    if not s then return { { text = HEX.muted .. "Not seen on the Auction House yet.|r" } } end
+    if not s then
+        out[1] = { text = HEX.muted .. "Not seen on the Auction House yet.|r" }
+        for _, r in ipairs(extra or {}) do out[#out + 1] = r end
+        return out
+    end
     out[#out + 1] = { header = true, text = "Now" }
     out[#out + 1] = { label = "Lowest", text = HEX.white .. Money(s.p) .. "|r each  ·  " .. AgeText(s.t)
             .. (s.overNow and (HEX.bad .. "  overpriced|r") or ""), cols = { Pct(s.trend) },
@@ -178,6 +203,7 @@ local function DetailRows(id)
             out[#out + 1] = { label = r.prof:sub(1, 12), text = r.name .. HEX.muted .. "  " .. r.skill .. "|r" }
         end
     end
+    for _, r in ipairs(extra or {}) do out[#out + 1] = r end
     out[#out + 1] = { header = true, text = "Every look" }
     local points = Market.Points(id)
     for i = #points, 1, -1 do
@@ -201,16 +227,13 @@ end
 
 -- One row of the Prices tab (built when drawn: Data.List).
 local function PriceRow(it)
-    local sel = state.selected == it.id
     local _, icon = Market.ItemInfo(it.id)
     return {
         icon = icon,
-        text = (sel and HEX.accent or "") .. Market.ItemText(it.id) .. (sel and "|r" or "")
+        text = Market.ItemText(it.id) .. (Prices.Ladder(it.id) and (HEX.muted .. "  · ladder|r") or "")
             .. HEX.muted .. "  " .. Supply(it.e.n, it.e.a) .. "|r" .. CraftTag(it.id, it.e.p),
         cols = { AgeText(it.e.t), it.s.overNow and (HEX.bad .. "over|r") or Pct(it.s.trend), HEX.white .. Money(it.e.p) .. "|r" },
         sort = { it.e.t, it.s.trend, it.e.p },
-        accent = sel and COLORS.accent or nil,
-        tint = sel and { COLORS.accent[1], COLORS.accent[2], COLORS.accent[3], 0.12 } or nil,
     }
 end
 
@@ -235,6 +258,26 @@ local function PriceItems()
     end, 300)
 end
 
+local function LadderCount()
+    local n = 0
+    for _ in pairs(Prices.AllLadders()) do n = n + 1 end
+    return n
+end
+
+local PRICE_COLUMNS = { name = "Item", "Seen", "Trend", "Price" }
+local CONTROL_COLUMNS = { name = "Item", "Own it all", "Best reset", "Top seller" }
+local PRICE_WIDTHS, CONTROL_WIDTHS = { 58, 46, 64 }, { 84, 80, 60 }
+
+-- The send button on the detail card: one search per click, only while the
+-- Auction House is open.
+local function SearchButtonState(id)
+    local H = ns.AHHelper
+    if not H or not id then return false, "pick an item first" end
+    if not H.IsOpen() then return false, "open the Auction House first" end
+    if H.state and H.state.scan then return false, "a full scan is running" end
+    return true
+end
+
 local function BuildPrices(parent)
     local v = CreateFrame("Frame", nil, parent)
     v:SetAllPoints()
@@ -245,23 +288,39 @@ local function BuildPrices(parent)
     local top = CreateFrame("Frame", nil, v.left.content)
     top:SetPoint("TOPLEFT", 6, -4)
     top:SetPoint("TOPRIGHT", -6, -4)
-    top:SetHeight(24)
-    v.search = SearchBox(top, function(text)
-        state.search = text:lower()
+    top:SetHeight(48)
+    v.search = Style.SearchBox(top, function(text)
+        state.search = (text or ""):lower()
         UI.Refresh()
-    end)
+    end, "Search items...")
     v.search:SetPoint("TOPLEFT")
     v.search:SetPoint("TOPRIGHT")
+    v.chips = Style.Chips(top, { { key = "all", label = "All items" }, { key = "full", label = "With a full look" } }, function(key)
+        state.priceFilter = key
+        UI.Refresh()
+    end)
+    v.chips:SetPoint("TOPLEFT", 0, -26)
     local holder = CreateFrame("Frame", nil, v.left.content)
-    holder:SetPoint("TOPLEFT", 0, -32)
+    holder:SetPoint("TOPLEFT", 0, -56)
     holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { colWidths = { 58, 46, 64 }, columns = { name = "Item", "Seen", "Trend", "Price" }, time = true, onClick = function(item)
-        if item.id then state.selected = item.id UI.Refresh() ShowOnAH(item.id) end
-    end })
+    v.list = Style.List(holder, { colWidths = PRICE_WIDTHS, columns = PRICE_COLUMNS, time = true,
+        selected = function(item) return item.id ~= nil and item.id == state.selected end,
+        onClick = function(item)
+            if item.id then state.selected = item.id UI.Refresh() ShowOnAH(item.id) end
+        end })
 
     v.right = Style.Card(v, "")
     v.right:SetPoint("TOPLEFT", v.left, "TOPRIGHT", 10, 0)
     v.right:SetPoint("BOTTOMRIGHT")
+    v.lookup = Style.Button(v.right, "Search at the Auction House", 200, function(self)
+        local ok, why = SearchButtonState(state.selected)
+        if not ok then ns.Print(why .. ".") return end
+        local done, msg = ns.AHHelper.Lookup(state.selected, true)
+        if not done and msg then ns.Print(msg) end
+    end, { "One search for this item in the Auction House window: one click, one search.",
+        "Only while the Auction House is open." }, { kind = "send", small = true })
+    v.lookup:SetPoint("TOPRIGHT", -6, -(Style.M.cardHeader - 18) / 2)
+    v.right.sub:SetPoint("RIGHT", v.lookup, "LEFT", -8, 0)
     -- The price graph on top, the detail under it.
     v.chart = ns.PriceChart.New(v.right.content)
     v.chart:SetPoint("TOPLEFT", 2, -2)
@@ -270,38 +329,96 @@ local function BuildPrices(parent)
     local detailHolder = CreateFrame("Frame", nil, v.right.content)
     detailHolder:SetPoint("TOPLEFT", 0, -158)
     detailHolder:SetPoint("BOTTOMRIGHT")
-    v.detail = Style.List(detailHolder, { labelWidth = 74, colWidths = { 110 } })
+    v.detail = Style.List(detailHolder, { labelWidth = 74, colWidths = { 110 }, onClick = function(item)
+        if item.id and item.id ~= state.selected and Prices.Entry(item.id) then OpenPrices(item.id) end
+    end })
 
     function v:Footer()
+        if state.priceFilter == "full" then
+            return "Items with a full look (a full scan or an exact search). Reset = buy the cheapest tiers, relist 1c under the "
+                .. "next seller's auction. A plan is arithmetic on what you saw: " .. ns.NAME .. " never buys or posts."
+        end
         return "Logged as you browse the Auction House: lowest buyout per unit, auctions and units listed. "
             .. "Usual = the middle of your looks, overpriced ones (over " .. Market.OUTLIER_FACTOR .. "x) marked red and left out; "
             .. "% = the price now against your earlier looks (green = cheaper)."
     end
 
     function v:Refresh()
-        local items = PriceItems()
-        if state.selected and not Prices.Entry(state.selected) then state.selected = nil end
-        if not state.selected and items[1] then state.selected = items[1].id end
-        ns.Data.List(self.list, {
-            name = "market:pricerows", key = { tostring(items), state.selected }, maxAge = 60, row = PriceRow,
-            empty = state.search ~= "" and "Nothing matches." or "Nothing yet: browse or search the Auction House and prices appear here.",
-            build = function(add)
-                for _, it in ipairs(items) do add(it, { id = it.id, time = it.e.t }) end
-            end,
-        })
+        local full = state.priceFilter == "full"
+        local Desk, DeskUI = ns.AuctionDesk, ns.AuctionDeskUI
+        if full and not (Desk and DeskUI) then full, state.priceFilter = false, "all" end
+        self.chips:Select(full and "full" or "all")
         local n, newest = Prices.Count()
-        self.left.sub:SetText(string.format("%d items  ·  %s  ·  newest look %s", n,
-            Prices.RealmKey() or "?", newest and Prices.Age(newest) or "-"))
+        self.chips:SetCount("all", n)
+        self.chips:SetCount("full", LadderCount())
+        if self.mode ~= (full and "full" or "all") then
+            self.mode = full and "full" or "all"
+            self.list.colWidths = full and CONTROL_WIDTHS or PRICE_WIDTHS
+            self.list:SetColumns(full and CONTROL_COLUMNS or PRICE_COLUMNS)
+        end
+        if full then
+            -- Best reset first; the column titles sort it otherwise.
+            local markets = Desk.Markets("profit", state.search)
+            if state.selected and not Prices.Ladder(state.selected) then state.selected = nil end
+            if not state.selected and markets[1] then state.selected = markets[1].id end
+            ns.Data.List(self.list, {
+                name = "market:control", key = { tostring(markets) }, maxAge = 60, row = DeskUI.MarketRow,
+                empty = state.search ~= "" and "Nothing matches." or "No ladders yet: a full scan (or an exact search of one item) shows every auction of an item.",
+                build = function(add)
+                    for _, p in ipairs(markets) do add(p, { id = p.id }) end
+                end,
+            })
+            self.left.sub:SetText(string.format("%d with a full look  ·  %s", #markets, Prices.RealmKey() or "?"))
+        else
+            local items = PriceItems()
+            if state.selected and not Prices.Entry(state.selected) then state.selected = nil end
+            -- A search that hides the chosen item: the first match is chosen.
+            if state.selected and state.search ~= "" then
+                local shown = false
+                for _, it in ipairs(items) do if it.id == state.selected then shown = true break end end
+                if not shown then state.selected = nil end
+            end
+            if not state.selected and items[1] then state.selected = items[1].id end
+            ns.Data.List(self.list, {
+                name = "market:pricerows", key = { tostring(items) }, maxAge = 60, row = PriceRow,
+                empty = state.search ~= "" and "Nothing matches." or "Nothing yet: browse or search the Auction House and prices appear here.",
+                build = function(add)
+                    for _, it in ipairs(items) do add(it, { id = it.id, time = it.e.t }) end
+                end,
+            })
+            self.left.sub:SetText(string.format("%d items  ·  %s  ·  newest look %s", n,
+                Prices.RealmKey() or "?", newest and Prices.Age(newest) or "-"))
+        end
+        -- Rows are kept; the selection is drawn from state (opts.selected).
+        self.list:Draw()
 
-        if state.selected then
-            local _, _, quality = Market.ItemInfo(state.selected)
-            self.right.title:SetText(Market.ItemText(state.selected))
-            local s = Market.Stats(state.selected)
+        local id = state.selected
+        local ok, why = SearchButtonState(id)
+        self.lookup:SetEnabled(ok, why)
+        if id then
+            self.right.title:SetText(Market.ItemText(id))
+            local s = Market.Stats(id)
             self.right.sub:SetText(s and string.format("%s now%s  ·  usual %s  ·  %s", Money(s.p), s.overNow and (HEX.bad .. " (overpriced)|r") or "",
                 Money(s.usual and math.floor(s.usual + 0.5)), Supply(s.n, s.a)) or "")
-            self.detail:SetItems(DetailRows(state.selected))
-            self.chart:SetItem(state.selected)
+            -- The control plan, only for an item with a full look.
+            local extra, plan
+            if Desk and DeskUI and Prices.Ladder(id) then
+                plan = Desk.Detail(id)
+                if plan then extra = DeskUI.ControlRows(plan) end
+            end
+            self.hasControl = extra ~= nil
+            local rows = DetailRows(id, extra)
+            self.detail:SetItems(rows)
+            if state.focusControl then
+                state.focusControl = nil
+                -- Opened for its ladder (/talod ah <item>): the plan at the top.
+                for i, r in ipairs(rows) do
+                    if r.control then self.detail.offset = i - 1 self.detail:Draw() break end
+                end
+            end
+            self.chart:SetItem(id)
         else
+            self.hasControl = false
             self.right.title:SetText("")
             self.right.sub:SetText("")
             self.detail:SetItems({})
@@ -314,9 +431,13 @@ end
 ---------------------------------------------------------------------------
 -- Sell: your bags
 ---------------------------------------------------------------------------
-local VERDICT = {
-    ah = HEX.good .. "Auction House|r", vendor = HEX.gold .. "Vendor|r", unseen = HEX.muted .. "check the AH|r", keep = HEX.dim .. "no value|r",
-}
+-- Built when drawn: the colour codes follow the look chosen at login.
+local function Verdict(key)
+    if key == "ah" then return HEX.good .. "Auction House|r" end
+    if key == "vendor" then return HEX.gold .. "Vendor|r" end
+    if key == "unseen" then return HEX.muted .. "check the AH|r" end
+    return HEX.dim .. "no value|r"
+end
 
 local function BuildSell(parent)
     local v = CreateFrame("Frame", nil, parent)
@@ -325,10 +446,7 @@ local function BuildSell(parent)
     v.card:SetAllPoints()
     v.list = Style.List(v.card.content, { colWidths = { 110, 90, 90 }, search = true, hint = "Search your bags...", onClick = function(item)
         ShowOnAH(item.id)
-        if item.id and Prices.Entry(item.id) then
-            state.view, state.selected = "prices", item.id
-            UI.Refresh()
-        end
+        if item.id and Prices.Entry(item.id) then OpenPrices(item.id) end
     end })
 
     function v:Footer()
@@ -360,7 +478,7 @@ local function BuildSell(parent)
                 text = Market.ItemText(e.id) .. HEX.muted .. "  x" .. e.n .. "|r" .. (e.bound and "" or Market.MoveTag(e.id))
                     -- An old price (or one of unknown age) is not today's market: said on the row.
                     .. ((e.verdict == "ah" and e.stale) and (HEX.gold .. "  · old price: look again|r") or ""),
-                cols = { VERDICT[e.verdict],
+                cols = { Verdict(e.verdict),
                     e.vendor and e.vendor > 0 and Money(e.vendor * e.n) or (HEX.dim .. "-|r"),
                     -- The number the verdict and the total use: expected with your sell rate, else if it sells.
                     (e.expected or e.net) and Money((e.expected or e.net) * e.n) or (HEX.dim .. "-|r") },
@@ -406,288 +524,48 @@ local function BuildSell(parent)
 end
 
 ---------------------------------------------------------------------------
--- Crafting: profit per craft, list + detail
+-- Buy > Deals: one list, the Market's columns (each, usual, under) and the
+-- desk's (units under the deal price, their cost, the gain)
 ---------------------------------------------------------------------------
-local CRAFT_FILTERS = {
-    { key = "all", label = "All recipes" }, { key = "profit", label = "Profitable only" }, { key = "make", label = "In my bags" },
-}
-local DOUBLE_CLICK = 0.4      -- seconds between the two clicks that open the craft tracker
-local CRAFT_MODES = { { key = "known", label = "Recipes I know" }, { key = "all", label = "All I can make" } }
+local DEAL_COLUMNS = { name = "Item", "Gain", "Cost", "Units", "Under", "Usual", "Each" }
 
-local function ProfitText(p)
-    if not p then return HEX.dim .. "-|r" end
-    return (p >= 0 and HEX.good or (HEX.bad .. "-")) .. Money(math.abs(p)) .. "|r"
+local function DealGain(d)
+    if d.totalGain then return Signed(d.totalGain) end
+    if d.gainIfAll then return HEX.muted .. "if all |r" .. Signed(d.gainIfAll) end
+    return HEX.good .. "+" .. Money(d.gain) .. "|r" .. HEX.muted .. " each|r"
 end
 
-local function MarginText(m)
-    if not m then return HEX.dim .. "-|r" end
-    local v = math.floor(m * 100 + (m >= 0 and 0.5 or -0.5))
-    return (v >= 0 and HEX.good or HEX.bad) .. (v > 0 and "+" or "") .. v .. "%|r"
-end
-
-local function CraftRow(pr)
-    local r = pr.r
-    local sel = state.craftSel == r
-    local tags = {}
-    if not pr.known then tags[#tags + 1] = "not learned" end
-    if pr.cooldown then tags[#tags + 1] = "once a day" end
-    local make = (pr.canMake or 0) > 0 and (HEX.good .. "  · make " .. pr.canMake .. "|r") or ""
-    return {
-        icon = ns.Professions.ItemIcon(r.creates),
-        text = (sel and HEX.accent or "") .. Market.ItemText(r.creates) .. (sel and "|r" or "")
-            .. ((r.makes or 1) ~= 1 and (" x" .. r.makes) or "") .. HEX.muted .. "  " .. r.prof
-            .. (#tags > 0 and ("  (" .. table.concat(tags, ", ") .. ")") or "") .. "|r" .. make
-            .. (pr.priced and Market.MoveTag(r.creates) or ""),
-        cols = { pr.unknown and (HEX.muted .. ">=|r" .. Money(pr.cost)) or (Money(pr.cost) .. (pr.guessed and (HEX.muted .. "*|r") or "")),
-            ProfitText(pr.profit), MarginText(pr.margin) },
-        accent = sel and COLORS.accent or nil,
-        tint = sel and { COLORS.accent[1], COLORS.accent[2], COLORS.accent[3], 0.12 } or nil,
-    }
-end
-
--- The detail of one recipe: per craft, the product's market, each material
--- (price, where from, in your bags, cheaper to make), what your bags make.
-local function CraftDetailRows(pr)
-    local r = pr.r
-    local out = {}
-    local makes = r.makes or 1
-    local plan = Market.CraftPlan(r)
-    out[#out + 1] = { header = true, text = "Per craft" .. (makes ~= 1 and (HEX.muted .. "  (makes " .. makes .. ")|r") or "") }
-    out[#out + 1] = { label = "Materials", text = HEX.white .. Money(pr.cost) .. "|r" .. HEX.muted
-        .. (makes ~= 1 and ("  ·  " .. Money(pr.cost / makes) .. " each") or "")
-        .. (pr.unknown and "  ·  plus materials nobody has a price for" or (pr.guessed and "  ·  partly estimated" or "")) .. "|r" }
-    if pr.priced then
-        -- Where the value comes from: a vendor price is not "after the cut".
-        local how = pr.how == "vendor" and "  at a vendor (more than the Auction House brings you)"
-            or ("  on the Auction House after the " .. math.floor(Market.CUT * 100) .. "% cut"
-                .. (pr.rate and (", your " .. (Market.RatePct(pr.rate) or 0) .. "% sell rate and the deposit") or ""))
-        -- An old price (or one of unknown age) is not today's market: said beside it.
-        out[#out + 1] = { label = "Sells for", text = Money(pr.value) .. HEX.muted .. how .. "|r"
-            .. ((pr.stale and pr.how ~= "vendor") and (HEX.gold .. "  ·  old price: look again|r") or ""),
-            tooltip = function(o) ns.Tooltip.Text(o, { "Sells for", string.format("The product's lowest buyout at your last look (the usual price when that "
-                .. "look was overpriced), after the Auction House cut. Once %d of your auctions of it have ended, your sell rate counts too: "
-                .. "the unsold share at the vendor price, less the deposit. The vendor price instead when that is more.", Market.SELL_MIN_ENDED) }) end }
-        out[#out + 1] = { label = "Profit", text = ProfitText(pr.profit) .. HEX.muted .. "  ·  margin |r" .. MarginText(pr.margin) }
-    elseif pr.value then
-        out[#out + 1] = { label = "Sells for", text = Money(pr.value) .. HEX.muted .. "  after the cut|r" }
-        out[#out + 1] = { label = "Profit", text = HEX.muted .. "unknown: a material has no price yet|r" }
-    else
-        out[#out + 1] = { label = "Sells for", text = HEX.muted .. "not seen on the Auction House: search it there|r" }
-    end
-    if pr.vendor then
-        out[#out + 1] = { label = "Vendor", text = Money(pr.vendor) .. ((not pr.unknown and pr.vendor > pr.cost) and (HEX.good .. "  more than the materials|r") or "") }
-    end
-
-    if pr.priced then
-        local s = Market.Stats(r.creates)
-        out[#out + 1] = { header = true, text = "Its market" }
-        if s then
-            -- The % is measured against the earlier looks, so that is the price named beside it.
-            out[#out + 1] = { label = "Lowest", text = Money(s.p) .. " each  ·  " .. AgeText(s.t) .. HEX.muted .. "  ·  earlier "
-                .. Money(s.trendBase and math.floor(s.trendBase + 0.5)) .. "  ·  usual " .. Money(s.usual and math.floor(s.usual + 0.5)) .. "|r",
-                cols = { Pct(s.trend) },
-                id = r.creates, tooltip = function(o) ns.Tooltip.Text(o, { "Click: its prices." }) end }
-            out[#out + 1] = { label = "Supply", text = Supply(s.n, s.a) }
-        end
-        local mv = Market.Movement(r.creates)
-        local ev = Market.MovementLines(mv)
-        out[#out + 1] = { label = "Moves", text = mv.hex .. mv.label .. "|r" .. HEX.muted .. "  " .. ev[1] .. "|r" }
-        if ev[2] then out[#out + 1] = { label = "", text = HEX.muted .. ev[2] .. "|r" } end
-    end
-
-    out[#out + 1] = { header = true, text = "Materials" .. HEX.muted .. "  (price each, in your bags)|r", sortId = "materials", cols = { "Per craft" } }
-    for _, e in ipairs(plan.reagents) do
-        local price = e.src == "unknown" and (HEX.bad .. "no price|r") or (HEX.muted .. ns.Professions.PriceText(e.id) .. "|r")
-        out[#out + 1] = { label = e.need .. " x", text = Market.ItemText(e.id) .. "  " .. price
-                .. HEX.muted .. "  ·  have |r" .. (e.have >= e.need and HEX.good or HEX.muted) .. e.have .. "|r",
-            cols = { e.sub and Money(e.sub) or (HEX.dim .. "?|r") },
-            id = Prices.Entry(e.id) and e.id or nil }
-        if e.craft then
-            -- Whole crafts: what making `need` costs, and what is left over.
-            local c = e.craft
-            out[#out + 1] = { label = "", text = HEX.gold .. "make it: " .. Money(c.whole) .. "|r" .. HEX.muted
-                .. "  (" .. c.crafts .. (c.crafts == 1 and " craft" or " crafts")
-                .. (c.spare > 0 and (", " .. c.spare .. " spare") or "") .. "; " .. c.r.name .. ", " .. c.r.prof
-                .. (c.estimated and ", estimated" or "") .. ")|r" }
-        end
-    end
-
-    out[#out + 1] = { header = true, text = "From your bags" }
-    if plan.canMake > 0 then
-        out[#out + 1] = { label = "Can make", text = HEX.good .. plan.canMake .. (plan.canMake == 1 and " craft" or " crafts") .. "|r"
-            .. HEX.muted .. "  (" .. plan.canMake * makes .. " items)|r"
-            .. (function()
-                if not pr.priced then return "" end
-                -- All of them sold: the AH value only for as many as were listed, the rest at the vendor.
-                local p = Market.BatchProfit(r, plan.canMake)
-                return p and (HEX.muted .. "  ·  |r" .. ProfitText(p) .. HEX.muted .. " over the materials' price|r") or ""
-            end)() }
-    else
-        out[#out + 1] = { label = "Can make", text = HEX.muted .. "none yet|r" }
-        out[#out + 1] = { label = "Buy", text = (plan.unknown > 0 and "at least " or "") .. Money(plan.buyCost) .. HEX.muted
-            .. "  of materials you lack for one craft" .. (plan.unknown > 0 and (", + " .. plan.unknown .. " without a price") or "") .. "|r" }
-    end
-
-    out[#out + 1] = { header = true, text = "Recipe" }
-    out[#out + 1] = { label = r.prof:sub(1, 12), text = r.name .. HEX.muted .. "  ·  skill " .. r.skill
-        .. (pr.known and "  ·  you know it" or "  ·  not learned (or the profession window not opened yet)")
-        .. (pr.cooldown and "  ·  once a day" or "") .. "|r" }
-    if r.colors then
-        out[#out + 1] = { label = "Skill-ups", text = HEX.muted .. string.format("orange %d, yellow %d, green %d, grey %d", r.colors[1] or 0,
-            r.colors[2] or 0, r.colors[3] or 0, r.colors[4] or 0) .. "|r" }
-    end
-    return out
-end
-
--- Most profit first (the column titles sort it otherwise); unpriced by name.
-local function ByProfit(a, b) return (a.profit or -math.huge) > (b.profit or -math.huge) end
-local function ByName(a, b) return a.r.name < b.r.name end
-
--- A button that cycles through choices (right-click back) with a dropdown.
-local function CycleButton(parent, width, items, get, set, tip, title)
-    local b = Style.Button(parent, "", width, function(_, button)
-        local i = 1
-        for n, it in ipairs(items) do if it.key == get() then i = n end end
-        i = i + (button == "RightButton" and -1 or 1)
-        if i > #items then i = 1 elseif i < 1 then i = #items end
-        set(items[i].key)
-        UI.Refresh()
-    end, tip, { title = title })
-    Style.AttachDropdown(b, function()
-        return Style.ChoiceItems(items, get(), function(key) set(key) UI.Refresh() end)
-    end)
-    function b:Update()
-        for _, it in ipairs(items) do if it.key == get() then self:SetLabel(it.label .. "  >") end end
-    end
-    return b
-end
-
-local function BuildCrafting(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.card = Style.Card(v, "Crafting for profit")
-    v.card:SetPoint("TOPLEFT")
-    v.card:SetPoint("BOTTOMLEFT")
-    v.card:SetWidth(470)
-    local top = CreateFrame("Frame", nil, v.card.content)
-    top:SetPoint("TOPLEFT", 6, -4)
-    top:SetPoint("TOPRIGHT", -6, -4)
-    top:SetHeight(24)
-    v.mode = CycleButton(top, 140, CRAFT_MODES, function() return state.craftMode end, function(k) state.craftMode = k end,
-        "Only recipes you know (open your profession window once), or every recipe your skill allows.", "Recipes")
-    v.mode:SetPoint("TOPLEFT")
-    v.filter = CycleButton(top, 140, CRAFT_FILTERS, function() return state.craftFilter end, function(k) state.craftFilter = k end,
-        "All recipes, only those that make money, or only those your bags hold the materials for.", "Show")
-    v.filter:SetPoint("LEFT", v.mode, "RIGHT", 6, 0)
-    local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -32)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { colWidths = { 64, 64, 46 }, search = true, hint = "Search recipes, professions...",
-        onClick = function(item)
-            if not item.pr then return end
-            local r, now = item.pr.r, GetTime()
-            -- A second click on the same recipe within DOUBLE_CLICK seconds
-            -- (list rows have no double-click of their own): the floating
-            -- tracker, with what it takes, the cheapest route and Craft next.
-            local double = v.lastClick and v.lastClick.r == r and now - v.lastClick.at <= DOUBLE_CLICK
-            v.lastClick = not double and { r = r, at = now } or nil
-            state.craftSel = r
-            UI.Refresh()
-            if double and ns.CraftTrackUI then ns.CraftTrackUI.Open(r) end
-            if not double then ShowOnAH(r.creates) end
-        end })
-
-    v.right = Style.Card(v, "")
-    v.right:SetPoint("TOPLEFT", v.card, "TOPRIGHT", 10, 0)
-    v.right:SetPoint("BOTTOMRIGHT")
-    v.chart = ns.PriceChart.New(v.right.content)
-    v.chart:SetPoint("TOPLEFT", 2, -2)
-    v.chart:SetPoint("TOPRIGHT", -2, -2)
-    v.chart:SetHeight(110)
-    local detailHolder = CreateFrame("Frame", nil, v.right.content)
-    detailHolder:SetPoint("TOPLEFT", 0, -118)
-    detailHolder:SetPoint("BOTTOMRIGHT")
-    v.detail = Style.List(detailHolder, { labelWidth = 74, colWidths = { 70 }, onClick = function(item)
-        ShowOnAH(item.id)
-        if item.id and Prices.Entry(item.id) then state.view, state.selected = "prices", item.id UI.Refresh() end
-    end })
-
-    function v:Footer()
-        return "Materials at the best known prices (vendor, your AH looks, else Wowhead estimates *) against the product's AH price "
-            .. "after the cut and your sell rate. Click a column title to sort."
-    end
-
-    function v:Refresh()
-        self.mode:Update() self.filter:Update()
-        -- Every recipe's materials priced: kept until prices, skills, known
-        -- recipes, your sales or your bags change.
-        local data = ns.Data.List(self.list, {
-            name = "market:crafting", sources = { "prices", "skills", "crafts", "economy", "bags" },
-            key = { ns.Gear.CharKey(), state.craftMode, state.craftFilter, state.craftSel }, row = CraftRow,
-            build = function(add, raw)
-                local all = Market.CraftList(ns.Gear.CharKey(), state.craftMode, { cooldowns = true, bags = true })
-                local priced, unpriced, winners, seen = {}, {}, 0, 0
-                for _, pr in ipairs(all) do
-                    if pr.priced then seen = seen + 1 end
-                    if pr.priced and pr.profit > 0 then winners = winners + 1 end
-                    local keep = state.craftFilter == "all" or (state.craftFilter == "profit" and pr.priced and pr.profit > 0)
-                        or (state.craftFilter == "make" and (pr.canMake or 0) > 0)
-                    if keep then table.insert(pr.priced and priced or unpriced, pr) end
-                end
-                table.sort(priced, ByProfit)
-                table.sort(unpriced, ByName)
-                raw({ header = true, text = "Recipe", sortId = "craft", cols = { "Materials", "Profit", "Margin" } })
-                for _, pr in ipairs(priced) do add(pr, { pr = pr }) end
-                if #priced == 0 then
-                    raw({ text = HEX.muted .. "No product of these recipes seen on the Auction House yet. Search for what you can make there.|r" })
-                end
-                if #unpriced > 0 then
-                    raw({ header = true, text = "Not seen on the Auction House" .. HEX.muted .. "  (search them there)|r", sortId = "craft",
-                        cols = { "Materials", "", "" } })
-                    for _, pr in ipairs(unpriced) do add(pr, { pr = pr }) end
-                end
-                return { all = all, seen = seen, winners = winners }
-            end,
-        })
-        local sel
-        for _, pr in ipairs(data.all) do if pr.r == state.craftSel then sel = pr end end
-        if not sel then
-            -- Nothing chosen yet: the best earner, else the first recipe.
-            for _, pr in ipairs(data.all) do
-                if pr.priced and (not sel or pr.profit > sel.profit) then sel = pr end
-            end
-            sel = sel or data.all[1]
-        end
-        state.craftSel = sel and sel.r or nil
-        self.card.sub:SetText(string.format("%d recipes  ·  %d make money  ·  %d not seen on the AH", #data.all, data.winners,
-            #data.all - data.seen))
-        if sel then
-            local r = sel.r
-            self.right.title:SetText(Market.ItemText(r.creates) .. ((r.makes or 1) ~= 1 and (" x" .. r.makes) or ""))
-            self.right.sub:SetText(sel.priced and ("profit " .. ProfitText(sel.profit) .. " per craft  ·  margin " .. MarginText(sel.margin))
-                or ("materials " .. Money(sel.cost) .. "  ·  product not seen on the AH"))
-            self.detail:SetItems(CraftDetailRows(sel))
-            self.chart:SetItem(sel.priced and r.creates or nil)
-        else
-            self.right.title:SetText("")
-            self.right.sub:SetText("")
-            self.detail:SetItems({ { text = HEX.muted .. "No recipes: learn a profession, or open its window once.|r" } })
-            self.chart:SetItem(nil)
-        end
-    end
-    return v
-end
-
----------------------------------------------------------------------------
--- Deals
----------------------------------------------------------------------------
 local function DealRow(d)
     local _, icon = Market.ItemInfo(d.id)
+    local each = d.p or d.s.p
+    local usual = math.floor(d.usual + 0.5)
+    local under = (each and d.usual > 0) and (each / d.usual - 1) or nil
     return {
         icon = icon,
-        text = Market.ItemText(d.id) .. HEX.muted .. "  " .. Supply(d.s.n, d.s.a) .. "  ·  " .. Prices.Age(d.s.t) .. "|r",
-        cols = { HEX.white .. Money(d.p) .. "|r", Money(math.floor(d.usual + 0.5)), HEX.good .. "+" .. Money(d.gain)
-            .. HEX.muted .. " (" .. math.floor(d.gain / math.max(1, d.p) * 100) .. "%)|r" },
+        text = Market.ItemText(d.id) .. HEX.muted .. "  " .. Supply(d.s.n, d.s.a) .. "  ·  " .. Prices.Age(d.s.t) .. "|r" .. Market.MoveTag(d.id),
+        cols = { DealGain(d), d.cost and Money(d.cost) or ns.UNKNOWN, d.units and tostring(d.units) or ns.UNKNOWN,
+            under and Pct(under) or ns.UNKNOWN, HEX.muted .. Money(usual) .. "|r", HEX.white .. Money(each) .. "|r" },
+        sort = { d.totalGain or d.gainIfAll or d.gain, d.cost, d.units, under and -under, usual, each },
+        tooltip = function(owner)
+            local Desk = ns.AuctionDesk
+            local t = ns.Tooltip.Open(owner)
+            t:Title(Market.ItemText(d.id))
+            t:Pair("Now", Money(each) .. " each")
+            t:Pair("Usual", Money(usual) .. string.format(" (%d looks)", d.s.looks or 0))
+            t:Line(string.format("Each resold at the usual price brings %s after the cut: +%s.", Money(Market.Net(d.usual)), Money(d.gain)))
+            if d.units and d.totalGain then
+                t:Line(string.format("%d units at the deal price cost %s; expected with your sell rate: %s.", d.units, Money(d.cost),
+                    Desk and Desk.Signed(d.totalGain) or Money(d.totalGain)))
+            elseif d.units then
+                t:Line(string.format("%d units at the deal price cost %s; if all resold: %s (no sell rate of yours yet).", d.units,
+                    Money(d.cost), Desk and Desk.Signed(d.gainIfAll or 0) or Money(d.gainIfAll)))
+            else
+                t:Line("How many are listed at that price: search it on the Auction House (a full look).", "muted")
+            end
+            t:Note("Look " .. Prices.Age(d.s.t) .. ": check it is still there.")
+            t:Hint("Click: search it in the open Auction House (one search per click).")
+            t:Show()
+        end,
     }
 end
 
@@ -696,35 +574,36 @@ local function BuildDeals(parent)
     v:SetAllPoints()
     v.card = Style.Card(v, "Deals")
     v.card:SetAllPoints()
-    v.list = Style.List(v.card.content, { colWidths = { 90, 90, 100 }, search = true, time = true, onClick = function(item)
-        if item.id then state.view, state.selected = "prices", item.id UI.Refresh() ShowOnAH(item.id) end
+    v.list = Style.List(v.card.content, { colWidths = { 110, 74, 48, 52, 70, 74 }, columns = DEAL_COLUMNS, search = true,
+        time = true, hint = "Search deals...", onClick = function(item)
+        if item.id then OpenPrices(item.id) ShowOnAH(item.id) end
     end })
 
     function v:Footer()
-        return string.format("At most %d%% of the usual price, with %d+ looks. Gain: resold at the usual price after the cut. "
-            .. "Prices are your last look: check they are still there.", Market.DEAL_FACTOR * 100, Market.DEAL_LOOKS)
+        return string.format("Listed at most %d%% of the usual price (%d+ looks). Units and gain: every unit under that price, resold at "
+            .. "the usual price after the cut and the deposit. A click searches it at the open Auction House: one search per click.",
+            Market.DEAL_FACTOR * 100, Market.DEAL_LOOKS)
     end
 
     function v:Refresh()
-        -- Every priced item is checked: kept until a price changes (a minute
-        -- at most, for the ages), rows formatted when drawn.
+        local Desk = ns.AuctionDesk
         local data = ns.Data.List(self.list, {
-            name = "market:deals", sources = { "prices" }, key = Prices.RealmKey(), maxAge = 60, row = DealRow,
-            build = function(add, raw)
-                raw({ header = true, text = "Item", cols = { "Now", "Usual", "Gain each" } })
-                local n = 0
-                for _, d in ipairs(Market.Deals()) do add(d, { id = d.id, time = d.s.t }) n = n + 1 end
-                if n == 0 then raw({ text = HEX.muted .. "No deals at your last looks. The more you browse, the better \"usual\" gets.|r" }) end
-                return { count = n }
+            name = "market:deals", sources = { "prices", "economy" }, key = Prices.RealmKey(), maxAge = 60, row = DealRow,
+            empty = "No deals at your last looks. The more you browse, the better \"usual\" gets.",
+            build = function(add)
+                -- The desk's list: the Market's deals with their depth (none that are all yours).
+                local deals = Desk and Desk.Deals() or Market.Deals()
+                for _, d in ipairs(deals) do add(d, { id = d.id, time = d.s.t }) end
+                return { count = #deals }
             end,
         })
-        self.card.sub:SetText(data.count .. " items under their usual price  ·  click one for its detail")
+        self.card.sub:SetText(data.count .. " items under their usual price  ·  click one for its prices")
     end
     return v
 end
 
 ---------------------------------------------------------------------------
--- Bids: auctions whose next bid is under the item's price, soonest to end first
+-- Buy > Bids: auctions whose next bid is under the item's price, soonest to end first
 ---------------------------------------------------------------------------
 -- "by 14:30": the latest the auction can end (its band at your look).
 local function EndsBy(ends, now)
@@ -753,7 +632,7 @@ local function BidRow(d)
             t:Pair("Item price", d.price and (Money(math.floor(d.price + 0.5)) .. " each") or "?")
             if d.usual then t:Pair("Usual", Money(math.floor(d.usual + 0.5)) .. " each") end
             if d.resale then
-                t:Pair("Resold", (d.resale >= 0 and "+" or "-") .. Money(math.abs(math.floor(d.resale + 0.5))), d.resale >= 0 and "safe" or "danger")
+                t:Pair("Resold", (d.resale >= 0 and "+" or "-") .. Money(math.abs(math.floor(d.resale + 0.5))), d.resale >= 0 and "good" or "bad")
                 t:Note("At the usual price after the " .. math.floor(Market.CUT * 100) .. "% cut, less the bid (deposit not counted).")
             end
             local band = Prices.BANDS[d.api] and r.band and Prices.BANDS[d.api][r.band]
@@ -828,10 +707,7 @@ local function BuildBids(parent)
 end
 
 ---------------------------------------------------------------------------
--- Window
----------------------------------------------------------------------------
----------------------------------------------------------------------------
--- Sell-through: how your own auctions ended, worst sellers first
+-- My auctions > By item: how your own auctions ended, worst sellers first
 ---------------------------------------------------------------------------
 local function SellThroughRow(e)
     local s = e.sales
@@ -869,7 +745,7 @@ local function BuildSellThrough(parent)
     v.card:SetAllPoints()
     v.list = Style.List(v.card.content, { colWidths = { 110, 110, 90 }, search = true, time = true, onClick = function(item)
         ShowOnAH(item.id)
-        if item.id and Prices.Entry(item.id) then state.view, state.selected = "prices", item.id UI.Refresh() end
+        if item.id and Prices.Entry(item.id) then OpenPrices(item.id) end
     end })
 
     function v:Footer()
@@ -921,31 +797,163 @@ local function BuildSellThrough(parent)
     return v
 end
 
-local VIEWS = {
-    { key = "prices", label = "Prices", build = BuildPrices },
-    { key = "sell", label = "Sell", build = BuildSell },
-    { key = "crafting", label = "Crafting", build = BuildCrafting },
-    { key = "deals", label = "Deals", build = BuildDeals },
-    { key = "bids", label = "Bids", build = BuildBids },
-    { key = "sellthrough", label = "Sell-through", build = BuildSellThrough },
+---------------------------------------------------------------------------
+-- Title bar: Full scan, the scan panel, the scan log
+---------------------------------------------------------------------------
+-- The full scan's state for its button: enabled, why not, label.
+local function FullScanState()
+    local H = ns.AHHelper
+    if not H then return false, "no scan panel on this client", "Full scan" end
+    if H.state and H.state.scan then
+        if H.state.scan.reading then return false, "the full scan is being read", "Reading the scan..." end
+        return true, nil, "Stop the full scan"
+    end
+    local wait = H.NextFullScan()
+    if wait > 0 then
+        return false, "the server allows one full scan every 15 minutes", string.format("Full scan in %d:%02d", math.floor(wait / 60), wait % 60)
+    end
+    if not H.IsOpen() then return false, "open the Auction House first", "Full scan" end
+    return true, nil, "Full scan"
+end
+
+-- One click = one full scan (or stops the one waiting for its answer): the
+-- same call and the same limits as the scan panel's button.
+local function FullScanClick()
+    local ok, why = FullScanState()
+    if not ok then ns.Print((why or "not now") .. ".") return end
+    local done, msg = ns.AHHelper.FullScan()
+    if not done and msg then ns.Print(msg) end
+    UI.Refresh()
+end
+UI.FullScanClick = FullScanClick
+
+function UI.ScanLogLines()
+    local log = db().ahScanLog
+    local lines = { ns.TITLE .. ": full scans, newest first" }
+    if type(log) ~= "table" or #log == 0 then
+        lines[#lines + 1] = "No full scans logged yet."
+        return lines
+    end
+    local H = ns.AHHelper
+    for i = #log, math.max(1, #log - 9), -1 do
+        local e = log[i]
+        local text = H and H.ScanText(e) or tostring(e.result)
+        lines[#lines + 1] = date("%b %d %H:%M", e.t) .. "  " .. (e.realm or "?") .. "  "
+            .. (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+    end
+    return lines
+end
+
+-- The scan log in the report window (the same lines the command prints).
+function UI.ShowScanLog()
+    local lines = UI.ScanLogLines()
+    if ns.Probe and ns.Probe.ShowText then ns.Probe.ShowText(table.concat(lines, "\n"))
+    else for _, l in ipairs(lines) do ns.Print(l) end end
+end
+
+local function ScanPanelShown()
+    local p = ns.AHHelper and ns.AHHelper.Panel()
+    return db().ahHelper and true or false, p ~= nil and p:IsShown()
+end
+
+local function ToggleScanPanel()
+    local H = ns.AHHelper
+    if not H then return end
+    db().ahHelper = not db().ahHelper
+    if db().ahHelper then
+        H.Show()
+    else
+        local p = H.Panel()
+        if p then p:Hide() end
+    end
+    UI.Refresh()
+end
+UI.ToggleScanPanel = ToggleScanPanel
+
+local function RefreshHeader()
+    if not frame then return end
+    local ok, why, label = FullScanState()
+    frame.fullScan:SetLabel(label)
+    frame.fullScan:SetEnabled(ok, why)
+    local on = ScanPanelShown()
+    frame.scanPanel:SetLabel("Scan panel: " .. (on and "shown" or "hidden"))
+    frame.scanPanel:SetOn(on)
+    frame:SetStatus("Auction house: " .. (Prices.RealmKey() or "?"))
+end
+
+---------------------------------------------------------------------------
+-- Window
+---------------------------------------------------------------------------
+-- Profit for crafts moved to Professions.
+function UI.OpenProfit()
+    if ns.Nav and ns.Nav.Go and ns.Nav.Go("prof", "profit") then return true end
+    if ns.ProfessionsUI and ns.ProfessionsUI.ShowPage then
+        ns.ProfessionsUI.ShowPage("profit")
+        return true
+    end
+    ns.Print("crafting for profit is now on the Professions page (Profit).")
+    return false
+end
+
+local BUILDERS = {
+    { key = "deals", build = BuildDeals }, { key = "bids", build = BuildBids }, { key = "sell", build = BuildSell },
+    { key = "sellthrough", build = BuildSellThrough }, { key = "prices", build = BuildPrices },
 }
 
+local function SelectView(key)
+    state.view = key
+    UI.Refresh()
+end
+
+local function SelectTab(tab)
+    if tab == "buy" then SelectView(state.buyView or "deals")
+    elseif tab == "mine" then SelectView(state.mineView or "mine")
+    else SelectView(tab) end
+end
+
 local function Build()
-    frame = Style.Window(ns.FRAME .. "MarketWindow", "Market", nil, nil, { nav = "market", hidden = true })
-    frame.realm = Style.Text(frame, "GameFontDisableSmall", "RIGHT")
-    frame.realm:SetPoint("TOPRIGHT", -44, -16)
+    frame = Style.Window(ns.FRAME .. "MarketWindow", "Auction House", nil, nil,
+        { nav = "ah", settings = "ah", section = "Trade", hidden = true })
+    -- Title bar, right to left: scan log, scan panel, full scan.
+    frame.scanLog = frame.header:Add(Style.Button(frame, "Scan log", 76, function() UI.ShowScanLog() end,
+        "The last full scans, in the report window. Also " .. ns.Cmd.Text("ah", "log") .. ".", { small = true }))
+    frame.scanPanel = frame.header:Add(Style.Button(frame, "Scan panel: shown", 130, function() ToggleScanPanel() end,
+        "The panel next to the Auction House: full scan and the one-search-per-click list. Also " .. ns.Cmd.Text("ah", "scan") .. ".",
+        { small = true, title = "Scan panel" }))
+    if ns.Options and ns.Options.Bind then ns.Options.Bind("ahHelper", "quick", "ah") end
+    frame.fullScan = frame.header:Add(Style.Button(frame, "Full scan", 140, function() FullScanClick() end,
+        "Every auction at once (one every 15 minutes, at the Auction House): the price ladders the plans work from. One click, one scan.",
+        { kind = "send", small = true, title = "Full scan" }))
+    -- The wait counts down while the page is open.
+    local since = 0
+    frame:HookScript("OnUpdate", function(_, elapsed)
+        since = since + (elapsed or 0)
+        if since >= 1 then since = 0 RefreshHeader() end
+    end)
+
     local tabHolder = CreateFrame("Frame", nil, frame)
     tabHolder:SetPoint("TOPLEFT", PAD, -44)
     tabHolder:SetPoint("TOPRIGHT", -PAD, -44)
     tabHolder:SetHeight(26)
-    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end, 110)
+    frame.tabs = Style.Tabs(tabHolder, TABS, SelectTab)
+    frame.switches = {}
+    for tab, defs in pairs(TAB_VIEWS) do
+        local sw = Style.Views(tabHolder, defs, SelectView)
+        sw:SetPoint("RIGHT", tabHolder, "RIGHT", 0, 0)
+        sw:Hide()
+        frame.switches[tab] = sw
+    end
     local line = Style.HLine(frame)
     line:SetPoint("TOPLEFT", PAD, -70)
     line:SetPoint("TOPRIGHT", -PAD, -70)
     local body = CreateFrame("Frame", nil, frame)
     body:SetPoint("TOPLEFT", PAD, -80)
     body:SetPoint("BOTTOMRIGHT", -PAD, 34)
-    for _, def in ipairs(VIEWS) do views[def.key] = def.build(body) end
+    frame.body = body
+    local DeskUI = ns.AuctionDeskUI
+    if DeskUI and DeskUI.BuildToday then views.today = DeskUI.BuildToday(body, UI) end
+    if DeskUI and DeskUI.BuildMine then views.mine = DeskUI.BuildMine(body, UI) end
+    for _, def in ipairs(BUILDERS) do views[def.key] = def.build(body) end
     frame.footer = Style.Text(frame, "GameFontDisableSmall")
     frame.footer:SetPoint("BOTTOMLEFT", PAD + 2, 12)
     frame.footer:SetPoint("RIGHT", -PAD, 0)
@@ -954,37 +962,122 @@ end
 
 function UI.Refresh()
     if not frame or not frame:IsShown() then return end
-    frame.realm:SetText("Auction house: " .. (Prices.RealmKey() or "?"))
-    frame.tabs:Select(state.view)
+    if not views[state.view] then state.view = views.today and "today" or "prices" end
+    local tab = VIEW_TAB[state.view]
+    if tab == "buy" then state.buyView = state.view elseif tab == "mine" then state.mineView = state.view end
+    RefreshHeader()
+    frame.tabs:Select(tab)
+    for key, sw in pairs(frame.switches) do
+        sw:SetShown(key == tab)
+        if key == tab then sw:Select(state.view) end
+    end
     for key, v in pairs(views) do v:SetShown(key == state.view) end
     local v = views[state.view]
     v:Refresh()
     frame.footer:SetText(v:Footer() or "")
 end
 
--- view: tab key; search: text for the Prices search box.
-function UI.Show(view, search)
+local TAB_ALIAS = { today = "today", buy = "buy", sell = "sell", mine = "mine", ["my auctions"] = "mine", prices = "prices",
+    price = "prices", overview = "today" }
+local MINE_FILTERS = { all = true, listed = true, sold = true, expired = true, cancelled = true }
+
+-- Nav's entry point: tab (today / buy / sell / mine / prices, "ah/" allowed),
+-- view (Deals / Bids / Auctions / By item, label or key), arg (an item id to
+-- select on Prices, a search text for Prices, or a status for My auctions).
+function UI.ShowPage(tab, view, arg)
     if not frame then Build() end
-    if view and views[view] then state.view = view end
-    if search then
-        state.search = search:lower()
-        views.prices.search:SetText(search)
+    tab = tab and tostring(tab):lower():gsub("^ah/", "") or nil
+    tab = tab and TAB_ALIAS[tab] or nil
+    local key
+    local want = view and tostring(view):lower() or nil
+    if tab and TAB_VIEWS[tab] then
+        for _, def in ipairs(TAB_VIEWS[tab]) do
+            if want and (want == def.key or want == def.label:lower() or (want == "byitem" and def.key == "sellthrough")
+                or (want == "auctions" and def.key == "mine")) then key = def.key end
+        end
+        key = key or (tab == "buy" and state.buyView or state.mineView)
+    elseif tab then
+        key = tab
+    end
+    if key and views[key] then state.view = key end
+    if type(arg) == "number" then
+        -- One item: nothing may hide it (a search, or a filter it is not in).
+        state.selected = arg
+        if not Prices.Ladder(arg) then state.priceFilter = "all" end
+        if state.search ~= "" then
+            state.search = ""
+            views.prices.search:SetText("")
+        end
+    elseif type(arg) == "string" and arg ~= "" then
+        local a = arg:lower()
+        if state.view == "mine" and MINE_FILTERS[a] then
+            state.mineFilter = a
+        elseif state.view == "prices" then
+            state.search = a
+            views.prices.search:SetText(arg)
+        end
     end
     frame:Show()
     UI.Refresh()
+    return true
 end
 
+-- Old view keys of the Market window: prices, sell, crafting, deals, bids,
+-- sellthrough. view nil: where you left the page. search: Prices' search.
+local OLD_VIEW = { prices = { "prices" }, sell = { "sell" }, deals = { "buy", "deals" }, bids = { "buy", "bids" },
+    sellthrough = { "mine", "sellthrough" }, today = { "today" }, buy = { "buy" }, mine = { "mine" } }
+
+function UI.Show(view, search)
+    if view == "crafting" then return UI.OpenProfit() end
+    local to = view and OLD_VIEW[view]
+    if to then return UI.ShowPage(to[1], to[2], search) end
+    return UI.ShowPage(nil, nil, search)
+end
+
+-- Open, or close when it already shows that view (any view when nil).
 function UI.Toggle(view)
-    if frame and frame:IsShown() and (not view or view == state.view) then frame:Hide() else UI.Show(view) end
+    if view == "crafting" then return UI.OpenProfit() end
+    local to = view and OLD_VIEW[view]
+    local shownView = to and (to[2] or (to[1] == "buy" and state.buyView) or (to[1] == "mine" and state.mineView) or to[1])
+    if frame and frame:IsShown() and (not view or shownView == state.view) then frame:Hide() else UI.Show(view) end
 end
 
 function UI.IsShown() return frame ~= nil and frame:IsShown() end
+function UI.Frame() return frame end
+
+-- The Home line and the rail tag: what the Today page computes.
+function UI.PageStatus()
+    local Desk = ns.AuctionDesk
+    if not Desk then return nil end
+    local sum = Desk.Summary()
+    -- Resets and deals walk every ladder: only what Today or the warm-up
+    -- already built, never a build from the rail or Home.
+    local opps, deals = ns.Data.Peek("desk:opportunities"), ns.Data.Peek("desk:deals")
+    local _, newest = Prices.Count()
+    local text = string.format("%d listed · %d undercut", sum.listed, sum.undercut)
+        .. (opps and string.format(" · %d resets", #opps) or "")
+        .. (deals and string.format(" · %d deals", #deals) or "")
+        .. (newest and (" · look " .. Prices.Age(newest)) or " · no look yet")
+    return { text = text, tone = sum.undercut > 0 and "bad" or nil, undercut = sum.undercut }
+end
+
 UI.state, UI.views = state, views
 -- Redrawn when prices (an AH page), your auctions or your recipes change.
--- Frames and the Prices list are built after login, before the first open.
--- Bags only matter to the Sell and Crafting tabs.
+-- Frames, the Prices list and Today's numbers (a plan per ladder) are built
+-- after login, before the first open. Bags only matter to the Sell tab.
 ns.Data.Window(UI, { "prices", "economy", "skills", "crafts", "bags" }, {
-    shows = function(src) return src ~= "bags" or state.view == "sell" or state.view == "crafting" end,
+    shows = function(src) return src ~= "bags" or state.view == "sell" end,
     prebuild = function() if not frame then Build() end end,
-    warm = function() PriceItems() end,
+    warm = function()
+        PriceItems()
+        local Desk = ns.AuctionDesk
+        if not Desk then return end
+        Desk.Summary()
+        Desk.Opportunities()
+        Desk.Markets("profit", state.search)
+        Desk.Deals()
+        Desk.NotWorthIt()
+        Desk.DepositRate()
+        Market.CraftList(ns.Gear.CharKey(), "known")
+    end,
 })

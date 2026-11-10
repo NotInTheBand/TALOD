@@ -127,9 +127,8 @@ scenarios.large_data_more = function()
     check(lv.list.all ~= rows, "ledger rebuilt on a gear change")
     ns.GearUI.Show("sources")
     check(#ns.GearUI.views.sources.list.all == 1000 and built(ns.GearUI.views.sources.list) <= 40, "sources lazy")
-    for _, view in ipairs({ "skills", "crafting", "professions", "enhance", "snapshots", "progress" }) do
-        if ns.GearUI.views[view] then ns.GearUI.Show(view) end
-    end
+    for _, view in ipairs({ "enhance", "gear", "progress" }) do ns.GearUI.Show(view) end
+    for _, view in ipairs({ "skills", "log", "plan", "profit" }) do ns.ProfessionsUI.Show(view) end
 
     -- Auction desk: plans and lists kept until prices change.
     local Desk, Pr = ns.AuctionDesk, ns.Prices
@@ -140,7 +139,7 @@ scenarios.large_data_more = function()
     local rate = Desk.DepositRate()
     check(type(rate) == "number", "deposit rate")
     ns.AuctionDeskUI.Show()
-    for _, view in ipairs({ "listings", "deals", "margins", "control", "overview" }) do ns.AuctionDeskUI.Show(view) end
+    for _, view in ipairs({ "listings", "deals", "control", "overview" }) do ns.AuctionDeskUI.Show(view) end
 
     -- Fishing: the goal tally walks the whole cast log once per change.
     local G = ns.FishingGoals
@@ -228,7 +227,8 @@ scenarios.large_data_economy = function()
     MOCK.RunTimers()
     check(draws[1] == 2, "and once after the gap: " .. draws[1])
 
-    for _, view in ipairs({ "overview", "auctions", "trades" }) do UI.Show(view) end
+    for _, view in ipairs({ "overview", "transactions", "trades" }) do UI.Show(view) end
+    ns.MarketUI.ShowPage("mine")
 end
 
 scenarios.large_data_market = function()
@@ -301,17 +301,17 @@ scenarios.large_data_background = function()
 
     -- Another main window open before the warm-up: it stays open.
     ns.GearUI.Show()
-    check(D.Busy() and not _G.TALODAuctionDesk, "warm-up waits after login")
+    check(D.Busy() and not _G.TALODMarketWindow, "warm-up waits after login")
     MOCK.Tick(1)
-    check(not _G.TALODAuctionDesk and builds == 0, "nothing built during the delay")
+    check(not _G.TALODMarketWindow and builds == 0, "nothing built during the delay")
     MOCK.lockdown = true
     MOCK.Tick(5)
-    check(not _G.TALODAuctionDesk, "no warm-up in combat")
+    check(not _G.TALODMarketWindow, "no warm-up in combat")
     MOCK.lockdown = false
     local frames = settle()
     check(not D.Busy(), "warm-up finished")
     check(frames > 20, "spread over frames: " .. frames)
-    for _, name in ipairs({ "TALODAuctionDesk", "TALODMarketWindow", "TALODEconomyWindow" }) do
+    for _, name in ipairs({ "TALODMarketWindow", "TALODEconomyWindow" }) do
         check(_G[name] and not _G[name]:IsShown(), name .. " built hidden")
     end
     check(ns.GearUI.IsShown(), "the open window stayed open")
@@ -334,7 +334,7 @@ scenarios.large_data_background = function()
     MOCK.Tick(0.02)
     check(not D.Busy(), "changed data mid-build: rebuild dropped")
     ns.AuctionDeskUI.Refresh()
-    local draws = counted(ns.AuctionDeskUI.views.overview)
+    local draws = counted(ns.MarketUI.views.today)
     settle()
     check(builds >= 2, "rebuilt in the background: " .. builds)
     check(draws[1] == 1, "the open window redrew once when it landed: " .. draws[1])

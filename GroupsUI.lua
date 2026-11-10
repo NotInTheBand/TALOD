@@ -1,5 +1,6 @@
--- TALOD - the Groups window: the group you are in now (live), every party
--- and raid you were in, and one group's members, chat, loot and timeline.
+-- TALOD - the Groups page: Now (the group you are in, live, with its
+-- members, chat, loot and timeline) and History (every party and raid in one
+-- list; a row opens that group in full, Back returns to the list).
 
 local ADDON_NAME, ns = ...
 local S = ns.Secret
@@ -13,7 +14,9 @@ ns.GroupsUI = UI
 local PAD = 12
 local frame
 local views = {}
-local state = { view = "now", mode = "members" }
+-- view: now / history / session (one group of History, opened from its row).
+-- chip: all / party / raid. mode / nowMode: members / chat / loot / timeline.
+local state = { view = "now", chip = "all", mode = "members", nowMode = "members" }
 
 local function Hex(c) return string.format("|cff%02x%02x%02x", (c[1] or 1) * 255, (c[2] or 1) * 255, (c[3] or 1) * 255) end
 local function Muted(s) return HEX.muted .. s .. "|r" end
@@ -33,13 +36,6 @@ local function Clock(t) return t and date("%H:%M", t) or "?" end
 local ROLE = { TANK = "tank", HEALER = "healer", DAMAGER = "damage", MAINTANK = "main tank", MAINASSIST = "main assist" }
 local LEAD = { [2] = "leader", [1] = "assist" }
 local KIND = { party = "Party", raid = "Raid" }
-
-local function Paint(b, on)
-    b.borderColor = on and COLORS.accent or nil
-    local col = on and COLORS.accent or COLORS.border
-    b:SetBorderColor(col[1], col[2], col[3], 1)
-    b.label:SetTextColor(on and 1 or 0.6, on and 1 or 0.6, on and 1 or 0.6)
-end
 
 local function Note(parent)
     local fs = Style.Text(parent, "GameFontDisable", "CENTER")
@@ -76,8 +72,9 @@ local function MemberLines(m, s)
         .. (m.left and (", left " .. Clock(m.left)) or ""))
     lines[#lines + 1] = "Deaths seen " .. White(tostring(m.dead or 0)) .. "   offline " .. White(Dur(m.off or 0))
         .. "   AFK " .. White(Dur(m.afk or 0))
-    lines[#lines + 1] = "Most health " .. (m.hp and White(ns.FormatNumber(m.hp)) or Muted("?"))
-        .. "   " .. (m.pw and (m.pw:sub(1, 1) .. m.pw:sub(2):lower()) or "Power") .. " " .. (m.pwm and White(ns.FormatNumber(m.pwm)) or Muted("?"))
+    lines[#lines + 1] = "Most health " .. (m.hp and White(ns.FormatNumber(m.hp)) or Style.TagText("", "unknown"))
+        .. "   " .. (m.pw and (m.pw:sub(1, 1) .. m.pw:sub(2):lower()) or "Power") .. " "
+        .. (m.pwm and White(ns.FormatNumber(m.pwm)) or Style.TagText("", "unknown"))
     if m.zone then lines[#lines + 1] = Muted("Last seen in " .. m.zone) end
     local others = Groups.With(m.key)
     if #others > 1 then lines[#lines + 1] = Muted("In " .. #others .. " of your groups") end
@@ -96,155 +93,10 @@ local function OpenAudit(key)
 end
 
 ---------------------------------------------------------------------------
--- Now: the group you are in, read live
+-- One group's members, chat, loot or timeline (Now and History share it)
 ---------------------------------------------------------------------------
-local function BuildNow(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.card = Style.Card(v, "Your group now")
-    v.card:SetAllPoints()
-    local bar = CreateFrame("Frame", nil, v.card.content)
-    bar:SetPoint("TOPLEFT", 6, -4)
-    bar:SetPoint("TOPRIGHT", -6, -4)
-    bar:SetHeight(22)
-    v.open = Style.Button(bar, "Chat, loot, timeline", 150, function()
-        local s = Groups.Current()
-        if s then Open(s.id) end
-    end, "This group's full record.")
-    v.open:SetPoint("TOPRIGHT")
-    v.where = Style.Text(bar, "GameFontHighlightSmall")
-    v.where:SetPoint("LEFT")
-    v.where:SetPoint("RIGHT", v.open, "LEFT", -8, 0)
-    local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -30)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { colWidths = { 60, 64, 50 }, search = true, hint = "Search names, guilds, classes...",
-        columns = { name = "Member", "Health", "Together", "Deaths" },
-        onClick = function(item) if item.key then OpenAudit(item.key) end end })
-    v.note = Note(v.card.content)
-    local vitals = {}
-
-    function v:Footer() return "Health is read live; ? when the game hides it. Deaths: seen alive, then dead, while grouped." end
-
-    function v:Refresh()
-        local s = Groups.Current()
-        self.list:SetShown(s ~= nil)
-        self.open:SetShown(s ~= nil)
-        self.where:SetShown(s ~= nil)
-        self.note:SetShown(s == nil)
-        if not s then
-            self.card.title:SetText("Your group now")
-            self.card.sub:SetText("")
-            self.note:SetText(ns.DB().groupsLog and "You are not in a group. Parties and Raids list the groups you were in."
-                or "Group records are off (settings, Groups).")
-            return
-        end
-        self.card.title:SetText(Title(s) .. Muted("  " .. Groups.MemberCount(s) .. " players · " .. Dur(Groups.Duration(s))))
-        self.card.sub:SetText("Since " .. When(s.start) .. (s.leader and ("  ·  led by " .. Groups.Short(s.leader)) or "")
-            .. "  ·  " .. #(s.chat or {}) .. " chat lines  ·  " .. (s.deaths or 0) .. " deaths")
-        self.where:SetText(Muted("Now in ") .. White(s.zone or "?"))
-        local rows = {}
-        for _, m in ipairs(Groups.Members(s)) do
-            if not m.left then
-                local unit = Groups.UnitOf(m.key)
-                local hp, hpMax, dead, off, afk
-                if unit then
-                    ns.ReadVitals(unit, vitals)
-                    hp, hpMax = vitals.hp, vitals.hpMax
-                    dead = S.Call(UnitIsDeadOrGhost, unit)
-                    off = S.Call(UnitIsConnected, unit) == false
-                    afk = UnitIsAFK and S.Call(UnitIsAFK, unit) == true
-                end
-                local tags = {}
-                if off then tags[#tags + 1] = HEX.muted .. "offline|r"
-                elseif dead == true then tags[#tags + 1] = HEX.bad .. "dead|r" end
-                if afk then tags[#tags + 1] = HEX.gold .. "AFK|r" end
-                if m.lead then tags[#tags + 1] = Muted(LEAD[m.lead]) end
-                if m.role then tags[#tags + 1] = Muted(ROLE[m.role] or m.role:lower()) end
-                if m.sub then tags[#tags + 1] = Muted("g" .. m.sub) end
-                local pct = (hp and hpMax) and math.floor(hp / hpMax * 100 + 0.5) or nil
-                local m2 = m
-                rows[#rows + 1] = {
-                    key = m.key,
-                    search = Groups.Short(m.key) .. " " .. (m.g or "") .. " " .. ns.ClassName(m.cls),
-                    text = Name(m.key, m.cls) .. Muted("  " .. tostring(m.lvl or "?")) .. (#tags > 0 and ("  " .. table.concat(tags, " ")) or ""),
-                    bar = (hp and hpMax) and { hp, hpMax } or nil,
-                    cols = { pct and ((pct < 35 and HEX.bad or HEX.white) .. pct .. "%|r") or Muted("?"), Muted(Dur(m.secs)),
-                        (m.dead or 0) > 0 and (HEX.bad .. m.dead .. "|r") or Muted("0") },
-                    tooltip = function(owner) ns.Tooltip.Text(owner, MemberLines(m2, s)) end,
-                }
-            end
-        end
-        if #rows == 0 then rows[1] = { text = Muted("Reading the group...") } end
-        self.list:SetItems(rows)
-    end
-    return v
-end
-
----------------------------------------------------------------------------
--- Parties / Raids: every group of a kind
----------------------------------------------------------------------------
-local function BuildSessions(parent, kind)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.card = Style.Card(v, kind == "raid" and "Raids" or "Parties")
-    v.card:SetAllPoints()
-    v.card.sub:SetText(kind == "raid" and "Every raid and battleground group you were in, newest first. Search a name to find who you played with."
-        or "Every party you were in, newest first. Search a name to find who you played with.")
-    v.list = Style.List(v.card.content, { labelWidth = 84, colWidths = { 60, 48, 48 }, search = true, time = true,
-        hint = "Search players, zones...",
-        columns = { name = "Group", label = "Started", "Length", "Players", "Chat" },
-        onClick = function(item) if item.id then Open(item.id) end end })
-
-    function v:Footer() return "Click a group: its members, chat, loot and timeline." end
-
-    function v:Refresh()
-        local data = Data.List(self.list, {
-            name = "groups:" .. kind, sources = { "groups" }, key = { kind }, maxAge = 30,
-            empty = kind == "raid" and "No raids yet." or "No parties yet.",
-            build = function(add)
-                local list = Groups.Sessions(kind)
-                for _, s in ipairs(list) do
-                    add(s, { id = s.id, time = s.start, search = Groups.SearchText(s) })
-                end
-                return { n = #list }
-            end,
-            row = function(s)
-                local members = Groups.Members(s)
-                local names = {}
-                for i = 1, math.min(4, #members) do names[i] = Name(members[i].key, members[i].cls) end
-                local more = #members - #names
-                local open = Groups.IsOpen(s)
-                return {
-                    id = s.id,
-                    label = When(s.start), sort = { label = s.start },
-                    text = (open and (HEX.good .. "now|r  ") or "") .. Muted(Title(s) .. "  ") .. table.concat(names, ", ")
-                        .. (more > 0 and Muted("  +" .. more) or ""),
-                    accent = open and COLORS.accent or nil,
-                    cols = { Dur(Groups.Duration(s)), tostring(Groups.MemberCount(s)), tostring(#(s.chat or {})) },
-                    tooltip = function(owner)
-                        local lines = { Title(s), When(s.start) .. " to " .. (open and "now" or When(s.stop)) .. Muted("  (" .. Dur(Groups.Duration(s)) .. ")") }
-                        if s.c then lines[#lines + 1] = Muted("Your character: " .. tostring(ns.Store.CharName(s.c) or "?")) end
-                        if s.leader then lines[#lines + 1] = "Led by " .. Groups.Short(s.leader) end
-                        local zones = {}
-                        for _, z in ipairs(Groups.Zones(s)) do zones[#zones + 1] = z[1] .. Muted(" " .. Dur(z[2])) end
-                        if #zones > 0 then lines[#lines + 1] = "Where: " .. table.concat(zones, ", ") end
-                        lines[#lines + 1] = (s.deaths or 0) .. " deaths seen · " .. #(s.loot or {}) .. " items looted"
-                        lines[#lines + 1] = Muted("Click: open this group.")
-                        ns.Tooltip.Text(owner, lines)
-                    end,
-                }
-            end,
-        })
-        self.card.title:SetText((kind == "raid" and "Raids" or "Parties") .. "  " .. Muted(tostring(data.n)))
-    end
-    return v
-end
-
----------------------------------------------------------------------------
--- One group
----------------------------------------------------------------------------
-local MODES = { { "members", "Members" }, { "chat", "Chat" }, { "loot", "Loot" }, { "timeline", "Timeline" } }
+local MODES = { { key = "members", label = "Members" }, { key = "chat", label = "Chat" }, { key = "loot", label = "Loot" },
+    { key = "timeline", label = "Timeline" } }
 local COLUMNS = {
     members = { name = "Member", label = "Level", "Together", "Deaths", "Offline" },
     chat = { name = "Line", label = "Time" },
@@ -271,92 +123,20 @@ local EVENT_TEXT = {
     join = "joined", back = "came back", left = "left", died = "died", raid = "the party became a raid", zone = "you went to",
 }
 
-local function BuildSession(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.top = Style.Card(v, "")
-    v.top:SetPoint("TOPLEFT")
-    v.top:SetPoint("TOPRIGHT")
-    v.top:SetHeight(112)
-    v.summary = Style.Text(v.top.content, "GameFontHighlightSmall")
-    v.summary:SetPoint("TOPLEFT", 8, -4)
-    v.summary:SetPoint("RIGHT", -8, 0)
-    if v.summary.SetSpacing then v.summary:SetSpacing(3) end
-
-    v.body = Style.Card(v, "")
-    v.body:SetPoint("TOPLEFT", v.top, "BOTTOMLEFT", 0, -8)
-    v.body:SetPoint("BOTTOMRIGHT")
-    local bar = CreateFrame("Frame", nil, v.body.content)
-    bar:SetPoint("TOPLEFT", 6, -4)
-    bar:SetPoint("TOPRIGHT", -6, -4)
-    bar:SetHeight(22)
-    v.modes = {}
-    local x = 0
-    for _, mode in ipairs(MODES) do
-        local b = Style.Button(bar, mode[2], 90, function() state.mode = mode[1] UI.Refresh() end)
-        b:SetPoint("TOPLEFT", x, 0)
-        b.key = mode[1]
-        v.modes[#v.modes + 1] = b
-        x = x + 94
-    end
-    v.delete = Style.Button(bar, "Delete", 80, function()
-        if state.session and IsShiftKeyDown() then
-            Groups.Delete(state.session)
-            state.session = nil
-            UI.Refresh()
-        else
-            ns.Print("Shift + click Delete to remove this group's record.")
-        end
-    end, "Shift + click: removes this group (members, chat, loot) from your saved data.")
-    v.delete:SetPoint("TOPRIGHT")
-    local holder = CreateFrame("Frame", nil, v.body.content)
-    holder:SetPoint("TOPLEFT", 0, -30)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { labelWidth = 52, colWidths = { 60, 46, 56 }, search = true, hint = "Search...",
+-- A list that follows a mode switch: its columns change with the mode.
+local function ModeList(holder)
+    local list = Style.List(holder, { labelWidth = 52, colWidths = { 60, 46, 56 }, search = true, hint = "Search...",
         columns = COLUMNS.members,
         onClick = function(item) if item.key then OpenAudit(item.key) end end })
-    v.empty = Note(v)
-    local shownMode
-
-    function v:Footer() return "Who was in the group and what the game showed of them while grouped. Unknown shows ?, never 0." end
-
-    function v:Refresh()
-        local s = state.session and Groups.ById(state.session)
-        self.top:SetShown(s ~= nil)
-        self.body:SetShown(s ~= nil)
-        self.empty:SetShown(s == nil)
-        if not s then
-            self.empty:SetText("Pick a group in Parties or Raids.")
-            return
+    local shown = "members"
+    function list:Fill(name, s, mode)
+        if shown ~= mode then
+            shown = mode
+            self:SetColumns(COLUMNS[mode])
         end
         local open = Groups.IsOpen(s)
-        self.top.title:SetText(Title(s) .. (open and (HEX.good .. "  now|r") or ""))
-        self.top.sub:SetText(When(s.start) .. " to " .. (open and "now" or When(s.stop)) .. "  ·  " .. Dur(Groups.Duration(s))
-            .. (s.c and ("  ·  as " .. tostring(ns.Store.CharName(s.c) or "?")) or ""))
-        local lines = {}
-        local zones = {}
-        for _, z in ipairs(Groups.Zones(s)) do
-            zones[#zones + 1] = White(z[1]) .. (z[3] and Muted(" (" .. z[3] .. ")") or "") .. Muted(" " .. Dur(z[2]))
-        end
-        lines[#lines + 1] = "Where: " .. (#zones > 0 and table.concat(zones, ", ") or Muted("?"))
-        lines[#lines + 1] = "Players: " .. White(tostring(Groups.MemberCount(s))) .. Muted(" (most at once " .. tostring(s.size or "?") .. ")")
-            .. (s.leader and ("   Led by " .. White(Groups.Short(s.leader))) or "")
-            .. (s.raidAt and s.kind == "raid" and Muted("   raid from " .. Clock(s.raidAt)) or "")
-        lines[#lines + 1] = "Deaths seen: " .. White(tostring(s.deaths or 0)) .. "   Chat: " .. White(tostring(#(s.chat or {})))
-            .. ((s.chatHidden or 0) > 0 and Muted(" (+" .. s.chatHidden .. " hidden by the game)") or "")
-            .. ((s.chatDrop or 0) > 0 and Muted(" (" .. s.chatDrop .. " oldest dropped)") or "")
-            .. "   Loot: " .. White(tostring(#(s.loot or {})))
-        if (s.hidden or 0) > 0 then lines[#lines + 1] = Muted("Some reads of a member's name were hidden by the game: those are not listed.") end
-        self.summary:SetText(table.concat(lines, "\n"))
-        for _, b in ipairs(self.modes) do Paint(b, b.key == state.mode) end
-
-        if shownMode ~= state.mode then
-            shownMode = state.mode
-            self.list:SetColumns(COLUMNS[state.mode])
-        end
-        local mode = state.mode
-        Data.List(self.list, {
-            name = "groups:session", sources = { "groups" }, key = { s.id, mode }, maxAge = open and 5 or 300,
+        Data.List(self, {
+            name = name, sources = { "groups" }, key = { s.id, mode }, maxAge = open and 5 or 300,
             empty = mode == "chat" and "No group chat." or mode == "loot" and "No loot seen." or "Nothing yet.",
             build = function(add, raw)
                 if mode == "members" then
@@ -406,34 +186,286 @@ local function BuildSession(parent)
             end,
         })
     end
+    return list
+end
+
+-- The mode switch at the right of a card's header.
+local function ModeSwitch(card, onSelect)
+    local v = Style.Views(card, MODES, onSelect)
+    v:SetPoint("TOPRIGHT", -6, -math.floor((Style.M.cardHeader - 20) / 2))
+    -- Ledger: title and sub share the header line; classic: two lines.
+    if not Style.IsLedger() then card.title:SetPoint("RIGHT", v, "LEFT", -8, 0) end
+    card.sub:SetPoint("RIGHT", v, "LEFT", -8, 0)
+    return v
+end
+
+---------------------------------------------------------------------------
+-- Now: the group you are in, read live
+---------------------------------------------------------------------------
+local function BuildNow(parent)
+    local v = CreateFrame("Frame", nil, parent)
+    v:SetAllPoints()
+    v.card = Style.Card(v, "Your group now")
+    v.card:SetAllPoints()
+    v.modes = ModeSwitch(v.card, function(key) state.nowMode = key UI.Refresh() end)
+    v.where = Style.Text(v.card.content, "GameFontHighlightSmall")
+    v.where:SetPoint("TOPLEFT", 6, -6)
+    v.where:SetPoint("RIGHT", -6, 0)
+    local holder = CreateFrame("Frame", nil, v.card.content)
+    holder:SetPoint("TOPLEFT", 0, -22)
+    holder:SetPoint("BOTTOMRIGHT")
+    v.list = Style.List(holder, { colWidths = { 60, 64, 50 }, search = true, hint = "Search names, guilds, classes...",
+        columns = { name = "Member", "Health", "Together", "Deaths" },
+        onClick = function(item) if item.key then OpenAudit(item.key) end end })
+    local other = CreateFrame("Frame", nil, v.card.content)
+    other:SetPoint("TOPLEFT", 0, -22)
+    other:SetPoint("BOTTOMRIGHT")
+    v.other = other
+    v.modeList = ModeList(other)
+    v.note = Note(v.card.content)
+    local vitals = {}
+
+    function v:Footer()
+        return state.nowMode == "members" and "Health is read live; ? when the game hides it. Deaths: seen alive, then dead, while grouped."
+            or "This group's record so far. History keeps it once the group ends."
+    end
+
+    function v:Refresh()
+        local s = Groups.Current()
+        local live = state.nowMode == "members"
+        self.modes:Select(state.nowMode)
+        self.modes:SetShown(s ~= nil)
+        self.list:SetShown(s ~= nil and live)
+        self.other:SetShown(s ~= nil and not live)
+        self.where:SetShown(s ~= nil)
+        self.note:SetShown(s == nil)
+        if not s then
+            self.card.title:SetText("Your group now")
+            self.card.sub:SetText("")
+            self.note:SetText(ns.DB().groupsLog and "You are not in a group. History lists the groups you were in."
+                or "Group records are off (settings, Groups).")
+            return
+        end
+        self.card.title:SetText(Title(s))
+        self.card.sub:SetText(Muted(Groups.MemberCount(s) .. " players · " .. Dur(Groups.Duration(s))))
+        self.where:SetText(Muted("Now in ") .. White(s.zone or "?") .. Muted("  ·  since " .. When(s.start)
+            .. (s.leader and ("  ·  led by " .. Groups.Short(s.leader)) or "") .. "  ·  " .. #(s.chat or {}) .. " chat lines  ·  "
+            .. (s.deaths or 0) .. " deaths"))
+        if not live then
+            self.modeList:Fill("groups:now", s, state.nowMode)
+            return
+        end
+        local rows = {}
+        for _, m in ipairs(Groups.Members(s)) do
+            if not m.left then
+                local unit = Groups.UnitOf(m.key)
+                local hp, hpMax, dead, off, afk
+                if unit then
+                    ns.ReadVitals(unit, vitals)
+                    hp, hpMax = vitals.hp, vitals.hpMax
+                    dead = S.Call(UnitIsDeadOrGhost, unit)
+                    off = S.Call(UnitIsConnected, unit) == false
+                    afk = UnitIsAFK and S.Call(UnitIsAFK, unit) == true
+                end
+                local tags = {}
+                if off then tags[#tags + 1] = HEX.muted .. "offline|r"
+                elseif dead == true then tags[#tags + 1] = HEX.bad .. "dead|r" end
+                if afk then tags[#tags + 1] = HEX.gold .. "AFK|r" end
+                if m.lead then tags[#tags + 1] = Muted(LEAD[m.lead]) end
+                if m.role then tags[#tags + 1] = Muted(ROLE[m.role] or m.role:lower()) end
+                if m.sub then tags[#tags + 1] = Muted("g" .. m.sub) end
+                local pct = (hp and hpMax) and math.floor(hp / hpMax * 100 + 0.5) or nil
+                local m2 = m
+                rows[#rows + 1] = {
+                    key = m.key,
+                    search = Groups.Short(m.key) .. " " .. (m.g or "") .. " " .. ns.ClassName(m.cls),
+                    text = Name(m.key, m.cls) .. Muted("  " .. tostring(m.lvl or "?")) .. (#tags > 0 and ("  " .. table.concat(tags, " ")) or ""),
+                    bar = (hp and hpMax) and { hp, hpMax } or nil,
+                    -- Health the game hides is unknown, never a number.
+                    cols = { pct and ((pct < 35 and HEX.bad or HEX.white) .. pct .. "%|r") or ns.UNKNOWN, Muted(Dur(m.secs)),
+                        (m.dead or 0) > 0 and (HEX.bad .. m.dead .. "|r") or Muted("0") },
+                    tooltip = function(owner) ns.Tooltip.Text(owner, MemberLines(m2, s)) end,
+                }
+            end
+        end
+        if #rows == 0 then rows[1] = { text = Muted("Reading the group...") } end
+        self.list:SetItems(rows)
+    end
+    return v
+end
+
+---------------------------------------------------------------------------
+-- History: every party and raid, one list
+---------------------------------------------------------------------------
+local CHIPS = { { key = "all", label = "All" }, { key = "party", label = "Parties" }, { key = "raid", label = "Raids" } }
+local EMPTY = { all = "No groups yet.", party = "No parties yet.", raid = "No raids yet." }
+
+local function BuildHistory(parent)
+    local v = CreateFrame("Frame", nil, parent)
+    v:SetAllPoints()
+    v.chips = Style.Chips(v, CHIPS, function(key)
+        state.chip = key
+        UI.Refresh()
+    end)
+    v.chips:SetPoint("TOPLEFT", 0, 0)
+    v.card = Style.Card(v, "Groups")
+    v.card:SetPoint("TOPLEFT", 0, -28)
+    v.card:SetPoint("BOTTOMRIGHT")
+    v.card.sub:SetText("Newest first. Search a name to find who you played with.")
+    v.list = Style.List(v.card.content, { labelWidth = 84, colWidths = { 60, 48, 48 }, search = true, time = true,
+        hint = "Search players, zones...",
+        columns = { name = "Group", label = "Started", "Length", "Players", "Chat" },
+        onClick = function(item) if item.id then Open(item.id) end end })
+
+    function v:Footer() return "Click a group: its members, chat, loot and timeline." end
+
+    function v:Refresh()
+        self.chips:Select(state.chip)
+        local chip = state.chip
+        local data = Data.List(self.list, {
+            name = "groups:history", sources = { "groups" }, key = { chip }, maxAge = 30, empty = EMPTY[chip],
+            build = function(add)
+                local counts = { all = 0, party = 0, raid = 0 }
+                for _, s in ipairs(Groups.Sessions()) do
+                    counts.all = counts.all + 1
+                    if counts[s.kind] then counts[s.kind] = counts[s.kind] + 1 end
+                    if chip == "all" or s.kind == chip then
+                        add(s, { id = s.id, time = s.start, search = Groups.SearchText(s) })
+                    end
+                end
+                return counts
+            end,
+            row = function(s)
+                local members = Groups.Members(s)
+                local names = {}
+                for i = 1, math.min(4, #members) do names[i] = Name(members[i].key, members[i].cls) end
+                local more = #members - #names
+                local open = Groups.IsOpen(s)
+                return {
+                    id = s.id,
+                    label = When(s.start), sort = { label = s.start },
+                    text = (open and (HEX.good .. "now|r  ") or "") .. Muted(Title(s) .. "  ") .. table.concat(names, ", ")
+                        .. (more > 0 and Muted("  +" .. more) or ""),
+                    accent = open and COLORS.accent or nil,
+                    cols = { Dur(Groups.Duration(s)), tostring(Groups.MemberCount(s)), tostring(#(s.chat or {})) },
+                    tooltip = function(owner)
+                        local lines = { Title(s), When(s.start) .. " to " .. (open and "now" or When(s.stop)) .. Muted("  (" .. Dur(Groups.Duration(s)) .. ")") }
+                        if s.c then lines[#lines + 1] = Muted("Your character: " .. tostring(ns.Store.CharName(s.c) or "?")) end
+                        if s.leader then lines[#lines + 1] = "Led by " .. Groups.Short(s.leader) end
+                        local zones = {}
+                        for _, z in ipairs(Groups.Zones(s)) do zones[#zones + 1] = z[1] .. Muted(" " .. Dur(z[2])) end
+                        if #zones > 0 then lines[#lines + 1] = "Where: " .. table.concat(zones, ", ") end
+                        lines[#lines + 1] = (s.deaths or 0) .. " deaths seen · " .. #(s.loot or {}) .. " items looted"
+                        lines[#lines + 1] = Muted("Click: open this group.")
+                        ns.Tooltip.Text(owner, lines)
+                    end,
+                }
+            end,
+        })
+        for _, c in ipairs(CHIPS) do self.chips:SetCount(c.key, data[c.key]) end
+        self.card.title:SetText((chip == "raid" and "Raids" or chip == "party" and "Parties" or "Parties and raids")
+            .. "  " .. Muted(tostring(data[chip] or 0)))
+    end
+    return v
+end
+
+---------------------------------------------------------------------------
+-- One group of History, in full, with Back
+---------------------------------------------------------------------------
+local function BuildSession(parent)
+    local v = CreateFrame("Frame", nil, parent)
+    v:SetAllPoints()
+    v.back = Style.Button(v, "< Back", 70, function() UI.Show("history") end, "Back to the list of groups.", { small = true })
+    v.back:SetPoint("TOPLEFT", 0, 0)
+    v.top = Style.Card(v, "")
+    v.top:SetPoint("TOPLEFT", 0, -26)
+    v.top:SetPoint("TOPRIGHT", 0, -26)
+    v.top:SetHeight(104)
+    v.summary = Style.Text(v.top.content, "GameFontHighlightSmall")
+    v.summary:SetPoint("TOPLEFT", 8, -4)
+    v.summary:SetPoint("RIGHT", -8, 0)
+    if v.summary.SetSpacing then v.summary:SetSpacing(3) end
+
+    v.body = Style.Card(v, "")
+    v.body:SetPoint("TOPLEFT", v.top, "BOTTOMLEFT", 0, -8)
+    v.body:SetPoint("BOTTOMRIGHT")
+    v.modes = ModeSwitch(v.body, function(key) state.mode = key UI.Refresh() end)
+    v.delete = Style.Button(v, "Delete", 70, function()
+        if state.session and IsShiftKeyDown() then
+            Groups.Delete(state.session)
+            state.session = nil
+            UI.Show("history")
+        else
+            ns.Print("Shift + click Delete to remove this group's record.")
+        end
+    end, "Shift + click: removes this group (members, chat, loot) from your saved data.", { small = true })
+    v.delete:SetPoint("TOPRIGHT", 0, 0)
+    v.list = ModeList(v.body.content)
+    v.empty = Note(v)
+
+    function v:Footer() return "Who was in the group and what the game showed of them while grouped. Unknown shows ?, never 0." end
+
+    function v:Refresh()
+        local s = state.session and Groups.ById(state.session)
+        self.top:SetShown(s ~= nil)
+        self.body:SetShown(s ~= nil)
+        self.delete:SetShown(s ~= nil)
+        self.empty:SetShown(s == nil)
+        if not s then
+            self.empty:SetText("Pick a group in History.")
+            return
+        end
+        local open = Groups.IsOpen(s)
+        self.top.title:SetText(Title(s) .. (open and (HEX.good .. "  now|r") or ""))
+        self.top.sub:SetText(When(s.start) .. " to " .. (open and "now" or When(s.stop)) .. "  ·  " .. Dur(Groups.Duration(s))
+            .. (s.c and ("  ·  as " .. tostring(ns.Store.CharName(s.c) or "?")) or ""))
+        local lines = {}
+        local zones = {}
+        for _, z in ipairs(Groups.Zones(s)) do
+            zones[#zones + 1] = White(z[1]) .. (z[3] and Muted(" (" .. z[3] .. ")") or "") .. Muted(" " .. Dur(z[2]))
+        end
+        lines[#lines + 1] = "Where: " .. (#zones > 0 and table.concat(zones, ", ") or Muted("?"))
+        lines[#lines + 1] = "Players: " .. White(tostring(Groups.MemberCount(s))) .. Muted(" (most at once " .. tostring(s.size or "?") .. ")")
+            .. (s.leader and ("   Led by " .. White(Groups.Short(s.leader))) or "")
+            .. (s.raidAt and s.kind == "raid" and Muted("   raid from " .. Clock(s.raidAt)) or "")
+        lines[#lines + 1] = "Deaths seen: " .. White(tostring(s.deaths or 0)) .. "   Chat: " .. White(tostring(#(s.chat or {})))
+            .. ((s.chatHidden or 0) > 0 and Muted(" (+" .. s.chatHidden .. " hidden by the game)") or "")
+            .. ((s.chatDrop or 0) > 0 and Muted(" (" .. s.chatDrop .. " oldest dropped)") or "")
+            .. "   Loot: " .. White(tostring(#(s.loot or {})))
+        if (s.hidden or 0) > 0 then lines[#lines + 1] = Muted("Some reads of a member's name were hidden by the game: those are not listed.") end
+        self.summary:SetText(table.concat(lines, "\n"))
+        self.modes:Select(state.mode)
+        self.body.title:SetText(Muted(Groups.MemberCount(s) .. " players"))
+        self.list:Fill("groups:session", s, state.mode)
+    end
     return v
 end
 
 ---------------------------------------------------------------------------
 -- Window
 ---------------------------------------------------------------------------
-local VIEWS = {
-    { key = "now", label = "Now", build = BuildNow },
-    { key = "party", label = "Parties", build = function(p) return BuildSessions(p, "party") end },
-    { key = "raid", label = "Raids", build = function(p) return BuildSessions(p, "raid") end },
-    { key = "session", label = "Group", build = BuildSession },
-}
+local TABS = { { key = "now", label = "Now" }, { key = "history", label = "History" } }
+local TAB_OF = { now = "now", history = "history", session = "history" }
 
 local function Build()
-    frame = Style.Window(ns.FRAME .. "GroupsWindow", "Groups", nil, nil, { nav = "groups" })
+    frame = Style.Window(ns.FRAME .. "GroupsWindow", "Groups", nil, nil, { nav = "groups", settings = "groups", section = "World" })
+    local top = Style.M.titleBar + 10
     local tabHolder = CreateFrame("Frame", nil, frame)
-    tabHolder:SetPoint("TOPLEFT", PAD, -44)
-    tabHolder:SetPoint("TOPRIGHT", -PAD, -44)
+    tabHolder:SetPoint("TOPLEFT", PAD, -top)
+    tabHolder:SetPoint("TOPRIGHT", -PAD, -top)
     tabHolder:SetHeight(26)
-    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end, 100)
+    frame.tabs = Style.Tabs(tabHolder, TABS, function(key) state.view = key UI.Refresh() end)
     local line = Style.HLine(frame)
-    line:SetPoint("TOPLEFT", PAD, -70)
-    line:SetPoint("TOPRIGHT", -PAD, -70)
+    line:SetPoint("TOPLEFT", PAD, -(top + 26))
+    line:SetPoint("TOPRIGHT", -PAD, -(top + 26))
+    frame:SetStatus("")
 
     local body = CreateFrame("Frame", nil, frame)
-    body:SetPoint("TOPLEFT", PAD, -78)
+    body:SetPoint("TOPLEFT", PAD, -(top + 34))
     body:SetPoint("BOTTOMRIGHT", -PAD, 34)
-    for _, def in ipairs(VIEWS) do views[def.key] = def.build(body) end
+    views.now = BuildNow(body)
+    views.history = BuildHistory(body)
+    views.session = BuildSession(body)
     frame.footer = Style.Text(frame, "GameFontDisableSmall")
     frame.footer:SetPoint("BOTTOMLEFT", PAD + 2, 12)
     frame.footer:SetPoint("RIGHT", -PAD, 0)
@@ -442,24 +474,57 @@ end
 
 function UI.Refresh()
     if not frame or not frame:IsShown() then return end
-    frame.tabs:Select(state.view)
+    if not views[state.view] then state.view = "now" end
+    frame.tabs:Select(TAB_OF[state.view])
     for key, v in pairs(views) do v:SetShown(key == state.view) end
     local v = views[state.view]
     v:Refresh()
     frame.footer:SetText(v:Footer() or "")
+    local st = UI.PageStatus()
+    frame:SetStatus(st and st.text or "Not in a group")
 end
 
-function UI.Show(view)
+-- Old and new names: now; history (all); parties / party, raids / raid
+-- (History with that chip); session / group (one group, arg = its id).
+local CHIP_OF = { parties = "party", party = "party", raids = "raid", raid = "raid", all = "all" }
+
+-- The page contract: tab now / history; view a chip (All, Parties, Raids) or
+-- "group" with arg = a group's id to open it.
+function UI.ShowPage(tab, view, arg)
     if not frame then Build() end
-    if view and views[view] then state.view = view end
+    tab = type(tab) == "string" and tab:lower() or nil
+    view = type(view) == "string" and view:lower() or nil
+    local chip = CHIP_OF[view or ""] or CHIP_OF[tab or ""]
+    if (view == "group" or view == "session" or tab == "group" or tab == "session") and (arg or state.session) then
+        if arg then state.session = arg end
+        state.view = "session"
+    elseif tab == "now" then
+        state.view = "now"
+    elseif tab == "history" or chip then
+        state.view = "history"
+        if chip then state.chip = chip elseif tab == "history" and not view then state.chip = state.chip or "all" end
+    end
     if frame:IsShown() then UI.Refresh() else frame:Show() end
+    return true
 end
+
+function UI.Show(view) return UI.ShowPage(view) end
 
 function UI.Toggle(view)
-    if frame and frame:IsShown() and (not view or view == state.view) then frame:Hide() else UI.Show(view) end
+    if frame and frame:IsShown() and not view then frame:Hide() else UI.Show(view) end
 end
 
 function UI.IsShown() return frame ~= nil and frame:IsShown() end
+
+-- Home and the page list: the group you are in.
+function UI.PageStatus()
+    local s = Groups.Current()
+    if not s then return nil end
+    return { text = (s.bg and "Battleground" or KIND[s.kind] or "Group") .. ": " .. Groups.MemberCount(s) .. " players, "
+        .. Dur(Groups.Duration(s)), tone = "accent" }
+end
+
+function UI.Frame() return frame end
 UI.views, UI.state = views, state
 Data.Window(UI, { "groups", "groups.live" }, { shows = function(src) return src ~= "groups.live" or state.view == "now" end })
 
@@ -471,23 +536,26 @@ local QUALITIES = {
     { value = 3, label = "Rare and better" }, { value = 4, label = "Epic and better" },
 }
 
-local function BuildPage(parent)
+local function BuildSettings(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "Keeps a record of every party and raid you are in: who was there (class, level, guild, role, "
         .. "time grouped with you, deaths seen), where you went, the group's chat and the loot. One record per group, not per "
         .. "player: search a name in Parties or Raids to find every group you shared. Type |cffffffff" .. ns.Cmd.Text("groups")
         .. "|r for the window.", "GameFontHighlightSmall")
-    W.Button(parent, y, "Open the groups window", 200, function() UI.Show() end)
-    y = y - 34
-    y = W.Header(parent, y, "Recording")
     y = W.Checkbox(parent, y, "groupsLog", "Keep a record of my parties and raids",
         "Off: nothing new is recorded; the records you have stay.")
     y = W.Checkbox(parent, y, "groupsChat", "Keep the group's chat (party, raid, raid warnings, instance)",
         "Up to " .. Groups.MAX_CHAT .. " lines per group; the oldest go first.")
     y = W.Checkbox(parent, y, "groupsLoot", "Keep the loot the group's loot messages show")
+    y = W.Fine(parent, y)
     y = W.Cycle(parent, y, "groupsLootQuality", "Loot to keep", QUALITIES)
-    return -y + 10
+    return y
 end
 
-ns.Options.AddTab({ label = "Groups", pages = { { label = "Groups", build = BuildPage } } })
+ns.Options.AddSection("groups", {
+    status = function()
+        local n = #Groups.Sessions()
+        return n .. (n == 1 and " group kept" or " groups kept") .. (Groups.Current() and "  ·  in a group now" or "")
+    end,
+    groups = { { label = "What to keep", build = BuildSettings } },
+})

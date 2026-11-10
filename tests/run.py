@@ -3,6 +3,7 @@ in a fresh Lua 5.1 state per scenario. Requires `pip install lupa`.
 
     python tests/run.py            # all scenarios
     python tests/run.py -v         # also print addon chat output
+    python tests/run.py --no-cross # without the cross-version check (tests/cross_version.py)
 """
 import pathlib
 import re
@@ -423,6 +424,109 @@ def bindings_check():
     return problems
 
 
+# The look (Style.lua): colours come from its tokens or Core's safety tones,
+# never picked by hand in a module, so both looks and the colorblind palette
+# reach every window. A literal that equals a safety colour is the one that
+# must never be hand-picked: it would not follow the colorblind setting.
+SAFETY_KEYS = ("safe", "threshold", "danger", "unknown")
+COLOR_CALL = re.compile(r"\b(?:SetColorTexture|SetVertexColor|SetTextColor|SetStatusBarColor)\(\s*"
+                        r"([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)")
+COLOR_TABLE = re.compile(r"\{\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*[,}]")
+
+
+def safety_colors():
+    core = (ROOT / "Core.lua").read_text(encoding="utf-8")
+    out = []
+    for block in ("ns.COLORS", "ns.COLORBLIND_COLORS"):
+        body = re.search(re.escape(block) + r"\s*=\s*\{(.*?)\n\}", core, re.S).group(1)
+        for key in SAFETY_KEYS:
+            m = re.search(r"\b" + key + r"\s*=\s*\{\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)", body)
+            if m:
+                out.append((block + "." + key, tuple(float(x) for x in m.groups())))
+    return out
+
+
+def code_lines(f):
+    for n, line in enumerate((ROOT / f).read_text(encoding="utf-8").splitlines(), 1):
+        yield n, line, line.split("--", 1)[0]
+
+
+def look_check():
+    problems = []
+    colors = safety_colors()
+    if len([c for c in colors if c[0].endswith(".unknown")]) != 2:
+        problems.append("Core.lua: unknown missing from ns.COLORS or ns.COLORBLIND_COLORS")
+    for f in toc_files():
+        if not f.endswith(".lua"):
+            continue
+        for n, line, code in code_lines(f):
+            if f != "Style.lua" and re.search(r"\bSetBackdrop\w*\b|\bBackdropTemplate\b", code):
+                problems.append(f"{f}:{n} hand-rolls a backdrop (use Style.Surface / Style.Border): {line.strip()}")
+            if f in ("Style.lua", "Core.lua"):
+                continue
+            for m in list(COLOR_CALL.finditer(code)) + list(COLOR_TABLE.finditer(code)):
+                rgb = tuple(float(x) for x in m.groups())
+                for name, c in colors:
+                    if all(abs(a - b) < 0.011 for a, b in zip(rgb, c)):
+                        problems.append(f"{f}:{n} picks the safety colour {name} by hand "
+                                        f"(use ns.GetColor / ns.ColorCode): {line.strip()}")
+    return problems
+
+
+# Unknown is never shown as safe: every "? yd", "PvP: ?" and "? HP" the addon
+# writes is in the unknown tone (ns.ColorCode("unknown"), ns.UnknownText, or a
+# tooltip line / tag with the tone "unknown") on the same line.
+UNKNOWN_LITERAL = re.compile(r'"[^"]*(\? yd|PvP: \?|\? HP)[^"]*"')
+UNKNOWN_TONED = re.compile(r'ColorCode\("unknown"\)|UnknownText\(|"unknown"')
+
+
+def unknown_check():
+    problems = []
+    for f in toc_files():
+        if not f.endswith(".lua"):
+            continue
+        for n, line, code in code_lines(f):
+            if UNKNOWN_LITERAL.search(code) and not UNKNOWN_TONED.search(code):
+                problems.append(f"{f}:{n} shows a hidden value without the unknown tone: {line.strip()}")
+    return problems
+
+
+# Secure buttons: the ones a macro, a key binding or the game's secure code
+# can name. Their set and names stay as they are (a rename breaks players'
+# macros and bindings). Recorded before the look work; change only on purpose.
+SECURE_FRAMES = sorted([
+    ("FishingGear.lua", 'ns.FRAME .. "FishingLureButton"'),
+    ("FishingGear.lua", 'ns.FRAME .. "FishingLureAgainButton"'),
+    ("FishingSafety.lua", 'ns.FRAME .. "FishingSwapButton"'),
+    ("FishingSafety.lua", 'ns.FRAME .. "FishingWeaponRowButton"'),
+    ("Panel.lua", "nil"),
+])
+# Named frames a macro or a binding clicks (not secure templates, same rule).
+CLICKED_FRAMES = [("Guild.lua", 'CreateFrame("Button", ns.FRAME .. "RecruitStep", UIParent)'),
+                  ("AHHelper.lua", '_G[ns.FRAME .. "AHNextButton"] = next')]
+SECURE_CREATE = re.compile(r'CreateFrame\s*,?\s*\(?\s*"Button"\s*,\s*(ns\.FRAME \.\. "\w+"|nil)\s*,[^\n]*"SecureActionButtonTemplate"')
+
+
+def secure_check():
+    problems, found = [], []
+    for f in toc_files():
+        if not f.endswith(".lua"):
+            continue
+        for n, line, code in code_lines(f):
+            if "SecureActionButtonTemplate" in code:
+                m = SECURE_CREATE.search(code)
+                if not m:
+                    problems.append(f"{f}:{n} a secure button made another way: {line.strip()}")
+                    continue
+                found.append((f, m.group(1)))
+    if sorted(found) != SECURE_FRAMES:
+        problems.append("secure buttons changed: " + repr(sorted(found)) + " (expected " + repr(SECURE_FRAMES) + ")")
+    for f, needle in CLICKED_FRAMES:
+        if needle not in (ROOT / f).read_text(encoding="utf-8"):
+            problems.append(f"{f}: the frame a macro or binding clicks is gone or renamed ({needle})")
+    return problems
+
+
 def main():
     verbose = "-v" in sys.argv
     failures = 0
@@ -453,11 +557,33 @@ def main():
     for problem in version_check():
         print("VERSION FAIL", problem)
         failures += 1
+    for problem in look_check():
+        print("LOOK FAIL", problem)
+        failures += 1
+    for problem in unknown_check():
+        print("UNKNOWN FAIL", problem)
+        failures += 1
+    for problem in secure_check():
+        print("SECURE FAIL", problem)
+        failures += 1
+    total = len(SCENARIOS)
     for name in SCENARIOS:
         ok, err = run(name, verbose)
         print(("PASS " if ok else "FAIL ") + name + ("" if ok else "\n     " + err))
         failures += 0 if ok else 1
-    print(f"\n{len(SCENARIOS) - failures if failures <= len(SCENARIOS) else 0} passed, {failures} failed")
+    # Saved data across the update from the last release and back, and
+    # /reloads during the copy (tests/cross_version.py). --no-cross skips it.
+    if "--no-cross" not in sys.argv:
+        import cross_version
+        out = cross_version.check(ROOT)
+        if isinstance(out, str):
+            print("SKIP cross_version: " + out)
+        else:
+            for name, ok, err in out:
+                print(("PASS " if ok else "FAIL ") + name + ("" if ok else "\n     " + err))
+                failures += 0 if ok else 1
+            total += len(out)
+    print(f"\n{total - failures if failures <= total else 0} passed, {failures} failed")
     sys.exit(1 if failures else 0)
 
 

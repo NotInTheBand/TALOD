@@ -125,13 +125,13 @@ scenarios.craft_costs_unknown_price = function()
     ns.DB().profPlanTargets["First Aid"] = 30
     ns.DB().profPlanExcluded = excluded
     ns.GearUI.Show("professions")
-    local v = ns.GearUI.views.professions
+    local v = ns.ProfessionsUI.views.plan
     check(v.left.sub:GetText():find("at least"), "tab summary: " .. v.left.sub:GetText())
     -- The crafting log's totals.
     ns.DB().craftLogEnabled = true
     P.RecordCraft(3275)
     ns.GearUI.Show("crafting")
-    local lv = ns.GearUI.views.crafting
+    local lv = ns.ProfessionsUI.views.log
     check(lv.left.sub:GetText():find("without a price") or lv.left.sub:GetText():find("unpriced"), "log total: " .. lv.left.sub:GetText())
     P.DATA.items[2589].ah = 41
 end

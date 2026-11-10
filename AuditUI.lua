@@ -1,5 +1,6 @@
--- TALOD - the Audit window: guild members' statistics, flags worth a
--- look, every character on record, one character's ledger and its history.
+-- TALOD - the Audit page: one list of characters (guild members, flagged
+-- records, everyone on record) and a detail pane for the one selected (its
+-- ledger with the flag rules on top, or its history of looks).
 
 local ADDON_NAME, ns = ...
 local Style = ns.Style
@@ -12,15 +13,16 @@ ns.AuditUI = UI
 local PAD = 12
 local frame
 local views = {}
-local state = { view = "members", memberFilter = "all", sort = "flags", showReviewed = false }
-
-local function db() return ns.DB() end
+-- scope: guild / flagged / everyone; detail: ledger / history.
+local state = { scope = "guild", detail = "ledger", noStats = true, showReviewed = false, membersOnly = false }
 
 local function Hex(c) return string.format("|cff%02x%02x%02x", (c[1] or 1) * 255, (c[2] or 1) * 255, (c[3] or 1) * 255) end
 local function NameText(full, classFile) return Hex(ns.ClassColor(classFile)) .. Guild.Short(full) .. "|r" end
 local function ShortDate(t) return t and date("%b %d", t) or "?" end
 local function Muted(s) return HEX.muted .. s .. "|r" end
-local function Gold(n) return n and (HEX.gold .. Audit.Gold(n) .. "|r") or Muted("?") end
+local function Gold(n) return n and (HEX.gold .. Audit.Gold(n) .. "|r") or Style.TagText("", "unknown") end
+-- A list cell: a counter the game did not give is unknown, never 0.
+local function GoldCell(n) return n and (HEX.gold .. Audit.Gold(n) .. "|r") or ns.UNKNOWN end
 
 local function Age(t)
     if not t then return "?" end
@@ -32,33 +34,18 @@ end
 
 local SOURCE = { self = "your own", inspect = "inspected (the server's figures)", shared = "shared by them (their addon's figures)" }
 
-local BADGE = {
-    look = HEX.bad .. "Worth a look|r", watch = HEX.gold .. "Watch|r", none = HEX.good .. "No flags|r", unknown = Muted("?"),
-}
+-- Built when asked: the colours follow the look and the colorblind setting.
 function UI.Badge(flags)
-    if not flags then return Muted("no statistics") end
+    if not flags then return Style.TagText("no statistics", "unknown") end
     if flags.reviewed then return Muted("Reviewed") end
-    return BADGE[flags.level] or Muted("?")
+    if flags.level == "look" then return Style.TagText("Worth a look", "bad") end
+    if flags.level == "watch" then return Style.TagText("Watch", "gold") end
+    if flags.level == "none" then return Style.TagText("No flags", "good") end
+    -- Some rules could not be checked: missing counters never count as fine.
+    return Style.TagText("", "unknown")
 end
 
-local function Paint(b, on)
-    b.borderColor = on and COLORS.accent or nil
-    local col = on and COLORS.accent or COLORS.border
-    b:SetBorderColor(col[1], col[2], col[3], 1)
-    b.label:SetTextColor(on and 1 or 0.6, on and 1 or 0.6, on and 1 or 0.6)
-end
-
-local function Note(parent)
-    local fs = Style.Text(parent, "GameFontDisable", "CENTER")
-    fs:SetPoint("TOPLEFT", 20, -60)
-    fs:SetPoint("RIGHT", -20, 0)
-    return fs
-end
-
-local function Open(full)
-    Audit.selected = full
-    UI.Show("ledger")
-end
+local function Flagged(f) return f ~= nil and (f.level == "look" or f.level == "watch") end
 
 -- Tooltip lines for a record's flags.
 local function FlagLines(lines, flags, c)
@@ -85,248 +72,148 @@ local function RecordTooltip(owner, x)
     lines[#lines + 1] = "Most gold owned " .. Gold(Audit.V(s, "peak")) .. "   acquired " .. Gold(Audit.V(s, "acquired"))
         .. "   other sources " .. Gold(Audit.Other(s))
     FlagLines(lines, x.flags, x.c)
-    lines[#lines + 1] = Muted("Click: open the ledger.")
+    lines[#lines + 1] = Muted("Click: show it in the detail pane.")
     ns.Tooltip.Text(owner, lines)
 end
 
----------------------------------------------------------------------------
--- Members: your roster with what is known of each
----------------------------------------------------------------------------
-local MEMBER_FILTERS = { { "all", "All members" }, { "flagged", "Flagged" }, { "missing", "No statistics" } }
-
-local function BuildMembers(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.card = Style.Card(v, "Guild members")
-    v.card:SetAllPoints()
-    v.card.sub:SetText("Statistics come from Inspect (the server's figures) or from members who share theirs with officers.")
-    local bar = CreateFrame("Frame", nil, v.card.content)
-    bar:SetPoint("TOPLEFT", 6, -4)
-    bar:SetPoint("TOPRIGHT", -6, -4)
-    bar:SetHeight(22)
-    v.filters = {}
-    local x = 0
-    for _, f in ipairs(MEMBER_FILTERS) do
-        local b = Style.Button(bar, f[2], 110, function() state.memberFilter = f[1] UI.Refresh() end)
-        b:SetPoint("TOPLEFT", x, 0)
-        b.key = f[1]
-        v.filters[#v.filters + 1] = b
-        x = x + 114
-    end
-    v.ask = Style.Button(bar, "Ask members", 120, function()
-        if ns.GuildSync then ns.GuildSync.RequestMembers() end
-        UI.Refresh()
-    end, "One request to the guild. Each member's addon answers with only what that member said Yes to "
-        .. "(Guild window, Sharing tab: \"Gold and activity statistics\").")
-    v.ask:SetPoint("TOPRIGHT")
-    local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -30)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { colWidths = { 96, 96, 72 }, search = true, hint = "Search names, ranks...",
-        columns = { name = "Member", "Most owned", "Acquired", "Last look" },
-        onClick = function(item) if item.full then Open(item.full) end end })
-    v.note = Note(v.card.content)
-
-    function v:Footer() return "Most owned: the most gold ever owned at once. Acquired: all gold ever received. Unknown shows ?, never 0." end
-
-    function v:Refresh()
-        local g = Guild.Mine() and Guild.Data()
-        for _, b in ipairs(self.filters) do Paint(b, b.key == state.memberFilter) end
-        local officer = ns.GuildSync and ns.GuildSync.IAmOfficer()
-        self.ask:SetShown(g and officer and true or false)
-        self.list:SetShown(g ~= nil)
-        self.note:SetShown(g == nil)
-        self.note:SetText("You are not in a guild. The Characters tab lists everyone you have looked at.")
-        if not g then return end
-        local data = Data.List(self.list, {
-            name = "audit:members", sources = { "audit", "guild" }, key = { state.memberFilter, Guild.Key() }, maxAge = 60,
-            empty = state.memberFilter == "flagged" and "No member is flagged." or "No members to show.",
-            build = function(add)
-                local rows, counts = {}, { members = 0, known = 0, flagged = 0 }
-                for full, m in pairs(g.members) do
-                    if not m.missing then
-                        counts.members = counts.members + 1
-                        local c = Audit.Record(full)
-                        local snap = Audit.Latest(c)
-                        local flags = snap and Audit.FlagsOf(full) or nil
-                        local flagged = flags and not flags.reviewed and (flags.level == "look" or flags.level == "watch")
-                        if snap then counts.known = counts.known + 1 end
-                        if flagged then counts.flagged = counts.flagged + 1 end
-                        local f = state.memberFilter
-                        if f == "all" or (f == "flagged" and flagged) or (f == "missing" and not snap) then
-                            rows[#rows + 1] = { full = full, m = m, c = c, snap = snap, flags = flags }
-                        end
-                    end
-                end
-                table.sort(rows, function(a, b)
-                    local av = a.flags and ((a.flags.reviewed and 0 or Audit.LEVEL_ORDER[a.flags.level] or 0) * 1000 + a.flags.score) or -1
-                    local bv = b.flags and ((b.flags.reviewed and 0 or Audit.LEVEL_ORDER[b.flags.level] or 0) * 1000 + b.flags.score) or -1
-                    if av ~= bv then return av > bv end
-                    local ap, bp = Audit.V(a.snap, "peak") or -1, Audit.V(b.snap, "peak") or -1
-                    if ap ~= bp then return ap > bp end
-                    return a.full < b.full
-                end)
-                for _, x in ipairs(rows) do
-                    add(x, { full = x.full, search = Guild.Short(x.full) .. " " .. tostring(x.m.rankName or "") })
-                end
-                return counts
-            end,
-            row = function(x)
-                local s = x.snap
-                return {
-                    text = NameText(x.full, x.m.classFile) .. Muted("  " .. tostring(x.m.level or "?") .. "  " .. tostring(x.m.rankName or ""))
-                        .. "   " .. UI.Badge(x.flags) .. (x.flags and x.flags.list[1] and Muted("  " .. x.flags.list[1].title) or ""),
-                    cols = s and { Gold(Audit.V(s, "peak")), Gold(Audit.V(s, "acquired")), Muted(Age(s.t)) } or { Muted("-"), Muted("-"), Muted("-") },
-                    tooltip = function(owner)
-                        if s then RecordTooltip(owner, x) return end
-                        ns.Tooltip.Text(owner, { Guild.Short(x.full), "No statistics yet.",
-                            Muted("Inspect them (the Audit button on the Inspect window), or ask members to share (officers).") })
-                    end,
-                }
-            end,
-        })
-        self.card.title:SetText("Guild members  " .. Muted(data.members .. " · " .. data.known .. " with statistics · ")
-            .. (data.flagged > 0 and (HEX.bad .. data.flagged .. " flagged|r") or Muted("none flagged")))
-    end
-    return v
+local function Select(full)
+    Audit.selected = full
+    UI.Refresh()
 end
 
 ---------------------------------------------------------------------------
--- Flags: every record worth a look
+-- The character list: Guild / Flagged / Everyone
 ---------------------------------------------------------------------------
-local function BuildFlags(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.card = Style.Card(v, "Flags")
-    v.card:SetAllPoints()
-    v.card.sub:SetText("Counters that do not add up the way played gold does. A reason to look, not proof: check before you act.")
-    local bar = CreateFrame("Frame", nil, v.card.content)
-    bar:SetPoint("TOPLEFT", 6, -4)
-    bar:SetPoint("TOPRIGHT", -6, -4)
-    bar:SetHeight(22)
-    v.members = Style.Button(bar, "Members only", 120, function() state.flagMembers = not state.flagMembers UI.Refresh() end)
-    v.members:SetPoint("TOPLEFT")
-    v.reviewed = Style.Button(bar, "Show reviewed", 120, function() state.showReviewed = not state.showReviewed UI.Refresh() end,
-        "Records an officer marked as fine. A new flag (a new jump) brings a record back on its own.")
-    v.reviewed:SetPoint("LEFT", v.members, "RIGHT", 4, 0)
-    local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -30)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { colWidths = { 96, 96, 72 }, search = true, hint = "Search names, guilds...",
-        columns = { name = "Character", "Most owned", "Acquired", "Last look" },
-        columns = { name = "Character", "Most owned", "Other sources", "Last look" },
-        onClick = function(item) if item.full then Open(item.full) end end })
+local SCOPES = { { key = "guild", label = "Guild" }, { key = "flagged", label = "Flagged" }, { key = "everyone", label = "Everyone" } }
+local TOGGLES = {
+    { key = "noStats", label = "No statistics" }, { key = "showReviewed", label = "Show reviewed" },
+    { key = "membersOnly", label = "Members only" },
+}
+local COLUMNS = {
+    guild = { name = "Member", label = "Lvl", "Most owned", "Acquired", "Last look" },
+    flagged = { name = "Character", label = "Lvl", "Most owned", "Other sources", "Last look" },
+    everyone = { name = "Character", label = "Lvl", "Most owned", "Acquired", "Last look" },
+}
+local EMPTY = {
+    guild = "No members to show.",
+    flagged = "Nothing flagged.",
+    everyone = "No statistics yet. Click My character, or target a player and click Target.",
+}
 
-    function v:Footer() return "Other sources: gold from trade, mail and the like. Thresholds: settings, Audit." end
-
-    function v:Refresh()
-        Paint(self.members, state.flagMembers)
-        Paint(self.reviewed, state.showReviewed)
-        local data = Data.List(self.list, {
-            name = "audit:flags", sources = { "audit", "guild" }, key = { state.flagMembers, state.showReviewed }, maxAge = 60,
-            empty = "Nothing flagged.",
-            build = function(add)
-                local rows = {}
-                for _, x in ipairs(Audit.Rows()) do
-                    local f = x.flags
-                    if f and (f.level == "look" or f.level == "watch") and (state.showReviewed or not f.reviewed)
-                        and (x.member or not state.flagMembers) then
-                        rows[#rows + 1] = x
-                    end
-                end
-                Audit.Sort(rows, "flags")
-                for _, x in ipairs(rows) do
-                    add(x, { full = x.full, search = Guild.Short(x.full) .. " " .. tostring(x.snap.guild or "") })
-                end
-                return { n = #rows }
-            end,
-            row = function(x)
-                local titles = {}
-                for _, f in ipairs(x.flags.list) do titles[#titles + 1] = f.title end
-                return {
-                    text = NameText(x.full, x.c.classFile) .. Muted("  " .. tostring(x.snap.level or "?"))
-                        .. (x.member and Muted("  member") or "") .. "   " .. UI.Badge(x.flags) .. Muted("  " .. table.concat(titles, ", ")),
-                    cols = { Gold(Audit.V(x.snap, "peak")), Gold(Audit.Other(x.snap)), Muted(Age(x.snap.t)) },
-                    accent = not x.flags.reviewed and x.flags.level == "look" and { 1, 0.31, 0.31 } or nil,
-                    tooltip = function(owner) RecordTooltip(owner, x) end,
-                }
-            end,
-        })
-        self.card.title:SetText("Flags  " .. Muted(tostring(data.n)))
-    end
-    return v
+-- Which records each chip shows. Members without statistics come last
+-- (No statistics on): they are unknown, so they are never left out as fine.
+local function Wanted(x, scope)
+    if scope == "guild" then return x.member end
+    if state.membersOnly and not x.member then return false end
+    if scope == "flagged" then return Flagged(x.flags) and (state.showReviewed or not x.flags.reviewed) end
+    return true
 end
 
----------------------------------------------------------------------------
--- Characters: every record
----------------------------------------------------------------------------
--- Orders with no column of their own (the column titles sort the rest).
-local SORTS = { { "flags", "Flags" }, { "other", "Other sources" }, { "level", "Level" } }
+function UI.Rows(scope)
+    scope = scope or state.scope
+    local rows, counts = {}, { guild = 0, flagged = 0, everyone = 0 }
+    local known = {}
+    for _, x in ipairs(Audit.Rows()) do
+        known[x.full] = true
+        counts.everyone = counts.everyone + 1
+        if x.member then counts.guild = counts.guild + 1 end
+        if Flagged(x.flags) and not x.flags.reviewed then counts.flagged = counts.flagged + 1 end
+        if Wanted(x, scope) then rows[#rows + 1] = x end
+    end
+    Audit.Sort(rows, "flags")
+    local missing = {}
+    local g = Guild.Mine() and Guild.Data()
+    if g then
+        for full, m in pairs(g.members) do
+            if not m.missing and not known[full] then missing[#missing + 1] = { full = full, m = m, missing = true } end
+        end
+        table.sort(missing, function(a, b) return a.full < b.full end)
+    end
+    counts.missing = #missing
+    if state.noStats then
+        for _, x in ipairs(missing) do rows[#rows + 1] = x end
+    end
+    return rows, counts
+end
 
-local function BuildCharacters(parent)
+local function CharacterRow(x)
+    if x.missing then
+        local m = x.m
+        return {
+            label = tostring(m.level or "?"), sort = { label = m.level },
+            text = NameText(x.full, m.classFile) .. Muted("  " .. tostring(m.rankName or "")) .. "   " .. UI.Badge(nil),
+            cols = { ns.UNKNOWN, ns.UNKNOWN, Muted("-") },
+            tooltip = function(owner)
+                ns.Tooltip.Text(owner, { Guild.Short(x.full), "No statistics yet.",
+                    Muted("Inspect them (the Audit button on the Inspect window), or ask members to share (officers).") })
+            end,
+        }
+    end
+    local s = x.snap
+    local level = s.level or x.c.level or (x.m and x.m.level)
+    local first = x.flags and x.flags.list[1]
+    local scope = state.scope
+    return {
+        label = tostring(level or "?"), sort = { label = level },
+        text = NameText(x.full, x.c.classFile or (x.m and x.m.classFile))
+            .. (scope == "guild" and x.m and Muted("  " .. tostring(x.m.rankName or "")) or "")
+            .. (scope ~= "guild" and x.member and Muted("  member") or "")
+            .. (scope ~= "guild" and s.guild and not x.member and Muted("  <" .. s.guild .. ">") or "")
+            .. "   " .. UI.Badge(x.flags) .. (first and Muted("  " .. first.title) or ""),
+        cols = { GoldCell(Audit.V(s, "peak")), GoldCell(scope == "flagged" and Audit.Other(s) or Audit.V(s, "acquired")), Muted(Age(s.t)) },
+        accent = x.flags and not x.flags.reviewed and x.flags.level == "look" and COLORS.bad or nil,
+        tooltip = function(owner) RecordTooltip(owner, x) end,
+    }
+end
+
+local function BuildList(parent)
     local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
     v.card = Style.Card(v, "Characters")
     v.card:SetAllPoints()
-    v.card.sub:SetText("Everyone on record: you, players you inspected, members who shared. The newest look of each.")
-    local bar = CreateFrame("Frame", nil, v.card.content)
-    bar:SetPoint("TOPLEFT", 6, -4)
-    bar:SetPoint("TOPRIGHT", -6, -4)
-    bar:SetHeight(22)
-    v.sort = Style.Button(bar, "", 190, nil, "Click: choose the order. Unknown figures sort last.")
-    v.sort:SetPoint("TOPLEFT")
-    v.sort:SetScript("OnClick", function(self)
-        local items = {}
-        for _, s in ipairs(SORTS) do
-            items[#items + 1] = { label = s[2], selected = s[1] == state.sort, pick = function() state.sort = s[1] UI.Refresh() end }
-        end
-        Style.OpenDropdown(self, items)
-    end)
-    local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -30)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { colWidths = { 96, 96, 72 }, search = true, hint = "Search names, guilds...",
-        onClick = function(item) if item.full then Open(item.full) end end })
-
-    function v:Footer() return "Most owned: the most gold ever owned at once. Acquired: all gold ever received." end
+    v.list = Style.List(v.card.content, { labelWidth = 28, colWidths = { 84, 84, 60 }, search = true, hint = "Search names, ranks, guilds...",
+        columns = COLUMNS.guild,
+        selected = function(item) return item.full ~= nil and item.full == Audit.selected end,
+        onClick = function(item) if item.full then Select(item.full) end end })
+    local shownScope = "guild"
 
     function v:Refresh()
-        local label = "?"
-        for _, s in ipairs(SORTS) do if s[1] == state.sort then label = s[2] end end
-        self.sort:SetLabel("Order: " .. label .. " >")
+        local scope = state.scope
+        if shownScope ~= scope then
+            shownScope = scope
+            self.list:SetColumns(COLUMNS[scope])
+        end
         local data = Data.List(self.list, {
-            name = "audit:chars", sources = { "audit", "guild" }, key = { state.sort }, maxAge = 60,
-            empty = "No statistics yet. Click My character, or target a player and click Target.",
+            name = "audit:list", sources = { "audit", "guild" }, maxAge = 60, empty = EMPTY[scope],
+            key = { scope, state.noStats, state.showReviewed, state.membersOnly, Guild.Key() },
             build = function(add)
-                local rows = Audit.Sort(Audit.Rows(), state.sort)
+                local rows, counts = UI.Rows(scope)
                 for _, x in ipairs(rows) do
-                    add(x, { full = x.full, search = Guild.Short(x.full) .. " " .. tostring(x.snap.guild or "") })
+                    local search = Guild.Short(x.full) .. " " .. tostring(x.m and x.m.rankName or "") .. " "
+                        .. tostring(x.snap and x.snap.guild or "")
+                    add(x, { full = x.full, search = search })
                 end
-                return { n = #rows }
+                counts.n = #rows
+                return counts
             end,
-            row = function(x)
-                return {
-                    text = NameText(x.full, x.c.classFile) .. Muted("  " .. tostring(x.snap.level or "?")
-                        .. (x.snap.guild and ("  <" .. x.snap.guild .. ">") or "") .. "  " .. #x.c.snaps .. " looks") .. "   " .. UI.Badge(x.flags),
-                    cols = { Gold(Audit.V(x.snap, "peak")), Gold(Audit.V(x.snap, "acquired")), Muted(Age(x.snap.t)) },
-                    tooltip = function(owner) RecordTooltip(owner, x) end,
-                }
-            end,
+            row = CharacterRow,
         })
-        self.card.title:SetText("Characters  " .. Muted(tostring(data.n)))
+        self.counts = data
+        local g = Guild.Mine()
+        self.card.sub:SetText(scope == "guild" and not g and "You are not in a guild: Everyone lists every record."
+            or (data.n .. " shown" .. (data.missing > 0 and ("  ·  " .. data.missing .. " members without statistics") or "")))
     end
     return v
 end
 
 ---------------------------------------------------------------------------
--- Ledger: one character
+-- Detail: Ledger
 ---------------------------------------------------------------------------
 local function CounterRow(snap, key, label)
     local f = Audit.BY_KEY[key]
     local value = Audit.Value(snap, key)
     return {
         text = label or f[3],
-        cols = { value and (f[4] and (HEX.gold .. value .. "|r") or (HEX.white .. value .. "|r")) or Muted("?") },
+        cols = { value and (f[4] and (HEX.gold .. value .. "|r") or (HEX.white .. value .. "|r")) or ns.UNKNOWN },
         tooltip = function(owner)
             local lines = { f[3] .. (f[5] and " (highest recorded)" or "") }
             if value then
@@ -340,54 +227,87 @@ local function CounterRow(snap, key, label)
     }
 end
 
-local function BuildLedger(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.top = Style.Card(v, "")
-    v.top:SetPoint("TOPLEFT")
-    v.top:SetPoint("TOPRIGHT")
-    v.top:SetHeight(176)
-    v.summary = Style.Text(v.top.content, "GameFontHighlightSmall")
-    v.summary:SetPoint("TOPLEFT", 8, -4)
-    v.summary:SetPoint("RIGHT", -8, 0)
-    if v.summary.SetSpacing then v.summary:SetSpacing(3) end
-    local actions = CreateFrame("Frame", nil, v.top.content)
-    actions:SetPoint("BOTTOMLEFT", 6, 4)
-    actions:SetPoint("BOTTOMRIGHT", -6, 4)
-    actions:SetHeight(22)
-    v.ok = Style.Button(actions, "Looked: fine", 100, function()
-        if Audit.selected then Audit.SetReview(Audit.selected, "ok") end
-    end, "Marks the flags you see now as reviewed. A new flag brings the record back.")
-    v.ok:SetPoint("LEFT")
-    v.watch = Style.Button(actions, "Watch", 70, function()
-        if Audit.selected then Audit.SetReview(Audit.selected, "watch") end
-    end, "Keeps this record on watch (shown in its tooltip).")
-    v.watch:SetPoint("LEFT", v.ok, "RIGHT", 4, 0)
-    v.clear = Style.Button(actions, "Clear review", 90, function()
-        if Audit.selected then Audit.SetReview(Audit.selected, nil) end
+local function LedgerRows(snap)
+    local g = {}
+    g[#g + 1] = { header = true, text = "Income" }
+    for _, key in ipairs({ "acquired", "peak", "looted", "quests", "vendors", "auctions" }) do g[#g + 1] = CounterRow(snap, key) end
+    local other = Audit.Other(snap)
+    g[#g + 1] = { text = "Other sources (trade, mail, ...)", cols = { GoldCell(other) },
+        tooltip = function(owner) ns.Tooltip.Text(owner, { "Other sources",
+            "Total gold acquired minus loot, quests, vendors and auctions. Unknown when any of those is missing." }) end }
+    local gap = Audit.Gap(snap)
+    g[#g + 1] = { text = "Peak above recorded income", cols = { GoldCell(gap) },
+        tooltip = function(owner) ns.Tooltip.Text(owner, { "Peak above recorded income",
+            "Most gold ever owned minus total gold acquired, at least 0. Above 0, gold reached them that the counters did not count." }) end }
+    if snap.wallet then g[#g + 1] = { text = "Gold carried now", cols = { HEX.gold .. Audit.Gold(snap.wallet) .. "|r" } } end
+    g[#g + 1] = { header = true, text = "Auctions" }
+    for _, key in ipairs({ "posted", "purchases", "largestSale", "largestBid" }) do g[#g + 1] = CounterRow(snap, key) end
+    g[#g + 1] = { header = true, text = "Spending" }
+    for _, key in ipairs({ "daily", "travel", "postage", "barber", "respec" }) do g[#g + 1] = CounterRow(snap, key) end
+    g[#g + 1] = { header = true, text = "Activity" }
+    for _, key in ipairs(Audit.ACTIVITY_KEYS) do g[#g + 1] = CounterRow(snap, key) end
+    g[#g + 1] = { header = true, text = "Professions" }
+    local profs = {}
+    for _, key in ipairs(Audit.PROFESSION_KEYS) do profs[#profs + 1] = { key = key, n = Audit.V(snap, key) } end
+    table.sort(profs, function(x, y)
+        if (x.n == nil) ~= (y.n == nil) then return x.n ~= nil end
+        if x.n ~= y.n then return x.n > y.n end
+        return x.key < y.key
     end)
-    v.clear:SetPoint("LEFT", v.watch, "RIGHT", 4, 0)
-    v.note = CreateFrame("EditBox", nil, actions)
-    v.note:SetHeight(22)
-    v.note:SetPoint("LEFT", v.clear, "RIGHT", 8, 0)
-    v.note:SetPoint("RIGHT", -96, 0)
-    v.note:SetAutoFocus(false)
-    v.note:SetFontObject("GameFontHighlightSmall")
-    v.note:SetTextInsets(8, 8, 0, 0)
-    v.note:SetMaxLetters(200)
-    local nbg = Style.Texture(v.note, "BACKGROUND", COLORS.button)
-    nbg:SetAllPoints()
-    Style.Border(v.note, COLORS.border)
-    v.note.hint = Style.Text(v.note, "GameFontDisableSmall")
-    v.note.hint:SetPoint("LEFT", 8, 0)
-    v.note.hint:SetText("Note (Enter saves)")
-    v.note:SetScript("OnTextChanged", function(self) self.hint:SetShown((self:GetText() or "") == "") end)
-    v.note:SetScript("OnEnterPressed", function(self)
+    for _, p in ipairs(profs) do g[#g + 1] = CounterRow(snap, p.key, Audit.BY_KEY[p.key][3] .. (Audit.BY_KEY[p.key][5] and " *" or "")) end
+    return g
+end
+
+local function NoteBox(parent)
+    local box = CreateFrame("EditBox", nil, parent)
+    box:SetHeight(22)
+    box:SetAutoFocus(false)
+    box:SetFontObject("GameFontHighlightSmall")
+    box:SetTextInsets(8, 8, 0, 0)
+    box:SetMaxLetters(200)
+    local bg = Style.Texture(box, "BACKGROUND", Style.IsLedger() and COLORS.well or COLORS.button)
+    bg:SetAllPoints()
+    Style.Border(box, COLORS.border)
+    box.hint = Style.Text(box, "GameFontDisableSmall")
+    box.hint:SetPoint("LEFT", 8, 0)
+    box.hint:SetText("Note (Enter saves)")
+    box:SetScript("OnTextChanged", function(self) self.hint:SetShown((self:GetText() or "") == "") end)
+    box:SetScript("OnEnterPressed", function(self)
         if Audit.selected then Audit.SetNote(Audit.selected, self:GetText()) end
         self:ClearFocus()
     end)
-    v.note:SetScript("OnEscapePressed", function(self) self:ClearFocus() UI.Refresh() end)
-    v.delete = Style.Button(actions, "Delete", 86, function()
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() UI.Refresh() end)
+    return box
+end
+
+local function BuildLedger(parent)
+    local v = CreateFrame("Frame", nil, parent)
+    v:SetAllPoints()
+    -- The flag rules of a flagged character, on top.
+    v.notice = Style.Notice(nil, nil, { flat = true, parent = v, width = 360, tone = "bad" })
+    v.notice:SetPoint("TOPLEFT", 4, -4)
+    v.notice:SetPoint("TOPRIGHT", -4, -4)
+    v.summary = Style.Text(v, "GameFontHighlightSmall")
+    if v.summary.SetWordWrap then v.summary:SetWordWrap(true) end
+    v.summary:SetJustifyV("TOP")
+    if v.summary.SetSpacing then v.summary:SetSpacing(3) end
+
+    local actions = CreateFrame("Frame", nil, v)
+    actions:SetHeight(22)
+    v.actions = actions
+    v.ok = Style.Button(actions, "Looked: fine", 96, function()
+        if Audit.selected then Audit.SetReview(Audit.selected, "ok") end
+    end, "Marks the flags you see now as reviewed. A new flag brings the record back.")
+    v.ok:SetPoint("LEFT")
+    v.watch = Style.Button(actions, "Watch", 64, function()
+        if Audit.selected then Audit.SetReview(Audit.selected, "watch") end
+    end, "Keeps this record on watch (shown in its tooltip).")
+    v.watch:SetPoint("LEFT", v.ok, "RIGHT", 4, 0)
+    v.clear = Style.Button(actions, "Clear review", 92, function()
+        if Audit.selected then Audit.SetReview(Audit.selected, nil) end
+    end)
+    v.clear:SetPoint("LEFT", v.watch, "RIGHT", 4, 0)
+    v.delete = Style.Button(actions, "Delete", 70, function()
         if Audit.selected and IsShiftKeyDown() then
             Audit.Delete(Audit.selected)
             Audit.selected = nil
@@ -397,95 +317,77 @@ local function BuildLedger(parent)
         end
     end, "Shift + click: removes every look of this character from your saved data.")
     v.delete:SetPoint("RIGHT")
+    v.note = NoteBox(v)
 
-    v.gold = Style.Card(v, "Gold")
-    v.gold:SetPoint("TOPLEFT", v.top, "BOTTOMLEFT", 0, -8)
-    v.gold:SetPoint("BOTTOMRIGHT", v, "BOTTOM", -4, 0)
-    v.gold.sub:SetText("Gross income, not profit or the gold they carry now.")
-    v.goldList = Style.List(v.gold.content, { colWidths = { 130 } })
-    v.act = Style.Card(v, "Activity and professions")
-    v.act:SetPoint("TOPLEFT", v.top, "BOTTOM", 4, -8)
-    v.act:SetPoint("BOTTOMRIGHT")
-    v.actList = Style.List(v.act.content, { colWidths = { 90 } })
-    v.empty = Note(v)
+    local holder = CreateFrame("Frame", nil, v)
+    holder:SetPoint("BOTTOMRIGHT")
+    v.holder = holder
+    v.list = Style.List(holder, { colWidths = { 110 } })
+
+    -- Everything under the notice follows its height (it grows with the rules).
+    local function Place(top)
+        v.summary:ClearAllPoints()
+        v.summary:SetPoint("TOPLEFT", 8, top - 6)
+        v.summary:SetPoint("RIGHT", -8, 0)
+        local h = math.max(14, v.summary:GetStringHeight() or 14)
+        local y = top - 6 - h - 8
+        actions:ClearAllPoints()
+        actions:SetPoint("TOPLEFT", 4, y)
+        actions:SetPoint("TOPRIGHT", -4, y)
+        v.note:ClearAllPoints()
+        v.note:SetPoint("TOPLEFT", 4, y - 26)
+        v.note:SetPoint("TOPRIGHT", -4, y - 26)
+        holder:SetPoint("TOPLEFT", 0, y - 54)
+    end
 
     function v:Footer() return Audit.DISCLAIMER end
 
-    function v:Refresh()
-        local full = Audit.selected
-        local c = full and Audit.Record(full)
-        local snap = Audit.Latest(c)
-        local has = snap ~= nil
-        self.top:SetShown(has)
-        self.gold:SetShown(has)
-        self.act:SetShown(has)
-        self.empty:SetShown(not has)
-        if not has then
-            self.empty:SetText(full and (Guild.Short(full) .. ": no statistics yet. Target them nearby and click Target.")
-                or "Pick a character in Members, Flags or Characters, or click My character / Target above.")
-            return
+    function v:Refresh(full, c, snap)
+        local flags = Audit.FlagsOf(full)
+        local top = 0
+        if Flagged(flags) or (flags.level == "unknown" and #flags.list == 0) then
+            local blocks = {}
+            for _, f in ipairs(flags.list) do blocks[#blocks + 1] = { heading = f.title, text = f.text } end
+            local tone, headline, sub
+            if Flagged(flags) then
+                local strong = false
+                for _, f in ipairs(flags.list) do if f.weight >= 2 then strong = true end end
+                tone = strong and "bad" or "gold"
+                headline = flags.level == "look" and "Worth a look" or "Watch"
+                sub = "Counters that do not add up the way played gold does. A reason to look, not proof: check before you act."
+            else
+                tone, headline = "unknown", "Some rules could not be checked"
+                sub = "Counters are missing. A missing counter never raises or clears a flag, and is never counted as fine."
+            end
+            self.notice:Set({ tone = tone, headline = headline, sub = sub, pages = { { key = "rules", blocks = blocks } } })
+            self.notice:Show()
+            top = -(4 + (self.notice:GetHeight() or 60))
+        else
+            self.notice:Hide()
         end
         local member, m = Audit.IsMember(full)
-        local flags = Audit.FlagsOf(full)
         local a = Audit.Assess(snap)
-        self.top.title:SetText(NameText(full, c.classFile) .. Muted("  level " .. tostring(snap.level or c.level or "?"))
-            .. (snap.guild and (HEX.gold .. "  <" .. snap.guild .. ">|r") or "")
-            .. (member and Muted("  ·  " .. tostring(m.rankName or "member")) or ""))
-        self.top.sub:SetText("Last look " .. Age(snap.t) .. " (" .. date("%Y-%m-%d %H:%M", snap.t) .. "), " .. (SOURCE[snap.src] or "?")
-            .. "  ·  " .. #c.snaps .. " looks since " .. ShortDate(c.first) .. "  ·  " .. snap.n .. " / " .. #Audit.FIELDS .. " counters")
         local lines = {}
         lines[#lines + 1] = "Activity: " .. HEX.white .. a.title .. "|r" .. Muted("  " .. a.summary .. "  (" .. a.coverage .. ")")
-        lines[#lines + 1] = "Flags: " .. UI.Badge(flags) .. (flags.level == "unknown" and #flags.list == 0
-            and Muted("  some rules could not be checked (counters missing)") or "")
-        for i, f in ipairs(flags.list) do
-            if i > 3 then lines[#lines + 1] = Muted("  +" .. (#flags.list - 3) .. " more (hover a row in Flags)") break end
-            lines[#lines + 1] = "  " .. (f.weight >= 2 and HEX.bad or HEX.gold) .. f.title .. "|r  " .. Muted(f.text)
-        end
+        lines[#lines + 1] = "Flags: " .. UI.Badge(flags) .. Muted("  ·  last look " .. Age(snap.t) .. ", " .. (SOURCE[snap.src] or "?"))
         local r = c.review
         if r and r.state then
             lines[#lines + 1] = Muted((r.state == "ok" and "Reviewed as fine" or "On watch") .. " by " .. Guild.Short(r.by) .. ", " .. ShortDate(r.t))
         end
+        lines[#lines + 1] = Muted(#c.snaps .. " looks since " .. ShortDate(c.first) .. "  ·  " .. snap.n .. " / " .. #Audit.FIELDS
+            .. " counters" .. (member and ("  ·  " .. tostring(m.rankName or "member")) or ""))
         self.summary:SetText(table.concat(lines, "\n"))
-        Paint(self.ok, r and r.state == "ok")
-        Paint(self.watch, r and r.state == "watch")
+        Place(top)
+        self.ok:SetOn(r and r.state == "ok")
+        self.watch:SetOn(r and r.state == "watch")
         if not self.note:HasFocus() then self.note:SetText(r and r.note or "") end
-
-        local g = {}
-        g[#g + 1] = { header = true, text = "Income" }
-        for _, key in ipairs({ "acquired", "peak", "looted", "quests", "vendors", "auctions" }) do g[#g + 1] = CounterRow(snap, key) end
-        local other = Audit.Other(snap)
-        g[#g + 1] = { text = "Other sources (trade, mail, ...)", cols = { other and (HEX.gold .. Audit.Gold(other) .. "|r") or Muted("?") },
-            tooltip = function(owner) ns.Tooltip.Text(owner, { "Other sources",
-                "Total gold acquired minus loot, quests, vendors and auctions. Unknown when any of those is missing." }) end }
-        local gap = Audit.Gap(snap)
-        g[#g + 1] = { text = "Peak above recorded income", cols = { gap and (HEX.gold .. Audit.Gold(gap) .. "|r") or Muted("?") },
-            tooltip = function(owner) ns.Tooltip.Text(owner, { "Peak above recorded income",
-                "Most gold ever owned minus total gold acquired, at least 0. Above 0, gold reached them that the counters did not count." }) end }
-        if snap.wallet then g[#g + 1] = { text = "Gold carried now", cols = { HEX.gold .. Audit.Gold(snap.wallet) .. "|r" } } end
-        g[#g + 1] = { header = true, text = "Auctions" }
-        for _, key in ipairs({ "posted", "purchases", "largestSale", "largestBid" }) do g[#g + 1] = CounterRow(snap, key) end
-        g[#g + 1] = { header = true, text = "Spending" }
-        for _, key in ipairs({ "daily", "travel", "postage", "barber", "respec" }) do g[#g + 1] = CounterRow(snap, key) end
-        self.goldList:SetItems(g)
-
-        local act = { { header = true, text = "Activity" } }
-        for _, key in ipairs(Audit.ACTIVITY_KEYS) do act[#act + 1] = CounterRow(snap, key) end
-        act[#act + 1] = { header = true, text = "Professions" }
-        local profs = {}
-        for _, key in ipairs(Audit.PROFESSION_KEYS) do profs[#profs + 1] = { key = key, n = Audit.V(snap, key) } end
-        table.sort(profs, function(x, y)
-            if (x.n == nil) ~= (y.n == nil) then return x.n ~= nil end
-            if x.n ~= y.n then return x.n > y.n end
-            return x.key < y.key
-        end)
-        for _, p in ipairs(profs) do act[#act + 1] = CounterRow(snap, p.key, Audit.BY_KEY[p.key][3] .. (Audit.BY_KEY[p.key][5] and " *" or "")) end
-        self.actList:SetItems(act)
+        self.list:SetItems(LedgerRows(snap))
     end
     return v
 end
 
 ---------------------------------------------------------------------------
--- History: every look of one character
+-- Detail: History, every look of one character
 ---------------------------------------------------------------------------
 local function Delta(a, b, key)
     local x, y = Audit.V(a, key), Audit.V(b, key)
@@ -496,30 +398,18 @@ end
 local function BuildHistory(parent)
     local v = CreateFrame("Frame", nil, parent)
     v:SetAllPoints()
-    v.card = Style.Card(v, "History")
-    v.card:SetAllPoints()
-    v.card.sub:SetText("Every saved look, newest first, with the change since the one before.")
-    v.list = Style.List(v.card.content, { labelWidth = 110, colWidths = { 110, 110, 110 },
-        columns = { name = "Source", label = "When", "Acquired", "Most owned", "Other sources" } })
-    v.empty = Note(v)
+    v.list = Style.List(v, { colWidths = { 84, 84, 84 },
+        columns = { name = "Look", "Acquired", "Most owned", "Other sources" } })
 
-    function v:Footer() return "A drop in gold acquired means a reset: no change is shown." end
+    function v:Footer() return "Every saved look, newest first. A drop in gold acquired means a reset: no change is shown." end
 
-    function v:Refresh()
-        local full = Audit.selected
-        local c = full and Audit.Record(full)
-        self.list:SetShown(c ~= nil)
-        self.empty:SetShown(c == nil)
-        if not c then
-            self.empty:SetText("Pick a character first (Members, Flags or Characters).")
-            return
-        end
-        self.card.title:SetText("History  " .. NameText(full, c.classFile) .. Muted("  " .. #c.snaps .. " looks"))
+    function v:Refresh(full, c)
         local rows = {}
         for i = #c.snaps, 1, -1 do
             local s, prev = c.snaps[i], c.snaps[i - 1]
             local function col(value, d)
-                local text = value and (HEX.gold .. Audit.Gold(value) .. "|r") or Muted("?")
+                if not value then return ns.UNKNOWN end
+                local text = HEX.gold .. Audit.Gold(value) .. "|r"
                 if d and d ~= 0 then text = text .. (d > 0 and (HEX.good .. " +") or (HEX.bad .. " -")) .. Audit.Gold(math.abs(d)) .. "|r" end
                 return text
             end
@@ -527,13 +417,14 @@ local function BuildHistory(parent)
             local function d(key) return prev and not reset and Delta(prev, s, key) or nil end
             local oa, ob = prev and Audit.Other(prev), Audit.Other(s)
             rows[#rows + 1] = {
-                label = date("%Y-%m-%d %H:%M", s.t), sort = { label = s.t },
-                text = (s.src == "shared" and "shared" or s.src == "inspect" and "inspected" or "your own") .. Muted("  level " .. tostring(s.level or "?"))
-                    .. (s.seen and Muted("  unchanged to " .. ShortDate(s.seen)) or "") .. (reset and (HEX.gold .. "  reset?|r") or ""),
+                sort = { [0] = s.t },
+                text = date("%b %d %H:%M", s.t) .. Muted("  " .. (s.src == "shared" and "shared" or s.src == "inspect" and "inspected" or "own")
+                    .. "  " .. tostring(s.level or "?")) .. (reset and (HEX.gold .. "  reset?|r") or ""),
                 cols = { col(Audit.V(s, "acquired"), d("acquired")), col(Audit.V(s, "peak"), d("peak")),
                     col(ob, (not reset and oa and ob) and (ob - oa) or nil) },
                 tooltip = function(owner)
                     local lines = { date("%Y-%m-%d %H:%M", s.t), (SOURCE[s.src] or "?") .. Muted(", client " .. tostring(s.build)) }
+                    if s.seen then lines[#lines + 1] = Muted("Unchanged up to " .. ShortDate(s.seen)) end
                     for _, key in ipairs(Audit.SOURCE_KEYS) do
                         local dd = d(key)
                         lines[#lines + 1] = Audit.BY_KEY[key][3] .. ": " .. Gold(Audit.V(s, key))
@@ -548,42 +439,117 @@ local function BuildHistory(parent)
     return v
 end
 
+local DETAILS = { { key = "ledger", label = "Ledger" }, { key = "history", label = "History" } }
+
+local function BuildDetail(parent)
+    local v = CreateFrame("Frame", nil, parent)
+    v.card = Style.Card(v, "")
+    v.card:SetAllPoints()
+    v.switch = Style.Views(v.card, DETAILS, function(key) state.detail = key UI.Refresh() end)
+    v.switch:SetPoint("TOPRIGHT", -6, -math.floor((Style.M.cardHeader - 20) / 2))
+    -- Ledger: title and sub share the header line; classic: two lines.
+    if not Style.IsLedger() then v.card.title:SetPoint("RIGHT", v.switch, "LEFT", -8, 0) end
+    v.card.sub:SetPoint("RIGHT", v.switch, "LEFT", -8, 0)
+    v.ledger = BuildLedger(v.card.content)
+    v.history = BuildHistory(v.card.content)
+    v.empty = Style.Text(v.card.content, "GameFontDisable", "CENTER")
+    v.empty:SetPoint("TOPLEFT", 12, -40)
+    v.empty:SetPoint("RIGHT", -12, 0)
+    if v.empty.SetWordWrap then v.empty:SetWordWrap(true) end
+
+    function v:Footer() return state.detail == "history" and self.history:Footer() or self.ledger:Footer() end
+
+    function v:Refresh()
+        self.switch:Select(state.detail)
+        local full = Audit.selected
+        local c = full and Audit.Record(full)
+        local snap = Audit.Latest(c)
+        self.ledger:SetShown(snap ~= nil and state.detail == "ledger")
+        self.history:SetShown(c ~= nil and state.detail == "history")
+        self.empty:SetShown(snap == nil)
+        if not full then
+            self.card.title:SetText("No character selected")
+            self.card.sub:SetText("")
+            self.empty:SetText("Pick a character in the list, or click My character / Target above.")
+            return
+        end
+        local _, m = Audit.IsMember(full)
+        local level = snap and snap.level or (c and c.level) or (m and m.level)
+        self.card.title:SetText(NameText(full, (c and c.classFile) or (m and m.classFile)))
+        self.card.sub:SetText(Muted(tostring(level or "?") .. (snap and snap.guild and ("  <" .. snap.guild .. ">") or "")))
+        if not snap then
+            self.empty:SetText(Guild.Short(full) .. ": no statistics yet. Target them nearby and click Target, "
+                .. "or open their Inspect window.")
+            return
+        end
+        if state.detail == "history" then self.history:Refresh(full, c) else self.ledger:Refresh(full, c, snap) end
+    end
+    return v
+end
+
 ---------------------------------------------------------------------------
 -- Window
 ---------------------------------------------------------------------------
-local VIEWS = {
-    { key = "members", label = "Members", build = BuildMembers },
-    { key = "flags", label = "Flags", build = BuildFlags },
-    { key = "characters", label = "Characters", build = BuildCharacters },
-    { key = "ledger", label = "Ledger", build = BuildLedger },
-    { key = "history", label = "History", build = BuildHistory },
-}
+-- /talod audit status, and the status line's tooltip.
+local function StatusTip(owner)
+    local lines = { "Statistics", Audit.status or "No request yet." }
+    for _, line in ipairs(Audit.StatusLines and Audit.StatusLines() or {}) do lines[#lines + 1] = Muted(line) end
+    lines[#lines + 1] = Muted("Also " .. ns.Cmd.Text("audit", "status") .. ".")
+    ns.Tooltip.Text(owner, lines)
+end
 
 local function Build()
-    frame = Style.Window(ns.FRAME .. "AuditWindow", "Audit", nil, nil, { nav = "audit" })
-    local tabHolder = CreateFrame("Frame", nil, frame)
-    tabHolder:SetPoint("TOPLEFT", PAD, -44)
-    tabHolder:SetPoint("TOPRIGHT", -PAD, -44)
-    tabHolder:SetHeight(26)
-    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end, 100)
-    local line = Style.HLine(frame)
-    line:SetPoint("TOPLEFT", PAD, -70)
-    line:SetPoint("TOPRIGHT", -PAD, -70)
+    frame = Style.Window(ns.FRAME .. "AuditWindow", "Audit", nil, nil, { nav = "audit", settings = "audit", section = "Guild" })
+    local top = Style.M.titleBar + 10
 
-    frame.me = Style.Button(frame, "My character", 104, function() Audit.Request("player") state.view = "ledger" UI.Refresh() end,
-        "Reads your own statistics (no request to the server).")
-    frame.me:SetPoint("TOPLEFT", PAD, -78)
-    frame.target = Style.Button(frame, "Target", 80, function() Audit.Request("target", "window") state.view = "ledger" UI.Refresh() end,
-        "Asks the server for your target's statistics: one request per click, player nearby, out of combat.")
-    frame.target:SetPoint("LEFT", frame.me, "RIGHT", 4, 0)
-    frame.status = Style.Text(frame, "GameFontHighlightSmall")
-    frame.status:SetPoint("LEFT", frame.target, "RIGHT", 10, 0)
-    frame.status:SetPoint("RIGHT", -PAD, 0)
+    -- Title bar: My character, Target (one comparison request per click), status.
+    frame.target = Style.Button(frame, "Target", 78, function()
+        Audit.Request("target", "window")
+        state.detail = "ledger"
+        UI.Refresh()
+    end, "Asks the server for your target's statistics: one request per click, player nearby, out of combat, 5 s apart.",
+        { kind = "send" })
+    frame.me = Style.Button(frame, "My character", 100, function()
+        Audit.Request("player")
+        state.detail = "ledger"
+        UI.Refresh()
+    end, "Reads your own statistics (no request to the server).")
+    frame.header:Add(frame.target)
+    frame.header:Add(frame.me)
+    frame:SetStatus("")
+    frame.statusHit = CreateFrame("Button", nil, frame)
+    frame.statusHit:SetAllPoints(frame.status)
+    frame.statusHit:SetScript("OnEnter", StatusTip)
+    frame.statusHit:SetScript("OnLeave", function() ns.Tooltip.Hide() end)
+
+    -- Toolbar: the three filters, the switches, Ask members.
+    frame.scopes = Style.Chips(frame, SCOPES, function(key)
+        state.scope = key
+        UI.Refresh()
+    end)
+    frame.scopes:SetPoint("TOPLEFT", PAD, -top)
+    frame.toggles = Style.Chips(frame, TOGGLES, function(key, on)
+        state[key] = on and true or false
+        UI.Refresh()
+    end)
+    frame.toggles:SetPoint("LEFT", frame.scopes, "RIGHT", 14, 0)
+    frame.ask = Style.Button(frame, "Ask members", 110, function()
+        if ns.GuildSync then ns.GuildSync.RequestMembers() end
+        UI.Refresh()
+    end, "One request to the guild. Each member's addon answers with only what that member said Yes to "
+        .. "(Members page, Sharing: \"Gold and activity statistics\").", { kind = "send", small = true })
+    frame.ask:SetPoint("TOPRIGHT", -PAD, -top)
 
     local body = CreateFrame("Frame", nil, frame)
-    body:SetPoint("TOPLEFT", PAD, -108)
+    body:SetPoint("TOPLEFT", PAD, -(top + 28))
     body:SetPoint("BOTTOMRIGHT", -PAD, 34)
-    for _, def in ipairs(VIEWS) do views[def.key] = def.build(body) end
+    views.list = BuildList(body)
+    views.detail = BuildDetail(body)
+    views.list:SetPoint("TOPLEFT")
+    views.list:SetPoint("BOTTOMLEFT")
+    views.list:SetPoint("RIGHT", body, "CENTER", -4, 0)
+    views.detail:SetPoint("TOPLEFT", body, "TOP", 4, 0)
+    views.detail:SetPoint("BOTTOMRIGHT")
     frame.footer = Style.Text(frame, "GameFontDisableSmall")
     frame.footer:SetPoint("BOTTOMLEFT", PAD + 2, 12)
     frame.footer:SetPoint("RIGHT", -PAD, 0)
@@ -595,51 +561,92 @@ end
 
 function UI.Refresh()
     if not frame or not frame:IsShown() then return end
-    frame.tabs:Select(state.view)
-    for key, v in pairs(views) do v:SetShown(key == state.view) end
-    local v = views[state.view]
-    v:Refresh()
-    frame.footer:SetText(v:Footer() or "")
+    frame.scopes:Select(state.scope)
+    for _, t in ipairs(TOGGLES) do frame.toggles:SetOn(t.key, state[t.key]) end
+    views.list:Refresh()
+    local counts = views.list.counts or {}
+    for _, s in ipairs(SCOPES) do frame.scopes:SetCount(s.key, counts[s.key]) end
+    views.detail:Refresh()
+    frame.footer:SetText(views.detail:Footer() or "")
     local supported = Audit.Supported()
+    -- Members share statistics only where the game has them (Forever).
+    local officer = supported and ns.GuildSync and ns.GuildSync.IAmOfficer() and Guild.Mine()
+    frame.ask:SetShown(state.scope == "guild" and officer and true or false)
     frame.me:SetShown(supported)
     frame.target:SetShown(supported)
-    frame.status:SetText(supported and Muted(Audit.status or "Inspect a player, or target one and click Target. Shift + click Delete removes a record.")
-        or (HEX.gold .. "The game's statistics exist on WoW Forever only: this client can show saved records but not read new ones.|r"))
+    frame:SetStatus(supported and (Audit.status or "Statistics: 1 request per click")
+        or (HEX.gold .. "The game's statistics exist on WoW Forever only: saved records show, new ones cannot be read.|r"))
 end
 
-function UI.Show(view)
+-- Old and new names of what the page shows: the three filters, the two
+-- views of the selected character.
+local SCOPE_OF = { guild = "guild", members = "guild", flagged = "flagged", flags = "flagged", everyone = "everyone",
+    characters = "everyone" }
+local DETAIL_OF = { ledger = "ledger", history = "history" }
+
+local function Apply(word)
+    if type(word) ~= "string" then return end
+    word = word:lower()
+    if SCOPE_OF[word] then state.scope = SCOPE_OF[word] end
+    if DETAIL_OF[word] then state.detail = DETAIL_OF[word] end
+end
+
+-- The page contract: tab (none here) or view = a filter or a detail view;
+-- arg = a character's full name to select.
+function UI.ShowPage(tab, view, arg)
     if not frame then
         Build()
         Audit.ReadSelf()
     end
-    if view and views[view] then state.view = view end
+    Apply(tab)
+    Apply(view)
+    if type(arg) == "string" and arg ~= "" then Audit.selected = arg end
     if frame:IsShown() then UI.Refresh() else frame:Show() end
+    return true
 end
 
+function UI.Show(view) return UI.ShowPage(nil, view) end
+
 function UI.Toggle(view)
-    if frame and frame:IsShown() and (not view or view == state.view) then frame:Hide() else UI.Show(view) end
+    if frame and frame:IsShown() and not view then frame:Hide() else UI.Show(view) end
 end
 
 function UI.IsShown() return frame ~= nil and frame:IsShown() end
-UI.views = views
+
+-- Home and the page list: how many records are flagged (not reviewed).
+function UI.PageStatus()
+    local n = Data.Memo("audit:flagged", Data.Key({ "audit", "guild" }), function()
+        local count = 0
+        for _, x in ipairs(Audit.Rows()) do
+            if Flagged(x.flags) and not x.flags.reviewed then count = count + 1 end
+        end
+        return count
+    end)
+    if n > 0 then return { text = n .. " flagged", tone = "bad" } end
+    return nil
+end
+
+UI.views, UI.state = views, state
+function UI.Frame() return frame end
 Data.Window(UI, { "audit", "audit.request", "guild" })
 
 ---------------------------------------------------------------------------
 -- Settings tab
 ---------------------------------------------------------------------------
-local function BuildPage(parent)
+local function ReadingGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "Keeps the game's statistics for you, players you inspect and guild members who share theirs: "
         .. "gold acquired, most gold owned, gold by source, auctions, quests, kills, professions. Flags records whose counters do "
         .. "not add up the way played gold does. A flag is a reason to look, not proof. Type |cffffffff" .. ns.Cmd.Text("audit") .. "|r for the window.",
         "GameFontHighlightSmall")
-    W.Button(parent, y, "Open the audit window", 200, function() UI.Show() end)
-    y = y - 34
-    y = W.Header(parent, y, "Reading")
     y = W.Checkbox(parent, y, "auditOnInspect", "Read a player's statistics when I inspect them",
         "One request each time you open the Inspect window. Off: only the Audit button and the Target button ask.")
-    y = W.Header(parent, y, "Flags")
+    return y
+end
+
+local function FlagsGroup(parent, y)
+    local W = ns.Options.Widgets
+    y = W.Fine(parent, y)
     y = W.Slider(parent, y, "auditGapGold", "Peak above recorded income", 5, 500, 5, "%d gold",
         "Most gold ever owned above total gold acquired: gold reached them the counters did not count.")
     y = W.Slider(parent, y, "auditOtherGold", "Income from other sources", 50, 2000, 50, "%d gold",
@@ -649,7 +656,14 @@ local function BuildPage(parent)
         "Unexplained gold between two looks at most 14 days apart.")
     y = W.Checkbox(parent, y, "auditLevelRule", "Flag peak gold high for the level (below 55)",
         "A guide from 10 gold at level 10 to 1200 gold at 55. Auction players and alts fed by a main also get here.")
-    return -y + 10
+    return y
 end
 
-ns.Options.AddTab({ label = "Audit", pages = { { label = "Audit", build = BuildPage } } })
+ns.Options.AddSection("audit", {
+    status = function()
+        local n = 0
+        for _ in pairs(ns.Audit.Records() or {}) do n = n + 1 end
+        return n .. (n == 1 and " character kept" or " characters kept")
+    end,
+    groups = { { label = "Reading", build = ReadingGroup }, { label = "Flag thresholds", build = FlagsGroup } },
+})

@@ -373,25 +373,19 @@ scenarios.econ_r3_craft_lines = function()
     Pr.Record(BOLT, 300, 3, now, 3, "Bolt of Woolen Cloth")
     -- 30 bolts with 3 listed: 3 at the AH (285c), 27 at the vendor (100c), against 90 wool (1350c).
     check(M.BatchProfit(recipe, 30) == 3 * 285 + 27 * 100 - 90 * 15, "as far as the market reaches: " .. tostring(M.BatchProfit(recipe, 30)))
-    local ui = ns.MarketUI
-    ui.Show("crafting")
-    ui.state.craftSel = recipe
-    ui.Refresh()
-    local v = ui.views.crafting
-    local canMake
-    for _, row in ipairs(v.detail.items or {}) do if row.label == "Can make" then canMake = tostring(row.text) end end
-    check(canMake and canMake:find("30 crafts") and canMake:find("22s 5c"), "the can-make line: " .. tostring(canMake))
+    -- (The recipe's detail is drawn on Professions > Profit: the numbers it shows.)
+    local plan = M.CraftPlan(recipe)
+    check(plan.canMake == 30 and M.BatchProfit(recipe, plan.canMake) == 2205, "the can-make numbers: " .. tostring(plan.canMake))
     -- A product that goes to the vendor (your auctions of it mostly expire) is not "after the cut".
     Pr.Record(BOLT, 150, 3, now + 60, 3)
     local link = MOCK.ItemLink(BOLT, "Bolt of Woolen Cloth")
     local list = {}
     for i = 1, 10 do list[i] = { name = link, count = 1, status = i == 1 and "sold" or "expired", t = now - 3600, ended = now } end
     auctions(ns, list)
-    ui.Refresh()
-    local sells
-    for _, row in ipairs(v.detail.items or {}) do if row.label == "Sells for" then sells = tostring(row.text) end end
-    check(sells and sells:find("vendor") and not sells:find("cut"), "labelled as a vendor price: " .. tostring(sells))
-    ui.Show("prices")
+    local pr
+    for _, x in ipairs(M.CraftList(ns.Gear.CharKey(), "all")) do if x.r == recipe then pr = x end end
+    check(pr and pr.how == "vendor", "valued as a vendor price: " .. tostring(pr and pr.how))
+    ns.MarketUI.Show("prices")
 end
 
 scenarios.econ_r3_make_whole_crafts = function()

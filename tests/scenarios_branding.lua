@@ -68,42 +68,40 @@ scenarios.branding = function()
         check(h.tagline:GetText():find(ns.TAGLINE, 1, true), label .. ": tagline")
     end
 
-    -- Main menu: icon in the title bar, header, tiles under it.
+    -- Home: icon in the title bar (classic) or the section name in brass;
+    -- the page list carries the brand icon beside the name.
     slash("menu")
     local menu = TALODMainMenu
-    check(menu.icon:GetTexture() == ns.TEX.icon64 and menu.icon:GetWidth() == 18, "title bar icon")
-    header(menu.header, "menu")
-    check(menu.header.sub:GetText():find("Pick a page", 1, true), "menu intro in the header")
-    local function lowestTile()
-        local low = 0
-        for _, t in ipairs(menu.order) do low = math.min(low, yOf(t) - t:GetHeight()) end
-        return low
+    if ns.Style.Look() == "classic" then
+        check(menu.icon:GetTexture() == ns.TEX.icon64 and menu.icon:GetWidth() == 18, "title bar icon")
+    else
+        check(menu.section and menu.section:GetText() ~= "", "title bar section name")
     end
-    check(yOf(menu.order[1]) <= -(39 + ns.Style.BRAND_HEADER_HEIGHT), "tiles under the header")
-    check(-lowestTile() <= menu:GetHeight() - 64, "tiles above the controls (default size): " .. lowestTile())
-    -- A short window: the header gives way to the tiles.
-    menu:SetHeight(ns.Nav.MIN_SIZE[2])
-    check(not menu.header:IsShown(), "header hidden in a short window")
-    menu:SetHeight(ns.Nav.DEFAULT_SIZE[2])
-    check(menu.header:IsShown(), "header back at the default size")
+    check(menu.navRail.icon:GetTexture() == ns.TEX.icon64, "page list brand icon")
+    check(menu.navRail.title:GetText():find(ns.NAME, 1, true), "page list brand name")
 
-    -- Credits: the same header above the cards.
+    -- Credits (About > Credits): the same header above the cards.
     ns.Credits.Show()
-    local credits = TALODCreditsWindow
+    local credits = ns.Credits.View()
+    credits:SetSize(ns.Nav.DEFAULT_SIZE[1] - 24, 560)
+    ns.Credits.Layout(credits)
     header(credits.header, "credits")
     local y = yOf(credits.cards[1])
-    check(y == -(39 + 12 + ns.Style.BRAND_HEADER_HEIGHT + 12), "first card under the header: " .. tostring(y))
-    -- One centered column, at most 720 wide, on a wide window.
+    check(y == -(ns.Style.BRAND_HEADER_HEIGHT + 12), "first card under the header: " .. tostring(y))
+    -- One centered column, at most 720 wide, on a wide page.
     credits:SetWidth(1400)
+    ns.Credits.Layout(credits)
     local card = credits.cards[1]
     local x = card._points[1][2]
     check(card:GetWidth() == 720 and x == (1400 - 720) / 2, "centered column: x " .. tostring(x) .. ", width " .. tostring(card:GetWidth()))
     check(credits.header:GetWidth() == 720, "header as wide as the column")
-    credits:SetWidth(ns.Nav.DEFAULT_SIZE[1])
-    credits:SetHeight(ns.Nav.MIN_SIZE[2])
+    -- A short page: the header gives way and the cards fit.
+    credits:SetSize(ns.Nav.DEFAULT_SIZE[1] - 24, ns.Nav.MIN_SIZE[2] - 114)
+    ns.Credits.Layout(credits)
+    check(not credits.header:IsShown(), "header hidden on a short page")
     local last = credits.cards[#credits.cards]
     y = yOf(last)
-    check(-(y - last:GetHeight()) <= credits:GetHeight() - 12, "cards fit the smallest window")
+    check(-(y - last:GetHeight()) <= credits:GetHeight(), "cards fit the smallest window")
 
     -- The game's Options > AddOns entry: the crest beside the title.
     check(TALODOptionsPanel and TALODOptionsPanel.crest, "options launcher crest")

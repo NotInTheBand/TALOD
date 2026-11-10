@@ -135,11 +135,12 @@ local function Finish()
     db().cleanLast = time()
     if run.removed > 0 then
         ns.Print("cleanup " .. (run.archived and "moved or removed " or "removed ") .. run.removed .. " old entr"
-            .. (run.removed == 1 and "y" or "ies") .. " (" .. ns.Cmd.Text("clean") .. " for the rules).")
+            .. (run.removed == 1 and "y" or "ies") .. " (" .. ns.Cmd.Text("clean") .. " for the rules)."
+            .. ns.Utils.PlaceLink("settings/data", "Settings › Data"))
     end
     if run.held > 0 then
         ns.Print(run.held .. " old entries wait for the archive (moved when " .. ARCHIVE_BATCH .. " wait, or Settings, Data, "
-            .. "Archive: Move now).")
+            .. "Archive: Move now)." .. ns.Utils.PlaceLink("settings/data", "Settings › Data"))
     end
     ns.Refresh()
 end
@@ -202,7 +203,8 @@ local function CheckCap()
     if db().memoryWarn and not warned then
         warned = true
         ns.Print(string.format("saved data uses %d MB of memory, over your cap of %d MB. Settings, Data: cleanup rules "
-            .. "and the largest stores (%s).", math.floor(memory.mb + 0.5), Cleanup.Cap(), ns.Cmd.Text("memory")))
+            .. "and the largest stores (%s).", math.floor(memory.mb + 0.5), Cleanup.Cap(), ns.Cmd.Text("memory"))
+            .. ns.Utils.PlaceLink("settings/data", "Settings › Data"))
     end
     if db().cleanAuto and not capRun and not pending then
         capRun = true
@@ -305,65 +307,62 @@ function Cleanup.PreviewText()
 end
 
 ---------------------------------------------------------------------------
--- Settings: the Data tab
+-- Settings > Data: cleanup rules, memory, archive
 ---------------------------------------------------------------------------
-local function CleanupPage(parent)
+local function CleanupGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "The game loads all of " .. ns.NAME .. "'s saved data into memory when you log in and writes it "
         .. "back when you log out, so everything kept costs memory and loading time. These rules remove old entries "
         .. "that nothing reads any more. Removed entries are gone for good.", "GameFontHighlightSmall")
-    y = W.Header(parent, y, "Automatic cleanup")
     y = W.Checkbox(parent, y, "cleanAuto", "Clean up automatically",
         "Runs the rules below once a day, 30 seconds after login, out of combat. On for a new install; after an update "
         .. "it stays off until you turn it on, so nothing you had is deleted without your say.")
     y = W.LiveText(parent, y, 18, Cleanup.LastText)
-    local rowY = y
-    W.Button(parent, rowY, "Clean up now", 140, function()
+    W.Button(parent, y, "Clean up now", 140, function()
         local n = Cleanup.PreviewTotal()
         if n == 0 then ns.Print("nothing to clean up with the rules that are on.") return end
         StaticPopup_Show(ns.POPUP .. "CLEAN", Cleanup.ConfirmText(n))
     end, "Runs the rules that are on, once, now.")
     y = y - 34
     for _, rule in ipairs(rules) do
-        y = W.Header(parent, y, rule.label, rule.desc)
-        y = W.Checkbox(parent, y, OnKey(rule), "Use this rule")
-        y = W.Slider(parent, y, DaysKey(rule), "Older than", rule.min, rule.max, rule.step, "%d days")
-        y = W.LiveText(parent, y, 18, function()
+        y = W.Checkbox(parent, y, OnKey(rule), rule.label, rule.desc)
+        y = W.LiveText(parent, y + 4, 18, function()
             local n = Cleanup.Preview(rule)
-            return (n > 0 and "|cffffffff" or "|cff9d9d9d") .. n .. " entr" .. (n == 1 and "y" or "ies") .. " would go now.|r"
+            return (n > 0 and "|cffffffff" or "|cff9d9d9d") .. n .. " entr" .. (n == 1 and "y" or "ies") .. " would go now"
+                .. " (older than " .. Days(rule) .. " days).|r"
         end)
     end
-    y = W.Header(parent, y, "Capped elsewhere")
-    y = W.Paragraph(parent, y, "These logs drop their oldest entries on their own: census points (Census tab), fishing "
+    y = W.Paragraph(parent, y - 4, "These logs drop their oldest entries on their own: census points (Enemies), fishing "
         .. "casts, the economy log, the journal, guild roster log, skills and gear ledgers.", "GameFontHighlightSmall")
-    return -y + 10
+    y = W.Fine(parent, y)
+    for _, rule in ipairs(rules) do
+        y = W.Slider(parent, y, DaysKey(rule), rule.label .. ": older than", rule.min, rule.max, rule.step, "%d days")
+    end
+    return y
 end
 
-local function MemoryPage(parent)
+local function MemoryGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "How much memory " .. ns.NAME .. " uses, as the game reports it. Reading it costs a little, "
         .. "so it is read a minute after login and every 15 minutes out of combat.", "GameFontHighlightSmall")
-    y = W.Header(parent, y, "Cap")
-    y = W.Slider(parent, y, "memoryCapMB", "Memory cap", 50, 1000, 25, "%d MB",
-        "Above this, " .. ns.NAME .. " warns once per session and, if automatic cleanup is on, runs the cleanup rules. "
-        .. "It never deletes anything the rules would not.")
     y = W.Checkbox(parent, y, "memoryWarn", "Warn in chat when over the cap")
     y = W.LiveText(parent, y, 18, Cleanup.MemoryText)
-    local rowY = y
     local weights = ""
-    W.Button(parent, rowY, "Read now", 120, function()
+    W.Button(parent, y, "Read now", 120, function()
         Cleanup.Measure()
         weights = Cleanup.WeightsText(8)
         ns.Refresh()
     end, "Reads the memory figure and works out which stores take the most (a short pause with a lot of data).")
     y = y - 34
-    y = W.Header(parent, y, "Largest stores")
-    y = W.LiveText(parent, y, 130, function()
+    y = W.Paragraph(parent, y, "Largest stores", "GameFontNormalSmall")
+    y = W.LiveText(parent, y + 6, 130, function()
         return weights ~= "" and weights or "|cff9d9d9dRead now to see them.|r"
     end)
-    return -y + 10
+    y = W.Fine(parent, y)
+    y = W.Slider(parent, y, "memoryCapMB", "Memory cap", 50, 1000, 25, "%d MB",
+        "Above this, " .. ns.NAME .. " warns once per session and, if automatic cleanup is on, runs the cleanup rules. "
+        .. "It never deletes anything the rules would not.")
+    return y
 end
 
 local function ArchiveCountsText()
@@ -375,18 +374,12 @@ local function ArchiveCountsText()
     return table.concat(lines, "\n")
 end
 
-local function ArchivePage(parent)
+local function ArchiveGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "The archive is a second addon, " .. ns.ARCHIVE_ADDON .. ", that comes with " .. ns.NAME
         .. ". The game reads its saved file only when it is loaded, so what is in it costs no memory and no loading "
         .. "time until you open it. Once loaded it stays in memory until you /reload.", "GameFontHighlightSmall")
-    y = W.Header(parent, y, "Archive")
     y = W.LiveText(parent, y, 18, ns.Archive.StateText)
-    y = W.Checkbox(parent, y, "cleanArchive", "Move old entries to the archive instead of deleting them",
-        "For the rules that can (recruit messages, price history and items, the guild event log). The automatic "
-        .. "cleanup moves them once " .. ARCHIVE_BATCH .. " are waiting, so the archive is not loaded every day; "
-        .. "until then they stay where they are. Without the archive addon, the rules delete.")
     y = W.LiveText(parent, y, 18, function()
         local n = Cleanup.Waiting()
         return n > 0 and ("|cffffffff" .. n .. " entr" .. (n == 1 and "y waits" or "ies wait") .. " for the archive.|r")
@@ -404,16 +397,24 @@ local function ArchivePage(parent)
         StaticPopup_Show(ns.POPUP .. "CLEAN", Cleanup.ConfirmText(n))
     end, "Loads the archive and runs the cleanup rules that are on.", 160)
     y = y - 34
-    y = W.Header(parent, y, "In the archive")
-    y = W.LiveText(parent, y, 90, ArchiveCountsText)
-    return -y + 10
+    y = W.Paragraph(parent, y, "In the archive", "GameFontNormalSmall")
+    y = W.LiveText(parent, y + 6, 90, ArchiveCountsText)
+    y = W.Fine(parent, y)
+    y = W.Checkbox(parent, y, "cleanArchive", "Move old entries to the archive instead of deleting them",
+        "For the rules that can (recruit messages, price history and items, the guild event log). The automatic "
+        .. "cleanup moves them once " .. ARCHIVE_BATCH .. " are waiting, so the archive is not loaded every day; "
+        .. "until then they stay where they are. Without the archive addon, the rules delete.")
+    return y
 end
 
-ns.Options.AddTab({ label = "Data", pages = {
-    { label = "Cleanup", build = CleanupPage },
-    { label = "Memory", build = MemoryPage },
-    { label = "Archive", build = ArchivePage },
-} })
+ns.Options.AddSection("data", {
+    status = function() return Cleanup.MemoryText() .. "  ·  " .. Cleanup.LastText() end,
+    groups = {
+        { label = "Cleanup rules", build = CleanupGroup },
+        { label = "Memory", build = MemoryGroup },
+        { label = "Archive", build = ArchiveGroup },
+    },
+})
 
 function Cleanup.ConfirmText(n)
     if Cleanup.Archiving() then

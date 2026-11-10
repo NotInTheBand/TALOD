@@ -1,7 +1,8 @@
 -- TALOD - minimap button: the addon's icon on the minimap's edge.
--- Left-click the Main menu (every window from there), Shift the economy
--- window, Alt the market, Ctrl the Enemies nearby panel, right-click the
--- settings, Shift + right-click the guild; drag it along the edge.
+-- Left-click opens TALOD where you left it (Home the first time), Shift the
+-- Gold page, Alt the Auction House, Ctrl the Enemies nearby panel on / off;
+-- right-click Settings, Shift + right-click the Guild page used last
+-- (Recruit or Members); drag it along the edge.
 --
 -- No library: the classic look (tracking border, round background) built by
 -- hand, round or square minimaps (GetMinimapShape). Minimap collectors such
@@ -51,34 +52,45 @@ local function DragUpdate()
     Place()
 end
 
+-- Opens a page, or closes it when it is the one open.
+local function TogglePage(page)
+    local Nav = ns.Nav
+    local cur = Nav.Current()
+    if cur and Nav.CurrentPage() == page then cur:Hide() return end
+    Nav.Go(page)
+end
+
 local function OnClick(_, mouse)
-    if mouse == "RightButton" and IsShiftKeyDown and IsShiftKeyDown() and ns.GuildUI then
-        ns.GuildUI.Toggle()
-    elseif mouse == "RightButton" then
-        if ns.Options then ns.Options.Toggle() end
-    elseif IsShiftKeyDown and IsShiftKeyDown() then
-        if ns.EconomyUI then ns.EconomyUI.Toggle() else ns.Print("the economy window is not available.") end
+    local Nav = ns.Nav
+    local shift = IsShiftKeyDown and IsShiftKeyDown()
+    if mouse == "RightButton" then
+        TogglePage(shift and Nav.LastGuildPage() or "settings")
+    elseif shift then
+        TogglePage("gold")
     elseif IsAltKeyDown and IsAltKeyDown() then
-        if ns.MarketUI then ns.MarketUI.Toggle() end
+        TogglePage("ah")
     elseif IsControlKeyDown and IsControlKeyDown() then
-        db().panelShown = not db().panelShown
-        ns.Print("Enemies nearby panel " .. (db().panelShown and "shown." or "hidden."))
-        ns.Refresh()
-    elseif ns.Nav then
-        ns.Nav.ToggleMenu()
+        local on = not db().panelShown
+        if Nav.SetPiece("panel", on) == "wait" then
+            ns.Print("Enemies nearby panel: " .. (on and "shows" or "hides") .. " when combat ends.")
+        else
+            ns.Print("Enemies nearby panel " .. (on and "shown." or "hidden."))
+        end
+    elseif Nav.Current() then
+        Nav.CloseAll()
     else
-        ns.GearUI.Toggle()
+        Nav.Go()
     end
 end
 
 local function Tooltip(self)
     local t = ns.Tooltip.Open(self, "ANCHOR_LEFT"):Title(ns.TITLE)
-    t:Pair("Left-click", "main menu (every " .. ns.NAME .. " window)")
-    if ns.EconomyUI then t:Pair("Shift + left-click", "economy") end
-    if ns.MarketUI then t:Pair("Alt + left-click", "market (auction prices, selling, profit)") end
+    t:Pair("Left-click", "open where you left it (Home the first time)")
+    t:Pair("Shift + left-click", "Gold")
+    t:Pair("Alt + left-click", "Auction House")
     t:Pair("Ctrl + left-click", "show / hide the Enemies nearby panel")
-    t:Pair("Right-click", "settings")
-    if ns.GuildUI then t:Pair("Shift + right-click", "guild (recruiting, roster, promotions)") end
+    t:Pair("Right-click", "Settings")
+    t:Pair("Shift + right-click", "Guild: " .. (ns.Nav.LastGuildPage() == "members" and "Members" or "Recruit"))
     if OnMinimap() then t:Note("Drag: move it around the minimap.") end
     t:Show()
 end
@@ -115,6 +127,7 @@ local function Build()
         self:SetScript("OnUpdate", DragUpdate)
     end)
     button:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+    if ns.Options and ns.Options.Bind then ns.Options.Bind("panelShown", "quick", "minimap") end
     Place()
 end
 
@@ -135,7 +148,8 @@ local function Slash(command)
     if command ~= "minimap" then return false end
     db().minimapButton = not db().minimapButton
     Refresh()
-    ns.Print("minimap button " .. (db().minimapButton and "shown." or "hidden (" .. ns.Cmd.Text("minimap") .. " shows it again)."))
+    ns.Print("minimap button " .. (db().minimapButton and "shown." or "hidden (" .. ns.Cmd.Text("minimap") .. " or Home, On screen shows it again)."
+        .. ns.Utils.PlaceLink("home", "Home")))
     if ns.Options then ns.Options.Refresh() end
     return true
 end

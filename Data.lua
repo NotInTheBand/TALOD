@@ -243,6 +243,14 @@ function Data.Memo(name, key, build, maxAge)
     return Make(name, key, build)
 end
 
+-- The value a memo holds now, built or not for the current key; nil when it
+-- was never built. For status lines read on every redraw: they must not start
+-- a slow build that the warm-up after login does in the background.
+function Data.Peek(name)
+    local c = memo[name]
+    return c and c.value or nil
+end
+
 -- Drops every memo whose name starts with `prefix` (all of them without one).
 function Data.Forget(prefix)
     for name in pairs(memo) do

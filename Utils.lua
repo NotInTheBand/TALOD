@@ -63,10 +63,15 @@ function Utils.NumKey(v, desc)
     return string.format("%016.2f", v + NUM_SPAN)
 end
 
+-- keyOf(item) -> a string key; nil or ns.UNKNOWN sorts last, whichever way
+-- the keys run (a hidden value is never ranked as small or large).
+local LAST = "\255\255"
 function Utils.SortBy(list, keyOf)
     local keys, byKey = {}, {}
     for i, item in ipairs(list) do
-        local k = keyOf(item) .. "\1" .. string.format("%07d", i)
+        local key = keyOf(item)
+        if key == nil or key == ns.UNKNOWN then key = LAST else key = tostring(key) end
+        local k = key .. "\1" .. string.format("%07d", i)
         keys[i], byKey[k] = k, item
     end
     table.sort(keys)
@@ -189,3 +194,46 @@ function Utils.ItemCount(id)
     local game = type(fn) == "function" and Num(S.Call(fn, id)) or nil
     return math.max(n, game or 0)
 end
+
+---------------------------------------------------------------------------
+-- Chat links to a place: a chat line that names a page or a Settings
+-- section ends with a link that opens it. Only where the client has the
+-- addon link type (its own handler knows "addon:" links, so a click on one
+-- never reaches the item tooltip, which would refuse an unknown link);
+-- elsewhere the line stays as it was. The click opens a TALOD page only,
+-- never the chat box.
+---------------------------------------------------------------------------
+function Utils.LinksSupported()
+    return type(LinkTypes) == "table" and LinkTypes.addon ~= nil and type(SetItemRef) == "function"
+        and type(hooksecurefunc) == "function"
+end
+
+-- route: page[/tab][#view] (as Nav.Go), e.g. "settings/data", "prof/profit".
+-- Returns " [label]" as a link, or "" without addon links.
+function Utils.PlaceLink(route, label)
+    if not Utils.LinksSupported() then return "" end
+    return " " .. Style.HEX.accent .. "|Haddon:" .. ns.NAME .. ":go:" .. route .. "|h[" .. label .. "]|h|r"
+end
+
+function Utils.OpenRoute(route)
+    local base, view = tostring(route):match("^([^#]*)#?(.*)$")
+    local page, tab = base:match("^([^/]+)/?(.*)$")
+    if not page or not (ns.Nav and ns.Nav.Go) then return false end
+    return ns.Nav.Go(page, tab ~= "" and tab or nil, view ~= "" and view or nil)
+end
+
+local linksHooked = false
+function Utils.HookLinks()
+    if linksHooked or not Utils.LinksSupported() then return false end
+    linksHooked = true
+    local prefix = "addon:" .. ns.NAME .. ":go:"
+    -- After the game's own handler: a hook taints nothing, and a modified
+    -- click (Shift puts the link into an open chat box) is left to the game.
+    hooksecurefunc("SetItemRef", function(link)
+        if type(link) ~= "string" or link:sub(1, #prefix) ~= prefix then return end
+        if IsModifiedClick and IsModifiedClick() then return end
+        ns.SafeCall(Utils.OpenRoute, link:sub(#prefix + 1))
+    end)
+    return true
+end
+Utils.HookLinks()

@@ -90,14 +90,14 @@ scenarios.movement = function()
     check(M.MoveTag(4289):find("doesn't sell") and M.MoveTag(2589) == "", "list tags")
     ns.AuctionDeskUI.Show("overview")
     local found
-    for _, r in ipairs(ns.AuctionDeskUI.views.overview.list.all) do
-        if r.header and r.text:find("Not worth posting") then found = true end
+    for _, r in ipairs(ns.MarketUI.views.today.cards.waste.list.all) do
+        if r.id == 2592 then found = true end
     end
-    check(found, "overview section")
+    check(found, "Today: not worth posting")
     Pr.RecordLadder(4289, { { 20, 50, "Al" } }, false, now)
     ns.AuctionDeskUI.Show("control", 4289)
     local said
-    for _, r in ipairs(ns.AuctionDeskUI.views.control.detail.all) do
+    for _, r in ipairs(ns.MarketUI.views.prices.detail.all) do
         if (r.text or ""):find("a reset would only sit") then said = true end
     end
     check(said, "control: doesn't sell said")

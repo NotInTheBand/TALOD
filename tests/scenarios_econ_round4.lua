@@ -207,7 +207,7 @@ scenarios.econ_r4_plan_gain = function()
         return plan
     end
     slash("plan tailoring 75")
-    local text = ns.GearUI.views.professions.left.sub:GetText()
+    local text = ns.ProfessionsUI.views.plan.left.sub:GetText()
     check(text:find("gain") and text:find("28g 31s") and not text:find("= .-0c|r"), "the gain shown: " .. text)
     P.PlanFor = real
 end

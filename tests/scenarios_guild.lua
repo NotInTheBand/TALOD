@@ -734,12 +734,19 @@ scenarios.guild_window = function()
     for _, view in ipairs({ "recruit", "invited", "roster", "promote", "log" }) do UI.Show(view) end
     check(UI.views.log.note:GetText():find("not in a guild"), "no guild note")
 
-    -- Minimap: Shift + right-click toggles the window.
+    -- Minimap: Shift + right-click toggles the guild page used last (Members here).
+    TALODGuildWindow:Hide()
+    TALODMembersWindow:Hide()
+    MOCK.shift = true
+    TALODMinimapButton:Fire("OnClick", "RightButton")
+    MOCK.shift = false
+    check(TALODMembersWindow:IsShown() and UI.state.view == "log", "minimap shift right-click: the page used last")
+    UI.Show("recruit")
     TALODGuildWindow:Hide()
     MOCK.shift = true
     TALODMinimapButton:Fire("OnClick", "RightButton")
     MOCK.shift = false
-    check(TALODGuildWindow:IsShown(), "minimap shift right-click")
+    check(TALODGuildWindow:IsShown(), "minimap shift right-click: Recruit when it was last")
 end
 
 scenarios.guild_forever_secrets = function()
@@ -996,10 +1003,15 @@ scenarios.guild_whisper_first_ui = function()
     check(textOf(iv.list, "Gamma-Mockrealm"):find("replied: invite?", 1, true), "Gamma reads replied: invite?")
     check(iv.card.title:GetText():find("1 replied", 1, true) and iv.card.title:GetText():find("2 asked", 1, true), "title: " .. iv.card.title:GetText())
 
-    -- The click gives the command and sends nothing.
+    -- A click on the row selects it; its /ginvite button gives the command and sends nothing.
     local sentBefore = #MOCK.whispers
     MOCK.popup, MOCK.popupData = nil, nil
     rowFor(iv.list, "Gamma-Mockrealm"):Fire("OnClick", "LeftButton")
+    check(MOCK.popup == nil and UI.state.chat == "Gamma-Mockrealm", "row click: selected, no command")
+    iv.list:Draw()
+    local rb = rowFor(iv.list, "Gamma-Mockrealm").rowButton
+    check(rb and rb:IsShown() and rb.label:GetText() == "/ginvite" and rb.kind == "send", "row button: /ginvite")
+    rb:Fire("OnClick", "LeftButton")
     check(MOCK.popup == "TALOD_COPY" and MOCK.popupData == "/ginvite Gamma", "copy box with the command: " .. tostring(MOCK.popupData))
     check(#MOCK.whispers == sentBefore and #MOCK.guildInvites == 0, "nothing sent")
     rowFor(iv.list, "Gamma-Mockrealm"):GetScript("OnEnter")(rowFor(iv.list, "Gamma-Mockrealm"))
@@ -1008,10 +1020,10 @@ scenarios.guild_whisper_first_ui = function()
     UI.Show("replies")
     local rv = UI.views.replies
     check(UI.state.chat == "Gamma-Mockrealm", "conversation selected")
-    check(rv.invite.label:GetText() == "/ginvite", "button reads /ginvite")
+    check(rv.typed:IsShown() and rv.copyInvite and rv.copyInvite.label:GetText() == "Copy /ginvite", "typed-invite box with its copy button")
     MOCK.popup, MOCK.popupData = nil, nil
-    rv.invite:Fire("OnClick", "LeftButton")
-    check(MOCK.popupData == "/ginvite Gamma" and #MOCK.guildInvites == 0, "Replies button: the same command")
+    rv.copyInvite:Fire("OnClick", "LeftButton")
+    check(MOCK.popupData == "/ginvite Gamma" and #MOCK.guildInvites == 0, "the box's button: the same command")
     check(rv.status:GetText():find("replied: invite?", 1, true), "header status: " .. rv.status:GetText())
 
     -- The game's line: invited for real.
@@ -1024,7 +1036,8 @@ scenarios.guild_whisper_first_ui = function()
     check(iv.card.title:GetText():find("1 invited", 1, true), "title: " .. iv.card.title:GetText())
     MOCK.popup = nil
     rowFor(iv.list, "Gamma-Mockrealm"):Fire("OnClick", "LeftButton")
-    check(MOCK.popup == nil, "a confirmed invite gives no command")
+    local gb = rowFor(iv.list, "Gamma-Mockrealm").rowButton
+    check(MOCK.popup == nil and not (gb and gb:IsShown()), "a confirmed invite gives no command")
     -- Right-click still forgets.
     rowFor(iv.list, "Alpha-Mockrealm"):Fire("OnClick", "RightButton")
     check(G.Recruit("Alpha-Mockrealm") == nil, "right-click forgets")
@@ -1071,7 +1084,7 @@ scenarios.guild_replies = function()
 
     -- Reading it: the conversation opens, read, notice gone.
     UI.notice:Fire("OnClick", "LeftButton")
-    check(UI.state.view == "replies" and UI.state.chat == "Newbie-Mockrealm", "notice opens the conversation")
+    check(UI.state.view == "invited" and UI.state.invitedChip == "replied" and UI.state.chat == "Newbie-Mockrealm", "notice opens the conversation")
     check(r.unread == nil and not UI.notice:IsShown(), "read, notice hidden")
     check(UI.views.replies.list.all[1].full == "Newbie-Mockrealm", "conversation listed")
     check(UI.ChatLine("Newbie-Mockrealm", r, r.chat[2]):find("sure, thanks!"), "chat line")
@@ -1247,8 +1260,9 @@ scenarios.guild_said_no = function()
 
     -- Undo: back to "not invited" (its wait is gone); a click invites without a second whisper.
     v.no:Fire("OnClick", "LeftButton")
-    check(r.status == "uninvited" and r.saidNo == nil and v.invite:IsShown(), "undone: " .. tostring(r.status))
-    check(G.Invite(full) and #MOCK.guildInvites == 1 and #MOCK.whispers == 1, "invite only after undo")
+    check(r.status == "uninvited" and r.saidNo == nil and v.act:IsShown() and v.act.label:GetText() == "Invite", "undone: " .. tostring(r.status))
+    v.act:Fire("OnClick", "LeftButton")
+    check(#MOCK.guildInvites == 1 and #MOCK.whispers == 1, "invite only after undo")
 end
 
 scenarios.guild_full_names = function()
@@ -1379,8 +1393,8 @@ scenarios.guild_mini_window = function()
     -- Turned on from the Recruit tab.
     UI.Show("recruit")
     UI.views.recruit.miniToggle:Fire("OnClick", "LeftButton")
-    check(TALODDB.guildMiniShown and TALODGuildMini and TALODGuildMini:IsShown(), "shown from the Recruit tab")
-    check(UI.views.recruit.miniToggle.label:GetText():find("on"), "button says on")
+    check(TALODDB.guildMiniShown and TALODGuildMini and TALODGuildMini:IsShown(), "shown from the Recruit title bar")
+    check(UI.views.recruit.miniToggle.label:GetText():find("shown"), "button says shown")
     TALODGuildWindow:Hide()
 
     -- Stays on screen with the guild window closed, and keeps up with new players.
@@ -1388,7 +1402,7 @@ scenarios.guild_mini_window = function()
     wait(5)
     local rows = UI.mini.list.all
     check(#rows == 2 and TALODGuildMini:IsShown(), "both recruits listed: " .. #rows)
-    check(UI.mini.title:GetText():find("2"), "count in the title")
+    check(UI.mini.count:GetText():find("2"), "count in the title bar")
 
     -- Same clicks on the window's own rows: left invites, right skips.
     local function rowFor(full)
@@ -1438,7 +1452,7 @@ scenarios.guild_mini_window = function()
     -- Dragged somewhere, then a settings reset puts it back.
     TALODGuildMini:Fire("OnDragStop")
     check(type(TALODDB.guildMiniPos) == "table", "position saved")
-    slash("reset")
+    slash("reset"); MOCK.AcceptPopup()
     check(TALODDB.guildMiniPos == nil and TALODDB.guildMiniShown == false and not TALODGuildMini:IsShown(),
         "reset: back to off and default place")
 
@@ -1889,7 +1903,11 @@ scenarios.guild_invite_check = function()
     for _, r in ipairs(list.rows) do if r.item and r.item.full == "Quiet-Mockrealm" then row = r end end
     check(row and row.item.unconfirmed, "row marked")
     row:Fire("OnClick", "LeftButton")
-    check(#MOCK.guildInvites == invites + 1 and #MOCK.whispers == whispers, "click: one invite, no whisper")
+    check(#MOCK.guildInvites == invites and #MOCK.whispers == whispers, "row click: selects, sends nothing")
+    list:Draw()
+    check(row.rowButton and row.rowButton:IsShown() and row.rowButton.label:GetText() == "Invite again", "row button: Invite again")
+    row.rowButton:Fire("OnClick", "LeftButton")
+    check(#MOCK.guildInvites == invites + 1 and #MOCK.whispers == whispers, "button: one invite, no whisper")
     check(quiet.ack == false and G.InviteCheck(quiet) == "waiting", "the new invite waits for its own confirmation")
 
     -- A decline written without the realm the key has (a realm of the group).
@@ -2113,13 +2131,17 @@ scenarios.guild_replies_filters_lookup = function()
         return table.concat(out, ",")
     end
     check(shown() == "Grump,Newbie,Oldie", "all three: " .. shown())
-    local tags = {}
-    for _, item in ipairs(v.list.items) do if item.full then tags[item.full] = item.cols and item.cols[1] or "" end end
-    check(tags["Grump-Mockrealm"]:find("Blocked", 1, true) and tags["Newbie-Mockrealm"]:find("Joined", 1, true)
-        and tags["Oldie-Mockrealm"]:find("Declined", 1, true), "each tagged")
-    for _, b in ipairs(v.groups) do if b.key == "blocked" then b:Fire("OnClick", "LeftButton") end end
-    check(UI.state.replyGroup == "blocked" and shown() == "Grump", "Blocked filter: " .. shown())
-    UI.state.replyGroup = "all"
+    -- One filter chip each: Blocked, Joined, Declined; all three replied.
+    local function chip(key)
+        for _, b in ipairs(v.chips.chips) do if b.key == key then b:Fire("OnClick", "LeftButton") end end
+        return shown()
+    end
+    check(chip("blocked") == "Grump" and UI.state.invitedChip == "blocked", "Blocked filter: " .. shown())
+    check(chip("joined") == "Newbie", "Joined filter: " .. shown())
+    check(chip("declined") == "Oldie", "Declined filter: " .. shown())
+    check(chip("replied") == "Grump,Newbie,Oldie", "Replied filter: " .. shown())
+    check(chip("waiting") == "", "nobody waiting: " .. shown())
+    chip("all")
 
     -- The second search box: words said, not names.
     v.words:SetText("RAID")

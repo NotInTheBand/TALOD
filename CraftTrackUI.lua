@@ -113,22 +113,30 @@ local function CurrentPlan()
 end
 
 local function Build()
-    frame = Style.Window(ns.FRAME .. "CraftTrack", "Craft", 520, 560)
+    -- A floating piece: the hud surface and the floating title bar (TALOD
+    -- button = Professions > Profit, settings, hide). Escape still closes it.
+    frame = Style.FloatFrame(ns.FRAME .. "CraftTrack", 520, 546, { strata = "HIGH", escape = true,
+        moved = function(self)
+            local left, top = self:GetLeft(), self:GetTop()
+            if left and top then db().craftTrackPos = { math.floor(left + 0.5), math.floor(top + 0.5) } end
+        end })
     frame:Hide()
-    frame:SetFrameStrata("HIGH")
     local pos = db().craftTrackPos
     if type(pos) == "table" and pos[1] and pos[2] then
         frame:ClearAllPoints()
         frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", pos[1], pos[2])
     end
-    frame:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        local left, top = self:GetLeft(), self:GetTop()
-        if left and top then db().craftTrackPos = { math.floor(left + 0.5), math.floor(top + 0.5) } end
-    end)
+    frame.bar = Style.FloatBar(frame, { page = "prof", tab = "profit", title = "Craft", settings = "professions",
+        hide = function()
+            local Nav = ns.Nav
+            if not (Nav and Nav.SetPiece and Nav.SetPiece("tracker", false)) then frame:Hide() end
+        end,
+        hideTip = { "Hide", "The craft stays tracked. Home, On screen or a double-click on a recipe in Professions, Profit shows it again." } })
+    frame.title = frame.bar.title
 
+    local TOP = Style.FLOAT_BAR + 14
     frame.iconHolder, frame.icon = Style.IconFrame(frame, 32)
-    frame.iconHolder:SetPoint("TOPLEFT", 14, -48)
+    frame.iconHolder:SetPoint("TOPLEFT", 14, -TOP)
     frame.name = Style.Text(frame, "GameFontNormalLarge")
     frame.name:SetPoint("TOPLEFT", frame.iconHolder, "TOPRIGHT", 8, -1)
     frame.name:SetPoint("RIGHT", -14, 0)
@@ -142,7 +150,7 @@ local function Build()
         local n = plan and plan.count or 1
         UI.SetCount(n - (IsShiftKeyDown and IsShiftKeyDown() and 5 or 1))
     end, "One fewer (Shift: five).", { title = "Crafts" })
-    frame.minus:SetPoint("TOPLEFT", 14, -90)
+    frame.minus:SetPoint("TOPLEFT", 14, -TOP - 42)
     frame.count = Style.Text(frame, "GameFontHighlight", "CENTER")
     frame.count:SetPoint("LEFT", frame.minus, "RIGHT", 4, 0)
     frame.count:SetWidth(90)
@@ -165,13 +173,13 @@ local function Build()
         return preview and "Follow this craft: materials you buy on the Auction House or collect are counted as they come, "
             .. "and the AH helper searches what is still missing first." or "Stop following this craft."
     end, { title = "Tracking" })
-    frame.track:SetPoint("TOPRIGHT", -14, -90)
+    frame.track:SetPoint("TOPRIGHT", -14, -TOP - 42)
     frame.summary = Style.Text(frame, "GameFontHighlightSmall")
-    frame.summary:SetPoint("TOPLEFT", 14, -120)
+    frame.summary:SetPoint("TOPLEFT", 14, -TOP - 72)
     frame.summary:SetPoint("RIGHT", -14, 0)
 
     local holder = CreateFrame("Frame", nil, frame)
-    holder:SetPoint("TOPLEFT", 10, -140)
+    holder:SetPoint("TOPLEFT", 10, -TOP - 92)
     holder:SetPoint("BOTTOMRIGHT", -10, 48)
     frame.list = Style.List(holder, { labelWidth = 40, colWidths = { 64 }, onClick = function(item)
         if item.id and ns.Prices.Entry(item.id) and ns.MarketUI then
@@ -190,7 +198,7 @@ local function Build()
         ns.Print(msg)
         UI.Refresh()
     end, "One click starts one craft: the next step whose materials are in your bags, with its count (like the Create "
-        .. "button). Open the profession's window first. The next click starts the next step.", { title = "Craft next", height = 26 })
+        .. "button). Open the profession's window first. The next click starts the next step.", { title = "Craft next", height = 26, kind = "send" })
     frame.craft:SetPoint("BOTTOMLEFT", 14, 14)
     frame.note = Style.Text(frame, "GameFontDisableSmall")
     frame.note:SetPoint("LEFT", frame.craft, "RIGHT", 10, 0)
@@ -209,6 +217,7 @@ function UI.Refresh()
     if not plan then frame:Hide() return end
     local r = plan.r
     frame.icon:SetTexture(ns.Professions.ItemIcon(r.creates))
+    frame.bar:SetCount(preview and "preview" or "tracked")
     frame.name:SetText(Name(r.creates) .. ((r.makes or 1) ~= 1 and (" x" .. r.makes) or ""))
     frame.sub:SetText(r.name .. "  ·  " .. r.prof .. " " .. r.skill
         .. (plan.canCraft and (plan.why == "unread" and "  ·  open your " .. r.prof .. " window once to confirm you know it" or "")

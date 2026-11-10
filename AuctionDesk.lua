@@ -702,8 +702,10 @@ function Desk.Summary()
 end
 
 ---------------------------------------------------------------------------
--- Slash: /talod ah [item], /talod desk
+-- Slash: /talod ah [tab | item], /talod desk
 ---------------------------------------------------------------------------
+local TABS = { today = true, buy = true, sell = true, mine = true, prices = true }
+
 local function Slash(command, rest)
     if command ~= "ah" then return false end
     rest = (rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -711,7 +713,12 @@ local function Slash(command, rest)
         if ns.AuctionDeskUI then ns.AuctionDeskUI.Toggle() end
         return true
     end
-    -- An item: its control plan in chat, and the Control tab on it.
+    -- A tab of the Auction House page (/talod ah buy, when the page list did not open it).
+    if TABS[rest:lower()] and ns.MarketUI and ns.MarketUI.ShowPage then
+        ns.MarketUI.ShowPage(rest:lower())
+        return true
+    end
+    -- An item: its control plan in chat, and Prices on it with its ladder.
     local needle, found = rest:lower(), nil
     for id in pairs(Prices.AllLadders()) do
         local name = Market.ItemInfo(id)

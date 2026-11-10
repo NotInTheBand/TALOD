@@ -84,7 +84,7 @@ scenarios.spotted_alert_and_panel = function()
     check(alertText():find("!! ENEMY"), "loud: 4 levels above (>= 3)")
     check(#MOCK.sounds == 1, "loud alert played a sound")
     check(printed("ENEMY.*Shadowfang.*<Gankers>"), "chat line with guild")
-    check(TALODPanel.title:GetText():find("1"), "panel title count")
+    check(TALODPanel.count:GetText():find("1"), "panel title count")
     check(not TALODPanel.empty:IsShown(), "empty text hidden")
 
     -- The same player again: no repeat alert within the repeat window.
@@ -349,7 +349,7 @@ scenarios.forever_secrets = function()
     MOCK.secretRange = true
     MOCK.Tick(0.3)
     check(ns.Spotter.Get("Hidden").rangeOK == false, "range unknown")
-    check(ns.FormatRange(nil, nil) == "? yd", "unknown range text")
+    check(ns.FormatRange(nil, nil) == ns.ColorCode("unknown") .. "? yd|r", "unknown range text, in the unknown tone")
     MOCK.secretRange = false
     MOCK.Tick(0.3)
 end
@@ -446,7 +446,8 @@ scenarios.census_logging = function()
     MOCK.now = MOCK.now + 60 MOCK.Tick(0.3)
     check(#c.points == 2 and c.points[2]:find("Shadowfang"), "trimmed to the newest")
     slash("census")
-    check(printed("census on"), "status line")
+    local page = ns.EnemiesUI.views.census
+    check(ns.EnemiesUI.IsShown() and page:IsShown() and page.zoneCard.foot:GetText():find("census on", 1, true), "status line")
     ns.Census.Delete("all")
     check(#TALODDB.census.points == 0 and next(TALODDB.census.cells) == nil, "deleted")
 end
@@ -526,7 +527,7 @@ scenarios.gear_ledger = function()
     -- The window and its views build and refresh without errors.
     slash("gear")
     check(ns.GearUI.IsShown(), "window open")
-    for _, view in ipairs({ "ledger", "progress", "sources", "snapshots" }) do
+    for _, view in ipairs({ "ledger", "progress", "sources", "gear" }) do
         ns.GearUI.state.view = view
         ns.GearUI.Refresh()
     end
@@ -586,8 +587,10 @@ scenarios.skills_tracking = function()
     check(ns.Skills.GainedSince(c, "Fishing", 0) == 3, "gained")
 
     slash("skills")
-    check(ns.GearUI.IsShown() and ns.GearUI.state.view == "skills", "skills tab open")
-    ns.GearUI.Refresh()
+    check(ns.ProfessionsUI.IsShown() and ns.ProfessionsUI.state.view == "skills", "skills tab open on Professions")
+    ns.ProfessionsUI.Refresh()
+    slash("char")
+    check(ns.GearUI.IsShown() and not ns.ProfessionsUI.IsShown(), "char opens the Gear page in its place")
     slash("char")
     check(not ns.GearUI.IsShown(), "char toggles the window")
     slash("char")
@@ -917,8 +920,8 @@ scenarios.profession_plan = function()
     slash("plan first aid 60")
     check(TALODDB.profPlanProf == "First Aid" and TALODDB.profPlanTargets["First Aid"] == 60, "slash sets profession and target")
     check(printed("First Aid 1 %-> 60"), "slash prints a summary")
-    check(ns.GearUI.IsShown() and ns.GearUI.state.view == "professions", "professions tab")
-    local v = ns.GearUI.views.professions
+    check(ns.ProfessionsUI.IsShown() and ns.ProfessionsUI.state.view == "plan", "Professions page, Plan tab")
+    local v = ns.ProfessionsUI.views.plan
     check(v.plan and v.plan.prof == "First Aid" and v.target.label:GetText() == "to 60", "tab shows the plan")
     v.profButton:Fire("OnClick", "LeftButton")
     check(TALODDB.profPlanProf ~= "First Aid", "profession cycles")
@@ -1095,7 +1098,7 @@ scenarios.market = function()
     check(P.PlanFor(nil, "Tailoring", 75).resale >= 0, "resale off still lists the products")
     TALODDB.profPlanResale = true
     slash("plan tailoring 75")
-    local pv = ns.GearUI.views.professions
+    local pv = ns.ProfessionsUI.views.plan
     check(pv.left.sub:GetText():find("sell the products"), "summary with resale: " .. pv.left.sub:GetText())
     pv.resale:Fire("OnClick", "LeftButton")
     check(TALODDB.profPlanResale == false, "resale toggle")
@@ -1193,12 +1196,16 @@ scenarios.market = function()
     v.search:Fire("OnTextChanged")
     check(ui.state.search == "bolt" and ui.state.selected, "search")
     check(v.sort == nil, "no sort button: the column titles sort")
-    for _, key in ipairs({ "sell", "crafting", "deals", "sellthrough" }) do
+    for _, key in ipairs({ "sell", "deals", "bids", "sellthrough" }) do
         ui.Show(key)
         check(ui.state.view == key, key .. " tab")
     end
-    ui.views.crafting.mode:Fire("OnClick", "LeftButton")
-    check(ui.state.craftMode == "known", "crafting mode")
+    -- Crafting for profit is on Professions > Profit now: the old key goes there.
+    local go, went = ns.Nav.Go, nil
+    ns.Nav.Go = function(page, tab) went = page .. "/" .. tostring(tab) return true end
+    ui.Show("crafting")
+    ns.Nav.Go = go
+    check(went == "prof/profit" and ui.views.crafting == nil, "crafting opens Professions > Profit: " .. tostring(went))
     ui.Show("prices")
 end
 
@@ -1303,6 +1310,7 @@ scenarios.ah_helper = function()
     TALODDB.ahFullScan = {}
     check(H.FullScan() and replicated, "ReplicateItems")
     MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    MOCK.Tick(2.5)
     MOCK.RunTimers() MOCK.RunTimers()
     local wool = Pr.Entry(2592)
     check(wool and wool.p == 20 and wool.a == 2 and wool.n == 30, "replicate: from index 0, lowest and supply")
@@ -1400,8 +1408,8 @@ scenarios.crafting_log = function()
     TALODDB.craftLogEnabled = true
 
     slash("crafts")
-    check(ns.GearUI.IsShown() and ns.GearUI.state.view == "crafting", "crafting tab")
-    local v = ns.GearUI.views.crafting
+    check(ns.ProfessionsUI.IsShown() and ns.ProfessionsUI.state.view == "log", "Professions page, Log tab")
+    local v = ns.ProfessionsUI.views.log
     check(v.left.sub:GetText():find("4 crafts") and v.left.sub:GetText():find("+3 skill"), "totals: " .. v.left.sub:GetText())
     v.range:Fire("OnClick", "LeftButton")
     v.range:Fire("OnClick", "LeftButton")
@@ -1536,7 +1544,7 @@ scenarios.skills_forever_professions = function()
     ns.Professions.SetStart(key, "Tailoring", nil)
     slash("skills")
     slash("plan")
-    check(ns.GearUI.state.view == "professions", "professions tab")
+    check(ns.ProfessionsUI.state.view == "plan", "Plan tab")
     slash("probe")
 end
 
@@ -1699,7 +1707,7 @@ scenarios.economy_tracking = function()
     slash("economy")
     check(ns.EconomyUI.IsShown() and not ns.GearUI.IsShown(), "economy has its own window")
     local views = ns.EconomyUI.views
-    for _, view in ipairs({ "overview", "transactions", "auctions", "trades" }) do
+    for _, view in ipairs({ "overview", "transactions", "trades" }) do
         ns.EconomyUI.state.view = view
         for _, r in ipairs({ 1, 30, 0, 7 }) do ns.EconomyUI.state.range = r ns.EconomyUI.Refresh() end
     end
@@ -1725,9 +1733,11 @@ scenarios.economy_tracking = function()
     plot:Fire("OnUpdate")
     check(plot.hovering == 1, "chart hover")
     check(views.overview.tiles[4].label:GetText() == "This session", "session tile")
-    ns.EconomyUI.state.view = "auctions"
-    ns.EconomyUI.Refresh()
-    check(views.auctions.card.sub:GetText():find("1 sold"), "auction summary: " .. views.auctions.card.sub:GetText())
+    -- Your auctions are on the Auction House page (My auctions) now.
+    ns.EconomyUI.ShowPage("auctions")
+    local mine = ns.MarketUI.views.mine
+    check(ns.MarketUI.IsShown() and ns.MarketUI.state.view == "mine", "the old Auctions tab opens My auctions")
+    check(mine.card.sub:GetText():find("1 sold"), "auction summary: " .. mine.card.sub:GetText())
 end
 
 scenarios.slash_and_options = function()
@@ -1749,7 +1759,10 @@ scenarios.slash_and_options = function()
         "probe covers every Phase 0 item")
     check(probeText:find("target: name=Shadowfang"), "probe reads the target")
 
+    -- Bare prefix: where you left it, Home the first time; settings has its word.
     slash("")
+    check(ns.Nav.Current() ~= nil, "bare prefix opens a page")
+    slash("settings")
     check(ns.Options.IsShown(), "settings window opened")
     check(not SettingsPanel:IsShown(), "the game's panel is not needed")
     -- The entry in the game's Options > AddOns opens the window.
@@ -1779,7 +1792,7 @@ scenarios.slash_and_options = function()
 
     -- Reset keeps the journal and lists.
     ns.Journal.SetList("Keeper", "kos")
-    slash("reset")
+    slash("reset"); MOCK.AcceptPopup()
     check(ns.ListOf("Keeper") == "kos", "lists kept across reset")
     check(TALODDB.panelRows == 8, "settings back to defaults")
 end
@@ -1999,10 +2012,11 @@ scenarios.fishing = function()
     check(F.Lure() == true, "lure on")
     MOCK.lureMs = nil
     MOCK.Tick(1.1)
-    check(alertText() and alertText():find("lure ran out"), "lure alert: " .. tostring(alertText()))
+    -- Not danger: a chat line, no center text, no sound.
+    check(printed("lure ran out") and alertText() == nil and #MOCK.sounds == 0, "lure: a chat line: " .. tostring(alertText()))
     MOCK.freeSlots = 1
     MOCK.Tick(1.1)
-    check(alertText() and alertText():find("1 bag slots left"), "bag alert: " .. tostring(alertText()))
+    check(printed("1 bag slots left") and alertText() == nil, "bags: a chat line: " .. tostring(alertText()))
     castStop() MOCK.Tick(2)
 
     -- HUD while fishing.
@@ -2034,7 +2048,7 @@ scenarios.fishing = function()
     check(TALODDB.fishHudDock == "left", "panel dropped beside the HUD snaps too: " .. tostring(TALODDB.fishHudDock))
     TALODDB.fishHudLocked = true
     ns.Refresh()
-    check(hud.lock.tex and true, "lock shown")
+    check(hud.lock and hud.lock.glyph.glyph == "lock", "lock shown")
     TALODDB.fishHudLocked = false
     slash("fish hud reset")
     check(TALODDB.fishHudDock == nil and select(2, hud:GetPoint(1)) == UIParent, "reset undocks")
@@ -2180,7 +2194,7 @@ scenarios.fishing = function()
     check(printed("Here %(Crystal Lake"), "stats in chat")
 
     -- Reset keeps fishing data; the session ends when idle.
-    slash("reset")
+    slash("reset"); MOCK.AcceptPopup()
     check(TALODDB.fishing.spots[1429], "fishing kept across reset")
     MOCK.now = MOCK.now + 400
     MOCK.Tick(1.1)
@@ -2433,7 +2447,8 @@ scenarios.ah_helper_modern = function()
     MOCK.Tick(1)
     check(panel.scanButton.label:GetText():find("Waiting for the server") and panel.scanButton.label:GetText():find("cancel"), "waiting shows seconds and cancel")
     rows = { { "Salt", 10, 300, 4289 }, { "Salt", 20, 400, 4289 } }
-    MOCK.Tick(2.5)
+    -- Found by the poll, then read once the list has stood still.
+    MOCK.Tick(2.5) MOCK.Tick(2.5)
     MOCK.RunTimers() MOCK.RunTimers()
     check(not H.state.scan and Pr.Entry(4289) and Pr.Entry(4289).p == 30, "scan read without its event")
     -- Proof it was real: counts from the answer, in the log, chat and the tooltip.
@@ -2475,7 +2490,7 @@ scenarios.ah_helper_modern = function()
     slash("ah log")
     check(printed("full scans, newest first") and printed("Full scan done") and printed("blocked"), "/talod ah log")
     -- Reset keeps prices and the scan log.
-    slash("reset")
+    slash("reset"); MOCK.AcceptPopup()
     check(TALODDB.ahScanLog and #TALODDB.ahScanLog == #log and Pr.Entry(4289), "reset keeps prices and the scan log")
     MOCK.FireEvent("ADDON_ACTION_BLOCKED", "OtherAddon", "C_AuctionHouse.ReplicateItems()")
     MOCK.FireEvent("AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED")
@@ -2569,7 +2584,7 @@ scenarios.review_fixes = function()
     TALODDB.alertsEnabled = false
     TALODDB.someFutureLog = { 1, 2, 3 }
     TALODDB.fishHudPos = { 10, 10 }
-    slash("reset")
+    slash("reset"); MOCK.AcceptPopup()
     check(TALODDB.alertsEnabled == true, "setting reset")
     check(TALODDB.someFutureLog and #TALODDB.someFutureLog == 3, "unknown data store kept")
     TALODDB.someFutureLog = nil
@@ -2587,9 +2602,9 @@ end
 scenarios.panel_mute_alerts = function()
     local ns = boot(11509)
     local button = TALODPanel.alerts
-    check(button and not button.muted:IsShown(), "alerts button shows on")
+    check(button and button.glyph.glyph == "bell", "alerts button shows on")
     button:Fire("OnClick", "LeftButton")
-    check(TALODDB.alertsEnabled == false and button.muted:IsShown(), "muted from the panel")
+    check(TALODDB.alertsEnabled == false and button.glyph.glyph == "belloff", "muted from the panel")
     check(printed("enemy alerts muted"), "said in chat")
     resetOutput()
     plateAdd("nameplate1", MOCK.Enemy({ level = 30 }))
@@ -2602,7 +2617,7 @@ scenarios.panel_mute_alerts = function()
     check(alertText() == nil, "no vanish alert while muted")
     -- Back on: the same switch as the settings checkbox.
     button:Fire("OnClick", "LeftButton")
-    check(TALODDB.alertsEnabled == true and not button.muted:IsShown(), "on again")
+    check(TALODDB.alertsEnabled == true and button.glyph.glyph == "bell", "on again")
     ns.Alerts.Reset()
     plateRemove("nameplate1")
     plateAdd("nameplate2", MOCK.Enemy({ guid = "Player-1-B", name = "Other", level = 30 }))

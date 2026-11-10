@@ -58,9 +58,25 @@ function Alerts.PlayChosenSound()
     end
 end
 
+-- How much a center line matters: a loud one over a plain one, danger over
+-- the rest. A line never replaces a higher one still on screen.
+local function Rank(color, loud)
+    local d = ns.GetColor("danger")
+    local danger = type(color) == "table" and color[1] == d[1] and color[2] == d[2] and color[3] == d[3]
+    return (danger and 2 or 0) + (loud and 1 or 0)
+end
+Alerts.Rank = Rank
+
 -- Shows a center-screen line. color = {r,g,b}; loud = bigger and longer.
+-- Returns false when a higher line is still showing (this one is dropped:
+-- its chat line, if any, still goes out).
 function Alerts.Show(text, color, loud)
     if not alertFrame then CreateAlertFrame() end
+    local rank = Rank(color, loud)
+    if alertFrame:IsShown() and (alertFrame.remaining or 0) > 0.6 and rank < (alertFrame.rank or 0) then
+        return false
+    end
+    alertFrame.rank = rank
     ApplyFont(alertFrame.text, GameFontNormalLarge, loud and 1.6 or 1.25)
     alertFrame.text:SetText(text)
     color = color or ns.COLORS.neutral
@@ -68,6 +84,7 @@ function Alerts.Show(text, color, loud)
     alertFrame.remaining = loud and 4 or 2.5
     alertFrame:SetAlpha(1)
     alertFrame:Show()
+    return true
 end
 
 -- "Shadowfang ?? Rogue <Guild> (KoS)"
@@ -104,8 +121,11 @@ function Alerts.Fire(e, source)
     local loud = ns.IsLoud(e)
     local distance = (e.lo or e.hi) and ("  " .. ns.FormatRange(e.lo, e.hi)) or ""
     if db.alertCenterText then
+        -- Center text is danger only: the ledger look draws every enemy line
+        -- in the danger tone (the classic look keeps the class colour).
+        local ledger = ns.Style and ns.Style.IsLedger and ns.Style.IsLedger()
         Alerts.Show((loud and "!! ENEMY: " or "Enemy: ") .. Alerts.Describe(e) .. distance,
-            loud and ns.GetColor("danger") or ns.ClassColor(e.classFile), loud)
+            (loud or ledger) and ns.GetColor("danger") or ns.ClassColor(e.classFile), loud)
     end
     if db.alertSound and loud then Alerts.PlayChosenSound() end
     if db.alertChat then

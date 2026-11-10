@@ -196,34 +196,38 @@ scenarios.auction_desk_window = function()
     Pr.RecordLadder(2589, { { 10, 5, "Al" }, { 20, 10, "Bo" }, { 100, 20, "Al" } }, false, now)
     Pr.RecordLadder(4289, { { 5, 50 } }, false, now - 3 * 86400)   -- old, sellers unknown
 
-    -- /talod ah: the desk, not the scan panel.
+    -- /talod ah: the Auction House page on Today, not the scan panel.
     slash("ah")
-    local UI = ns.AuctionDeskUI
-    check(UI.IsShown() and UI.state.view == "overview", "/talod ah opens the desk")
+    local UI, Page = ns.AuctionDeskUI, ns.MarketUI
+    check(UI.IsShown() and Page.state.view == "today", "/talod ah opens the page on Today")
     check(not (ns.AHHelper.Panel() and ns.AHHelper.Panel():IsShown()), "scan panel stays closed")
-    for _, key in ipairs({ "overview", "listings", "deals", "margins", "control" }) do
+    -- The desk's old tabs land on the page's tabs.
+    for key, want in pairs({ overview = "today", listings = "mine", deals = "deals", control = "prices" }) do
         UI.Show(key)
-        check(UI.state.view == key, "tab " .. key)
+        check(Page.state.view == want, "desk " .. key .. " -> " .. want .. ": " .. tostring(Page.state.view))
     end
-    -- Control: the plan, the ladder; the old ladder with unknown sellers says so.
+    -- Control is the Prices detail of an item with a full look: the plan, the
+    -- ladder; the old ladder with unknown sellers says so.
     UI.Show("control", 2589)
-    local detail = UI.views.control.detail
-    check(UI.state.selected == 2589 and #detail.all > 8, "control detail: " .. #detail.all)
+    local prices = Page.views.prices
+    check(Page.state.selected == 2589 and prices.hasControl and #prices.detail.all > 8, "control detail: " .. #prices.detail.all)
+    check(Page.state.priceFilter == "full", "the list of items with a full look")
     UI.Show("control", 4289)
     local texts = {}
-    for _, r in ipairs(UI.views.control.detail.all) do texts[#texts + 1] = r.text or "" end
+    for _, r in ipairs(prices.detail.all) do texts[#texts + 1] = r.text or "" end
     local joined = table.concat(texts, "\n")
     check(joined:find("did not name them") and joined:find("search it again"), "unknown sellers and old look said")
-    check(UI.views.control.sort == nil, "no sort button: the column titles sort")
+    check(prices.sort == nil, "no sort button: the column titles sort")
 
-    -- /talod ah <item>: the plan in chat and the Control tab on it.
+    -- /talod ah <item>: the plan in chat and Prices on it, with its ladder.
     MOCK.prints = {}
     slash("ah linen")
-    check(printed("Buy them all") and printed("Best reset") and UI.state.selected == 2589, "/talod ah linen")
+    check(printed("Buy them all") and printed("Best reset") and Page.state.selected == 2589 and Page.state.view == "prices",
+        "/talod ah linen")
     slash("ah nothing like this")
     check(printed("no full look"), "unknown item said")
 
-    -- /talod ah scan: the scan panel; /talod ah toggles the desk off.
+    -- /talod ah scan: the scan panel; /talod ah toggles the page off.
     slash("ah scan")
     check(ns.AHHelper.Panel() and ns.AHHelper.Panel():IsShown(), "/talod ah scan opens the scan panel")
     UI.Show("overview")
@@ -300,8 +304,8 @@ scenarios.auction_desk_modern = function()
     check(byId[9001].deposit == nil and byId[9001].depositGuess and byId[9001].depositGuess > 0,
         "a sold post is not a live listing's deposit; estimated instead")
     ns.AuctionDeskUI.Show("listings")
-    local sub = ns.AuctionDeskUI.views.listings.card.sub:GetText()
-    check(sub:find("deposits at stake 80c %+ about") and sub:find("estimated"), "paid and estimated apart: " .. sub)
+    local foot = ns.MarketUI.views.mine.card.foot:GetText()
+    check(foot:find("deposits at stake 80c %+ about") and foot:find("estimated"), "paid and estimated apart: " .. foot)
     C_AuctionHouse = nil
 end
 

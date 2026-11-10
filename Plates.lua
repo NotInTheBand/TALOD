@@ -98,7 +98,7 @@ local function BadgeText(e)
     elseif list == "avoid" then
         text = ns.ColorCode("threshold") .. "avoid|r " .. text
     end
-    if e.hostile == nil then text = ns.ColorCode("threshold") .. "?|r " .. text end
+    if e.hostile == nil then text = ns.ColorCode("unknown") .. "?|r " .. text end
     return text
 end
 
@@ -150,7 +150,7 @@ function Plates.TargetText(compact)
         lo, hi, ok = ns.ProbeUnitRange("target")
     end
     local distance = ok and (ns.Hex(ns.COLORS.neutral) .. ns.FormatRange(lo, hi) .. "|r")
-        or (ns.ColorCode("threshold") .. "? yd|r")
+        or (ns.ColorCode("unknown") .. "? yd|r")
     if not ns.DB().targetSpells then return distance end
     local parts = {}
     for _, spell in ipairs(ns.KeySpellRanges("target")) do
@@ -160,7 +160,7 @@ function Plates.TargetText(compact)
             if spell.inRange == false then
                 parts[#parts + 1] = ns.Hex(ns.COLORS.dim) .. spell.name .. "|r"
             else
-                parts[#parts + 1] = ns.ColorCode("threshold") .. spell.name .. "?|r"
+                parts[#parts + 1] = ns.ColorCode("unknown") .. spell.name .. "?|r"
             end
         end
     end

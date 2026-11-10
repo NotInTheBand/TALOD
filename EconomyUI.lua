@@ -1,7 +1,8 @@
--- TALOD - Economy window (/talod economy): money for the whole account
--- (or one character), in the shared Style. Tabs: Overview (tiles, gold over
--- time, by source, per day), Transactions (filterable list), Auctions
--- (every listing and how it ended), Trades (with whom, what went each way).
+-- TALOD - the Gold page (Trade > Gold, /talod gold): money for the whole
+-- account (or one character), in the shared Style. Tabs: Overview (tiles,
+-- gold over time, by source, per day), Transactions (filterable list),
+-- Trades (with whom, what went each way). Your auctions are on the Auction
+-- House page (My auctions).
 
 local ADDON_NAME, ns = ...
 local Economy = ns.Economy
@@ -14,7 +15,7 @@ ns.EconomyUI = UI
 
 local PAD = 12
 local RANGES = { { 1, "Today" }, { 7, "7 days" }, { 30, "30 days" }, { 0, "All" } }
-local state = { view = "overview", scope = "all", range = 7, hidden = {}, auctionFilter = "all" }
+local state = { view = "overview", scope = "all", range = 7, hidden = {} }
 UI.state = state
 local frame
 local views = {}
@@ -148,7 +149,7 @@ local function BuildOverview(parent)
     for i = 1, 6 do
         local t = CreateFrame("Frame", nil, v)
         t:SetHeight(58)
-        local bg = Style.Texture(t, "BACKGROUND", { 1, 1, 1, 0.035 })
+        local bg = Style.Texture(t, "BACKGROUND", COLORS.tile)
         bg:SetAllPoints()
         Style.Border(t, COLORS.cardBorder)
         t.label = Style.Text(t, "GameFontDisableSmall")
@@ -191,7 +192,7 @@ local function BuildOverview(parent)
         plot.labels[i] = Style.Text(plot, "GameFontDisableSmall", "RIGHT")
         plot.labels[i]:SetWidth(60)
     end
-    plot.cross = Style.Texture(plot, "OVERLAY", { 1, 1, 1, 0.25 })
+    plot.cross = Style.Texture(plot, "OVERLAY", COLORS.cross)
     plot.cross:SetWidth(1)
     plot.cross:Hide()
     plot.empty = Style.Text(plot, "GameFontDisable", "CENTER")
@@ -450,127 +451,6 @@ local function BuildTransactions(parent)
 end
 
 ---------------------------------------------------------------------------
--- Auctions: every listing, newest first, and how it ended
----------------------------------------------------------------------------
-local STATUS = {
-    listed = { "listed", HEX.compare }, sold = { "sold", HEX.good }, expired = { "expired", HEX.bad },
-    cancelled = { "cancelled", HEX.muted }, unknown = { "ended?", HEX.gold },
-}
-
--- A listing's status as shown: "unknown" once its time is up and no letter
--- closed it (Economy.ListingOver): never "listed" when it cannot still be.
-local function StatusOf(a)
-    if Economy.ListingOver(a) then return "unknown" end
-    return a.status
-end
-
-local function AuctionRow(item)
-    local a = item.a
-    local status = StatusOf(a)
-    local st = STATUS[status] or { status, "" }
-    local result
-    -- A sale letter pays your deposit back too: the sale is what it kept after the cut.
-    if a.status == "sold" then result = a.received and (FormatMoney(a.received - (a.deposit or 0)) .. HEX.muted .. " after the cut|r")
-        or (HEX.muted .. "? (payment unknown)|r")
-    elseif a.status == "expired" or a.status == "cancelled" then result = HEX.muted .. "deposit lost|r " .. FormatMoney(-(a.deposit or 0), true)
-    elseif status == "unknown" then result = HEX.muted .. "outcome unknown (no letter)|r"
-    else result = HEX.muted .. "deposit|r " .. FormatMoney(a.deposit or 0) end
-    return {
-        label = date("%b %d %H:%M", a.t),
-        text = CharShort(item.char) .. tostring(a.name) .. (a.count and a.count > 1 and (HEX.muted .. "  x" .. a.count .. "|r") or "")
-            .. HEX.muted .. "  buyout|r " .. (a.buyout and FormatMoney(a.buyout) or "-")
-            .. (a.bid and (HEX.muted .. "  bid|r " .. FormatMoney(a.bid)) or ""),
-        cols = { st[2] .. st[1] .. "|r", result },
-        tooltip = function(owner)
-            local lines = { tostring(a.name) .. (a.count and a.count > 1 and (" x" .. a.count) or ""),
-                "Posted " .. date("%b %d %H:%M", a.t) .. "  ·  " .. tostring(a.duration or "?") .. "  ·  " .. tostring(item.char),
-                "Buyout " .. (a.buyout and FormatMoney(a.buyout) or "-") .. "   bid " .. (a.bid and FormatMoney(a.bid) or "-"),
-                "Deposit " .. FormatMoney(a.deposit or 0),
-                -- When it sold or ended (from its letter); else when the letter was taken, said so.
-                "Status: " .. st[1] .. (a.closedAt and ("  (" .. date("%b %d %H:%M", a.closedAt) .. ")")
-                    or (a.ended and ("  (letter taken " .. date("%b %d %H:%M", a.ended) .. ")")) or "") }
-            if status == "unknown" then
-                lines[#lines + 1] = "Its time ran out and no auction letter closed it: sold, expired or cancelled is unknown."
-            end
-            if a.received then
-                lines[#lines + 1] = "Sold for " .. FormatMoney(a.received - (a.deposit or 0)) .. " after the cut"
-                lines[#lines + 1] = "Letter paid " .. FormatMoney(a.received) .. (a.deposit and a.deposit > 0
-                    and ("  (with your deposit " .. FormatMoney(a.deposit) .. " back)") or "")
-            end
-            ns.Tooltip.Text(owner, lines)
-        end,
-    }
-end
-
-local function BuildAuctions(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.card = Style.Card(v, "Auctions")
-    v.card:SetAllPoints()
-    local chipRow = CreateFrame("Frame", nil, v.card.content)
-    chipRow:SetPoint("TOPLEFT", 6, -4)
-    chipRow:SetHeight(22)
-    chipRow:SetWidth(500)
-    v.filters = {}
-    local x = 0
-    for _, f in ipairs({ { "all", "All" }, { "listed", "Listed" }, { "sold", "Sold" }, { "expired", "Expired" }, { "cancelled", "Cancelled" } }) do
-        local b = Style.Button(chipRow, f[2], 84, function() state.auctionFilter = f[1] UI.Refresh() end, nil, { height = 20 })
-        b:SetPoint("TOPLEFT", x, 0)
-        b.key = f[1]
-        x = x + 88
-        v.filters[#v.filters + 1] = b
-    end
-    local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -30)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { labelWidth = 86, colWidths = { 90, 120 }, search = true, hint = "Search items, characters..." })
-
-    function v:Footer() return "Listings come from posting at the auction house; the auction letters mark them sold, expired or cancelled." end
-
-    function v:Refresh()
-        for _, b in ipairs(self.filters) do Paint(b, b.key == state.auctionFilter) end
-        local data = ns.Data.List(self.list, {
-            -- maxAge: a listing's time running out changes what it shows, with no new data.
-            name = "economy:auctions", sources = { "economy" }, key = ViewKey(state.auctionFilter), maxAge = 300,
-            row = AuctionRow, empty = "No auctions here yet: post something at the auction house.",
-            build = function(add)
-                local since = RangeStart()
-                local all = {}
-                for key, c in pairs(Economy.Scope(state.scope)) do
-                    for _, a in ipairs(c.auctions or {}) do
-                        -- In the range by when it ended (the money's day), not when it
-                        -- was posted; one still up is always shown, one whose time ran
-                        -- out with no letter by when it would have ended.
-                        local status = StatusOf(a)
-                        local when = a.closedAt or a.ended or a.t
-                        if status == "unknown" then
-                            local hours = type(a.duration) == "string" and tonumber(a.duration:match("^(%d+)")) or 48
-                            when = a.t + hours * 3600
-                        end
-                        if not since or status == "listed" or when >= since then all[#all + 1] = { a = a, char = key } end
-                    end
-                end
-                table.sort(all, function(x1, x2) return x1.a.t > x2.a.t end)
-                local listings = {}
-                for _, item in ipairs(all) do
-                    listings[#listings + 1] = item.a
-                    if state.auctionFilter == "all" or state.auctionFilter == StatusOf(item.a) then
-                        add(item)
-                    end
-                end
-                return Economy.AuctionTotals(listings)
-            end,
-        })
-        self.card.title:SetText("Auctions  " .. HEX.muted .. ScopeLabel() .. "  ·  " .. RangeLabel() .. "|r")
-        local unpriced = (data.unpriced or 0) > 0 and (" + " .. data.unpriced .. " with no payment known") or ""
-        local unknown = (data.unknown or 0) > 0 and ("  ·  " .. data.unknown .. " ended, outcome unknown") or ""
-        self.card.sub:SetText(string.format("%d listed  ·  %d sold for %s after the cut%s  ·  %d expired  ·  %d cancelled%s  ·  deposits lost %s  ·  profit %s",
-            data.listed, data.sold, FormatMoney(data.income), unpriced, data.expired, data.cancelled, unknown, FormatMoney(data.lost), FormatMoney(data.profit, true)))
-    end
-    return v
-end
-
----------------------------------------------------------------------------
 -- Trades
 ---------------------------------------------------------------------------
 local function TradeRow(item)
@@ -621,15 +501,15 @@ end
 local VIEWS = {
     { key = "overview", label = "Overview", build = BuildOverview },
     { key = "transactions", label = "Transactions", build = BuildTransactions },
-    { key = "auctions", label = "Auctions", build = BuildAuctions },
     { key = "trades", label = "Trades", build = BuildTrades },
 }
 
 local function Build()
-    frame = Style.Window(ns.FRAME .. "EconomyWindow", "Economy", nil, nil, { nav = "economy", hidden = true })
+    frame = Style.Window(ns.FRAME .. "EconomyWindow", "Gold", nil, nil,
+        { nav = "gold", settings = "gold", section = "Trade", hidden = true })
 
-    -- Scope: all characters or one.
-    frame.scope = Style.Button(frame, "", 200, function(_, button)
+    -- Title bar, right to left: the character, then the range shared by every tab.
+    frame.scope = frame.header:Add(Style.Button(frame, "", 170, function(_, button)
         local keys = { "all" }
         for key in pairs(db().economy) do keys[#keys + 1] = key end
         table.sort(keys, function(a, b) if a == "all" then return true elseif b == "all" then return false end return a < b end)
@@ -639,8 +519,7 @@ local function Build()
         if i > #keys then i = 1 elseif i < 1 then i = #keys end
         state.scope = keys[i]
         UI.Refresh()
-    end, "All characters together, or one. Left-click: next. Right-click: previous.")
-    frame.scope:SetPoint("TOPRIGHT", -40, -8)
+    end, "All characters together, or one. Left-click: next. Right-click: previous.", { small = true, title = "Character" }))
     Style.AttachDropdown(frame.scope, function()
         local list = { { key = "all", label = "All characters" } }
         local keys = {}
@@ -649,16 +528,11 @@ local function Build()
         for _, key in ipairs(keys) do list[#list + 1] = { key = key, label = key } end
         return Style.ChoiceItems(list, state.scope, function(key) state.scope = key UI.Refresh() end)
     end)
-
-    -- Range, shared by every tab.
     frame.ranges = {}
-    local prev
     for i = #RANGES, 1, -1 do
         local r = RANGES[i]
-        local b = Style.Button(frame, r[2], 64, function() state.range = r[1] UI.Refresh() end, nil, { height = 22 })
-        if prev then b:SetPoint("RIGHT", prev, "LEFT", -4, 0) else b:SetPoint("RIGHT", frame.scope, "LEFT", -12, 0) end
+        local b = frame.header:Add(Style.Button(frame, r[2], 58, function() state.range = r[1] UI.Refresh() end, nil, { small = true }))
         b.range = r[1]
-        prev = b
         frame.ranges[#frame.ranges + 1] = b
     end
 
@@ -666,7 +540,7 @@ local function Build()
     tabHolder:SetPoint("TOPLEFT", PAD, -44)
     tabHolder:SetPoint("TOPRIGHT", -PAD, -44)
     tabHolder:SetHeight(26)
-    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end, 110)
+    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end)
     local line = Style.HLine(frame)
     line:SetPoint("TOPLEFT", PAD, -70)
     line:SetPoint("TOPRIGHT", -PAD, -70)
@@ -683,9 +557,11 @@ end
 
 function UI.Refresh()
     if not frame or not frame:IsShown() then return end
+    if not views[state.view] then state.view = "overview" end
     if state.scope ~= "all" and not db().economy[state.scope] then state.scope = "all" end
     frame.scope:SetLabel(ScopeLabel() .. "  >")
-    for _, b in ipairs(frame.ranges) do Paint(b, b.range == state.range) end
+    for _, b in ipairs(frame.ranges) do b:SetOn(b.range == state.range) end
+    frame:SetStatus(UI.PageStatus().text)
     frame.tabs:Select(state.view)
     for key, v in pairs(views) do v:SetShown(key == state.view) end
     local v = views[state.view]
@@ -693,15 +569,35 @@ function UI.Refresh()
     frame.footer:SetText(v:Footer() or "")
 end
 
-function UI.Show(view)
+local TAB_ALIAS = { overview = "overview", transactions = "transactions", trades = "trades" }
+
+-- Nav's entry point: tab (overview / transactions / trades, "gold/" allowed);
+-- arg: a character to show ("all" for every one). The auctions that were a
+-- tab here open the Auction House page's My auctions.
+function UI.ShowPage(tab, view, arg)
+    tab = tab and tostring(tab):lower():gsub("^gold/", "") or nil
+    if tab == "auctions" and ns.MarketUI and ns.MarketUI.ShowPage then return ns.MarketUI.ShowPage("mine", "auctions") end
     if not frame then Build() end
-    if view and views[view] then state.view = view end
+    if tab and TAB_ALIAS[tab] then state.view = TAB_ALIAS[tab] end
+    if type(arg) == "string" and (arg == "all" or db().economy[arg]) then state.scope = arg end
     frame:Show()
     UI.Refresh()
+    return true
+end
+
+function UI.Show(view)
+    return UI.ShowPage(view)
 end
 
 function UI.Toggle(view)
     if frame and frame:IsShown() and (not view or view == state.view) then frame:Hide() else UI.Show(view) end
+end
+
+-- The Home line and the rail tag: gold made or spent today, every character.
+function UI.PageStatus()
+    local inc, exp = Economy.ScopeTotals("all", Economy.DayStart(time()))
+    local net = (inc or 0) - (exp or 0)
+    return { text = "Today " .. FormatMoney(net, true), tone = net > 0 and "good" or (net < 0 and "bad" or nil), net = net }
 end
 
 function UI.IsShown() return frame ~= nil and frame:IsShown() end

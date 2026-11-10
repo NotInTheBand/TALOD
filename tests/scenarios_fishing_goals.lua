@@ -248,12 +248,11 @@ end
 
 scenarios.fishing_goals_settings = function()
     local ns = T.fishingSetup(11509)
-    local page
-    for _, p in ipairs(ns.Fishing.settingsTab.pages) do if p.label == "Goals" then page = p end end
-    check(page, "Goals page in the Fishing tab")
+    ns.Options.OpenSection("fishing")
+    check(ns.Options.Row("fishZoneHud") and ns.Options.Row("fishGoalsAnnounce"), "Goals group in Settings > Fishing")
     local parent = CreateFrame("Frame", nil, UIParent)
-    local height = page.build(parent)
-    check(type(height) == "number" and height > 100, "page height")
+    local y = ns.FishingGoals.BuildSettings(parent, 0)
+    check(type(y) == "number" and y < -100, "group height")
     check(TALODDB.fishZoneHud == true and TALODDB.fishExtravaganza == true and TALODDB.fishExtravaganzaChat == false,
         "defaults")
 end

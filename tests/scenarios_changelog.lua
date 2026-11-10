@@ -19,11 +19,12 @@ scenarios.changelog = function()
         check(type(e.text) == "string" and e.text ~= "", "text for " .. e.v)
     end
 
-    -- From the Main menu.
+    -- From Home: the About entry of the page list opens What's new.
     ns.Nav.ShowMenu()
-    check(TALODMainMenu.tiles.changelog and TALODMainMenu.navRail.buttons.changelog, "changelog tile and rail entry")
-    TALODMainMenu.tiles.changelog:Fire("OnClick", "LeftButton")
-    check(UI.IsShown() and not TALODMainMenu:IsShown(), "changelog replaces the menu")
+    check(TALODMainMenu.navRail.buttons.about, "about rail entry")
+    TALODMainMenu.navRail.buttons.about:Fire("OnClick", "LeftButton")
+    check(UI.IsShown() and not TALODMainMenu:IsShown(), "changelog replaces Home")
+    check(TALODChangelogWindow.navRail.buttons.about.accent:IsShown(), "about marked in the changelog's rail")
     local f = TALODChangelogWindow
     check(UI.Selected() == list[1], "newest selected")
     check(f.text.title:GetText() == "TALOD " .. list[1].v, "title names the version: " .. tostring(f.text.title:GetText()))

@@ -49,6 +49,11 @@ end
 Main.Tick = Tick
 
 function Main.SetMaxNameplateDistance()
+    -- The game refuses nameplate CVars in combat (and may report the addon).
+    if InCombatLockdown and InCombatLockdown() then
+        ns.Print("nameplate settings cannot change in combat.")
+        return false
+    end
     local ok = ns.SetCVarValue(C.NAMEPLATE_DISTANCE_CVAR, C.RECOMMENDED_NAMEPLATE_DISTANCE)
     local current = ns.GetCVarNumber(C.NAMEPLATE_DISTANCE_CVAR)
     if ok and current and current + 0.01 >= C.RECOMMENDED_NAMEPLATE_DISTANCE then
@@ -92,6 +97,16 @@ function Main.ShowTimings(arg)
     if ns.Probe and ns.Probe.ShowText then ns.Probe.ShowText(table.concat(lines, "\n")) end
 end
 
+-- The reset runs only from the confirmation's Yes, and never in combat
+-- (secure pieces cannot move then).
+function Main.AskReset()
+    if InCombatLockdown and InCombatLockdown() then
+        ns.Print("settings cannot be reset in combat; try again after the fight.")
+        return
+    end
+    StaticPopup_Show(ns.POPUP .. "RESET")
+end
+
 function Main.ResetSettings()
     local old, kept = db(), {}
     for _, key in ipairs(Main.DATA_KEYS) do kept[key] = old[key] end
@@ -107,6 +122,8 @@ function Main.ResetSettings()
     if ns.FishingUI and ns.FishingUI.ResetHUD then ns.FishingUI.ResetHUD() end
     if ns.GuildUI and ns.GuildUI.ResetNotice then ns.GuildUI.ResetNotice() end
     if ns.GuildUI and ns.GuildUI.ResetMini then ns.GuildUI.ResetMini() end
+    -- The look and text size are read once into Style: apply the reset ones.
+    if ns.Style and ns.Style.ApplySettings then ns.Style.ApplySettings() end
     ns.Print("settings reset (journal, lists, census, gear, skills, economy, prices, fishing and guild kept).")
     ns.Refresh()
 end
@@ -129,9 +146,7 @@ function Main.ListCommand(kind, rest)
         J.SetList(key, kind, facts)
         ns.Print(key .. " added to " .. (kind == "kos" and "kill on sight" or "avoid") .. ".")
     elseif kind == "unlist" then
-        local rec = ns.PlayerRecord(key)
-        if rec and rec.list then
-            rec.list, rec.listBy = nil, nil
+        if J.Unlist(key) then
             ns.Print(key .. " removed from your lists.")
         else
             ns.Print(key .. " is not on a list.")
@@ -141,8 +156,19 @@ function Main.ListCommand(kind, rest)
         ns.Print(noteText ~= "" and ("note saved for " .. key .. ".") or ("note cleared for " .. key .. "."))
     elseif kind == "who" then
         ns.Print(J.Describe(key))
+        -- The open Enemies page shows the same player on its Journal tab.
+        local UI = ns.EnemiesUI
+        if UI and UI.IsShown() then UI.ShowPage("journal", nil, key) end
     end
     ns.Refresh()
+end
+
+-- The Enemies page on a tab (journal, lists, census): through the page list
+-- when it has one, else the page itself.
+function Main.OpenEnemies(tab)
+    if ns.Nav and ns.Nav.Go and ns.Nav.Go("enemies", tab) then return true end
+    if ns.EnemiesUI then return ns.EnemiesUI.ShowPage(tab) end
+    return false
 end
 
 ---------------------------------------------------------------------------
@@ -151,6 +177,77 @@ end
 local function PrintHelp()
     print("|cff" .. ns.COLOR .. ns.NAME .. " v" .. ns.VERSION .. "|r (" .. ns.FLAVOR_NAME .. ")")
     for _, line in ipairs(ns.Cmd.HelpLines()) do print(line) end
+end
+
+-- One page's commands (/talod help <page>); false when nothing is called that.
+function Main.PrintPageHelp(text)
+    local page = ns.Cmd.PageFor(text)
+    if not page then return false end
+    print("|cff" .. ns.COLOR .. ns.NAME .. "|r commands: " .. ns.Cmd.PageLabel(page))
+    for _, line in ipairs(ns.Cmd.HelpLines(page)) do
+        if not line:match("^%S.*:$") then print(line) end
+    end
+    return true
+end
+
+-- The page list opens the page when it can (it reports whether it did).
+local function Go(page, tab)
+    local Nav = ns.Nav
+    if not (Nav and Nav.Go and page) then return false end
+    return Nav.Go(page, tab) and true or false
+end
+
+-- Bare /talod: TALOD where you left it once the page list can say where that
+-- was (Nav.Go with no page), else the settings window as before.
+function Main.Root()
+    if ns.Nav and ns.Nav.Go and ns.Nav.Go() then return end
+    ns.Options.Open()
+end
+
+-- /talod find <text>: Go to when the page list has it, else the matching
+-- commands in chat.
+function Main.Find(text)
+    if text == "" then
+        ns.Print("use " .. ns.Cmd.Text("find", "<text>") .. ": pages, settings and commands matching the text.")
+        return
+    end
+    if ns.Nav and ns.Nav.GoTo then
+        ns.Nav.GoTo(text)
+        return
+    end
+    local found = ns.Cmd.Find(text)
+    if #found == 0 then
+        ns.Print("no command matches \"" .. text .. "\". " .. ns.Cmd.Text("help") .. " lists them all.")
+        return
+    end
+    ns.Print("commands matching \"" .. text .. "\":")
+    for i = 1, math.min(#found, 12) do print(ns.Cmd.RowLine(found[i])) end
+    if #found > 12 then print("  ... " .. (#found - 12) .. " more") end
+end
+
+-- /talod settings <words>: a section's name jumps there, other words search.
+local function SectionFor(text)
+    text = text:lower()
+    for _, s in ipairs(ns.Cmd.SECTIONS) do
+        if s.key == text or s.label:lower() == text then return s.key end
+    end
+    local first = ns.Cmd.FIRST[text]
+    for _, p in ipairs(ns.Cmd.PAGES) do
+        if first and p.key == first.page and p.section then return p.section end
+    end
+    return nil
+end
+
+function Main.OpenSettings(rest, isSection)
+    local O = ns.Options
+    if rest == "" or not O.OpenSection then
+        O.Open()
+    elseif isSection then
+        O.OpenSection(rest)
+    else
+        local key = SectionFor(rest)
+        if key then O.OpenSection(key) else O.OpenSection(nil, rest) end
+    end
 end
 
 local function ParseOnOff(value)
@@ -169,22 +266,47 @@ local function Toggle(key, value, usage)
     ns.Refresh()
 end
 
--- The typed word becomes its id (Commands.lua), so renaming a command there
--- never touches this routing or the modules.
-local function HandleSlash(msg)
-    local word, rest = (msg or ""):match("^(%S*)%s*(.-)$")
-    local command = ns.Cmd.Resolve(word)
+-- The typed words become an id (Commands.lua), so renaming a command there
+-- never touches this routing or the modules. nav = { page, tab }: open it
+-- through the page list first; without one (or when it cannot) the id runs.
+function Main.Run(command, rest, nav)
     rest = rest or ""
     local value = string.lower(rest)
+    local entry = command and ns.Cmd.Get(command)
+
+    if nav and Go(nav.page, nav.tab) then return end
+    if entry and entry.open then
+        if rest == "" and Go(entry.open.page, entry.open.tab) then return end
+        return Main.Run(entry.open.id, entry.open.rest or "")
+    end
 
     if command == nil then
         PrintHelp()
 
+    elseif command == "root" then
+        Main.Root()
+
     elseif command == "settings" then
-        ns.Options.Open()
+        Main.OpenSettings(rest)
+
+    elseif command == "pagesettings" then
+        Main.OpenSettings(rest, true)
 
     elseif command == "help" then
-        PrintHelp()
+        if rest == "" then
+            PrintHelp()
+            -- printed: the page must not print the list a second time.
+            if ns.Nav and ns.Nav.Go then ns.Nav.Go("about", "commands", nil, { printed = true }) end
+        elseif not Main.PrintPageHelp(rest) then
+            PrintHelp()
+        end
+
+    elseif command == "find" then
+        Main.Find(rest)
+
+    elseif command == "debug" then
+        Main.PrintPageHelp("debug")
+        if ns.Options.OpenSection then ns.Options.OpenSection("advanced") end
 
     elseif command == "panel" then
         if value == "lock" or value == "unlock" then
@@ -219,7 +341,12 @@ local function HandleSlash(msg)
         Main.ListCommand(command, rest)
 
     elseif command == "journal" or command == "lists" then
-        ns.Options.OpenTab(ns.Options.TabIndex("Journal"), command == "lists" and 2 or 1)
+        Main.OpenEnemies(command)
+
+    elseif command == "census" and value == "" then
+        -- The bare word opens the census tab; on|off|allies|friendly|clear
+        -- stay Census's own.
+        Main.OpenEnemies("census")
 
     elseif command == "distance" then
         if value == "max" then
@@ -251,7 +378,9 @@ local function HandleSlash(msg)
         ns.Refresh()
 
     elseif command == "reset" then
-        Main.ResetSettings()
+        -- Never straight from a typed word: "settings reset" used to just open
+        -- Settings, so a habit must not wipe settings and positions.
+        Main.AskReset()
 
     else
         for _, module in ipairs(ns.modules) do
@@ -259,6 +388,10 @@ local function HandleSlash(msg)
         end
         PrintHelp()
     end
+end
+
+local function HandleSlash(msg)
+    Main.Run(ns.Cmd.Parse(msg))
 end
 
 -- Addon compartment (minimap addon menu) entry; named in the TOC.
@@ -291,6 +424,8 @@ local function Initialize()
     local fresh = ns.DB() == nil
     ns.SetDB(ns.DB() or {})
     ns.CopyDefaults(ns.DB(), ns.defaults)
+    -- The look before any window is built.
+    ns.Style.ApplySettings()
 
     -- Errors logged by other versions say nothing about this one.
     if type(db().errorLog) == "table" then

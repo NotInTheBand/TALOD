@@ -123,8 +123,11 @@ scenarios.guild_sync_member = function()
     check(Sync.Consent("activity") == true, "Yes button")
     ns.GuildUI.Show("promote")
     check(ns.GuildUI.views.promote.note:GetText():find("Next rank"), "promotions tab shows your progress")
+    -- Shared (what members share) is an officers' view of the Roster: not offered, asking for it lands on Basics.
     ns.GuildUI.Show("members")
-    check(ns.GuildUI.views.members.note:GetText():find("Only officers"), "members tab: officers only")
+    check(ns.GuildUI.state.view == "roster" and not ns.GuildUI.views.members:IsShown(), "Shared view: officers only")
+    local offered = table.concat(ns.GuildUI.RosterViews(), ",")
+    check(not offered:find("members", 1, true), "Shared not offered: " .. offered)
 
     -- Not in a guild: nothing is sent at all.
     MOCK.guild = nil

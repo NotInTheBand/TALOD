@@ -665,7 +665,7 @@ table.sort(events)
 local function Slash(command, rest)
     if command ~= "groups" then return false end
     local arg = (rest or ""):lower():match("^(%S*)")
-    local views = { now = "now", parties = "party", party = "party", raids = "raid", raid = "raid" }
+    local views = { now = "now", history = "history", parties = "party", party = "party", raids = "raid", raid = "raid" }
     if ns.GroupsUI then ns.GroupsUI.Show(views[arg]) end
     return true
 end

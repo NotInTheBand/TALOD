@@ -952,6 +952,17 @@ end
 ---------------------------------------------------------------------------
 -- Slash, module
 ---------------------------------------------------------------------------
+-- What the client offers and where the request stands (/talod audit status,
+-- the Audit page's status line).
+function Audit.StatusLines()
+    local lines = { "client " .. Audit.Build() .. ", statistic IDs checked on " .. Audit.DATA_BUILD .. "." }
+    for _, name in ipairs({ "GetStatistic", "GetComparisonStatistic", "SetAchievementComparisonUnit", "ClearAchievementComparisonUnit" }) do
+        lines[#lines + 1] = name .. ": " .. type(_G[name])
+    end
+    lines[#lines + 1] = req.pending and ("waiting for " .. Guild.Short(req.pending.full)) or (Audit.status or "no request yet")
+    return lines
+end
+
 local function Slash(command, rest)
     if command ~= "audit" then return false end
     local arg = ((rest or ""):match("^(%S*)") or ""):lower()
@@ -961,14 +972,12 @@ local function Slash(command, rest)
     elseif arg == "target" or arg == "refresh" then
         Audit.Request("target")
         if ns.AuditUI then ns.AuditUI.Show("ledger") end
-    elseif arg == "flags" or arg == "members" or arg == "characters" or arg == "history" then
+    elseif arg == "flags" or arg == "members" or arg == "characters" or arg == "history" or arg == "ledger" then
         if ns.AuditUI then ns.AuditUI.Show(arg) end
     elseif arg == "status" then
-        ns.Print("audit: client " .. Audit.Build() .. ", statistic IDs checked on " .. Audit.DATA_BUILD .. ".")
-        for _, name in ipairs({ "GetStatistic", "GetComparisonStatistic", "SetAchievementComparisonUnit", "ClearAchievementComparisonUnit" }) do
-            ns.Print("  " .. name .. ": " .. type(_G[name]))
-        end
-        ns.Print("  " .. (req.pending and ("waiting for " .. Guild.Short(req.pending.full)) or (Audit.status or "no request yet")))
+        local lines = Audit.StatusLines()
+        ns.Print("audit: " .. lines[1])
+        for i = 2, #lines do ns.Print("  " .. lines[i]) end
     else
         if ns.AuditUI then ns.AuditUI.Toggle() end
     end

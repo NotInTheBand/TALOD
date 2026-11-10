@@ -117,3 +117,43 @@ scenarios.ah_scan_closed_midread = function()
     check(not Pr.Entry(2589), "still nothing recorded for the unread item")
     C_AuctionHouse = nil
 end
+
+-- Forever sends a full scan's answer in parts (1024 rows each): the list is
+-- read only once it stops growing, and rows arriving during the read start it
+-- over instead of failing; a partial list is never recorded as the whole AH.
+scenarios.ah_scan_answer_in_parts = function()
+    local ns = boot(16001)
+    MOCK.FireEvent("PLAYER_ENTERING_WORLD")
+    MOCK.Tick(3.2) MOCK.Tick(0.3)
+    local H, Pr = ns.AHHelper, ns.Prices
+    local rows = {}
+    modernAH(rows)
+    AuctionHouseFrame = CreateFrame("Frame", "AuctionHouseFrame", UIParent)
+    MOCK.FireEvent("AUCTION_HOUSE_SHOW")
+    MOCK.RunTimers()
+    local log = function() return TALODDB.ahScanLog[#TALODDB.ahScanLog] end
+    local function part(from, to, id) for i = from, to do rows[i] = { "x", 1, 50, id } end end
+
+    TALODDB.ahFullScan = {}
+    check(H.FullScan(), "scan sent")
+    -- First part, then a second part 1 s later: no read in between.
+    part(1, 1024, 4289)
+    MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    MOCK.Tick(1)
+    part(1025, 2048, 4289)
+    MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    MOCK.Tick(1)
+    check(H.state.scan and not H.state.scan.reading and not Pr.Bulk(), "still arriving: not read yet")
+    -- Settled: read starts; a third part arrives during the read.
+    MOCK.Tick(1.5)
+    check(H.state.scan and H.state.scan.reading, "read once settled")
+    part(2049, 3072, 2589)
+    MOCK.RunTimers() MOCK.RunTimers()
+    check(H.state.scan and not H.state.scan.reading and not Pr.Entry(4289), "grew during the read: started over, nothing recorded")
+    -- Settles again: the whole answer read.
+    MOCK.Tick(1) MOCK.Tick(1.5)
+    for _ = 1, 10 do MOCK.RunTimers() end
+    check(not H.state.scan and log().ok and log().rows == 3072, "whole answer read: " .. tostring(log().rows) .. " " .. tostring(log().result))
+    check(Pr.Entry(4289).n == 2048 and Pr.Entry(2589).n == 1024, "supply from every part")
+    C_AuctionHouse = nil
+end

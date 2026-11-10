@@ -31,6 +31,9 @@ ns.COLORS = {
     neutral = {0.85, 0.85, 0.85},
     dim = {0.60, 0.60, 0.60},
     title = {1.00, 0.50, 0.25},
+    -- The game hides it: a fourth safety tone, never yellow ("careful"),
+    -- never grey ("off"), never green.
+    unknown = {0.7255, 0.6275, 1.00},
 }
 
 -- Blue / orange / magenta stays distinguishable for the common forms of
@@ -39,7 +42,11 @@ ns.COLORBLIND_COLORS = {
     safe = {0.35, 0.70, 1.00},
     threshold = {1.00, 0.60, 0.10},
     danger = {0.95, 0.25, 0.85},
+    unknown = {0.9255, 0.9216, 0.9608},
 }
+
+-- A value the game hides. Style.List draws it as the unknown tag; sorts last.
+ns.UNKNOWN = setmetatable({}, { __tostring = function() return "?" end })
 
 function ns.GetColor(state)
     if ns.DB() and ns.DB().colorblind and ns.COLORBLIND_COLORS[state] then
@@ -54,6 +61,10 @@ end
 ns.Hex = Hex
 
 function ns.ColorCode(state) return Hex(ns.GetColor(state)) end
+
+-- Something the game hides, in the unknown tone: "?" by default ("? yd",
+-- "PvP: ?"). Never the threshold colour, never a number.
+function ns.UnknownText(text) return ns.ColorCode("unknown") .. (text or "?") .. "|r" end
 
 local FALLBACK_CLASS_COLORS = {
     WARRIOR = {0.78, 0.61, 0.43}, ROGUE = {1.00, 0.96, 0.41}, MAGE = {0.41, 0.80, 0.94},
@@ -94,6 +105,11 @@ end
 ns.defaults = {
     enabled = true,
     colorblind = false,
+    -- The look (Style.lua): the old look instead of the ledger, body text
+    -- size 11 / 12 / 13, list rows 18 instead of 20.
+    classicLook = false,
+    textSize = 12,
+    compactRows = false,
 
     -- Alerts
     alertsEnabled = true,
@@ -178,7 +194,8 @@ function ns.FormatNumber(n)
     return string.format("%.1f", n)
 end
 
--- A range bracket as text. Unknown is "?", never a reassuring number.
+-- A range bracket as text. Unknown is "? yd" in the unknown tone, never a
+-- reassuring number.
 function ns.FormatRange(lo, hi)
     if lo and hi then
         return ns.FormatNumber(lo) .. "–" .. ns.FormatNumber(hi) .. " yd"
@@ -187,7 +204,7 @@ function ns.FormatRange(lo, hi)
     elseif lo then
         return "> " .. ns.FormatNumber(lo) .. " yd"
     end
-    return "? yd"
+    return ns.ColorCode("unknown") .. "? yd|r"
 end
 
 function ns.FormatAge(seconds)

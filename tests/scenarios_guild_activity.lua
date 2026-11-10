@@ -100,16 +100,15 @@ scenarios.guild_activity_member_only = function()
     -- The tab is not offered; asking for it lands on the roster.
     slash("guild activity")
     check(UI.state.view == "roster", "activity refused: " .. tostring(UI.state.view))
-    local tab
-    for _, t in ipairs(TALODGuildWindow.tabs) do if t.key == "activity" then tab = t end end
-    check(tab and not tab:IsShown(), "Activity tab hidden")
+    local function offered() return table.concat(UI.RosterViews(), ",") end
+    check(not offered():find("activity", 1, true), "Activity view not offered: " .. offered())
 
     -- Officer notes right: an officer (cached check read again).
     CanViewOfficerNote = function() return true end
     A.Recheck()
     check(ns.Guild.IsOfficer() == true, "officer-note right: officer")
     ns.GuildUI.Show("activity")
-    check(UI.state.view == "activity" and tab:IsShown(), "tab shown once an officer")
+    check(UI.state.view == "activity" and offered():find("activity", 1, true), "view offered once an officer")
     CanViewOfficerNote = nil
 
     -- The guild master by rank alone.

@@ -538,7 +538,7 @@ local function CreateButton()
     b.label:SetPoint("RIGHT", -6, 0)
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.08)
+    ns.Style.Fill(hl, ns.Style.COLORS.hoverRow)
     b:SetScript("OnEnter", ButtonTooltip)
     b:SetScript("OnLeave", function() ns.Tooltip.Hide() end)
     b:HookScript("PostClick", function(self) Gear.RememberLure(self.lureID) end)
@@ -579,6 +579,9 @@ function Gear.UpdateButton()
     b.label:SetText(string.format("Apply %s %s(+%d)|r  %sx%d|r", Name(pick.id, LURES[pick.id].name), HEX.good, pick.bonus, HEX.muted, pick.n))
     b:SetScale(hud:GetScale() or 1)
     b:SetFrameStrata(hud:GetFrameStrata() or "MEDIUM")
+    -- Above the HUD it sits under (the HUD is raised over the Enemies panel).
+    local level = (hud:GetFrameLevel() or 1) + 20
+    if b:GetFrameLevel() ~= level then b:SetFrameLevel(level) end
     b:SetWidth(hud:GetWidth() or 200)
     b:ClearAllPoints()
     b:SetPoint("TOPLEFT", hud, "BOTTOMLEFT", 0, -2)
@@ -611,7 +614,7 @@ local function CreateAgain()
     b:RegisterForClicks("AnyUp", "AnyDown")
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.08)
+    ns.Style.Fill(hl, ns.Style.COLORS.hoverRow)
     b.hint = Style.Text(b, "GameFontHighlightSmall")
     b.hint:SetPoint("RIGHT", -6, 0)
     b.hint:SetJustifyH("RIGHT")
@@ -687,7 +690,10 @@ UI.AddNowRows(function(rows)
     rows[#rows + 1] = { label = "Gear", text = Gear.GearText(),
         tooltip = function(o) ns.Tooltip.Text(o, { "Fishing gear you own", "Best fishing pole, hat and boots, worn or in your bags (not the bank).",
             "Gold: something better than what you wear is in your bags." }) end }
-    rows[#rows + 1] = { label = "Lures", text = Gear.LureText() or (HEX.muted .. "none in your bags|r") }
+    rows[#rows + 1] = { label = "Lures", text = Gear.LureText() or (HEX.muted .. "none in your bags|r"),
+        copy = "/click " .. ns.FRAME .. "FishingLureButton",
+        tooltip = function(o) ns.Tooltip.Text(o, { "Lures in your bags", "The apply-lure button puts one on the pole per click.",
+            "Macro or key binding: " .. HEX.white .. "/click " .. ns.FRAME .. "FishingLureButton|r", HEX.muted .. "Click: copy the macro line.|r" }) end }
 end)
 
 UI.AddHUDLine(function()
@@ -743,12 +749,10 @@ Fishing.AddSlash(function(arg)
     return true
 end, "gear")
 
-local function BuildPage(parent)
+local function BuildGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "Your best fishing pole, hat and boots (worn or in your bags), the lures you carry, a button that "
         .. "applies one, what your profession plans need, and casts at fishing pools.", "GameFontHighlightSmall")
-    y = W.Header(parent, y, "Gear and lures")
     y = W.Checkbox(parent, y, "fishGearShow", "Show fishing gear and lures", "In the fishing window (Now) and a Lures line on the HUD.")
     y = W.Checkbox(parent, y, "fishGearWarn", "Warn when better fishing gear is in my bags",
         "A HUD line when a pole, hat or boots in your bags give more Fishing than what you wear.")
@@ -757,20 +761,23 @@ local function BuildPage(parent)
         .. "Keybind: a macro with /click " .. ns.FRAME .. "FishingLureButton. Set up out of combat only; hidden in combat.")
     y = W.Checkbox(parent, y, "fishLureAgain", "Click the HUD's Lure line to use the same lure again",
         "One click puts the lure you used last on your pole again (one lure, from your bags). Set up out of combat only; hidden in combat.")
-    y = W.Cycle(parent, y, "fishLurePrefer", "The button uses", {
-        { value = "best", label = "my best lure" }, { value = "cheap", label = "my smallest lure" } })
-    y = W.Header(parent, y, "Plans and pools")
     y = W.Checkbox(parent, y, "fishPlanTag", "Tag fish my profession plan needs",
         "In the catch lists: \"needed: N for your Cooking plan\" (the profession chosen in the Professions tab, and Cooking).")
+    y = W.LiveText(parent, y, 60, function() return table.concat(Gear.SummaryLines(), "\n") end)
+    y = W.Button(parent, y, "Copy the lure macro", 170, function()
+        ns.Utils.Copy("/click " .. ns.FRAME .. "FishingLureButton", "macro")
+    end, "A macro line for a key: one press = the apply-lure button.")
+    y = W.Fine(parent, y)
+    y = W.Cycle(parent, y, "fishLurePrefer", "The button uses", {
+        { value = "best", label = "my best lure" }, { value = "cheap", label = "my smallest lure" } })
     y = W.Checkbox(parent, y, "fishPoolTag", "Guess pool casts from the pool tooltip",
         "Hover a fishing pool (\"Oily Blackmouth School\", \"Floating Wreckage\") before you cast: casts within "
         .. POOL_WINDOW .. " s in the same place count as pool casts. English pool names only.")
-    y = W.Header(parent, y, "Now")
-    y = W.LiveText(parent, y, 60, function() return table.concat(Gear.SummaryLines(), "\n") end)
-    return -y + 10
+    return y
 end
+Gear.BuildSettings = BuildGroup
 
-table.insert(Fishing.settingsTab.pages, { label = "Gear", build = BuildPage })
+ns.Options.AddSection("fishing", { groups = { { label = "Gear and lures", build = BuildGroup } } })
 
 local function OnEvent(event)
     if event == "PLAYER_REGEN_DISABLED" then

@@ -14,7 +14,8 @@ local Panel = {}
 ns.Panel = Panel
 
 local Style = ns.Style
-local ROW_HEIGHT, DETAIL_HEIGHT, WIDTH, HEADER, FOOTER = 18, 15, 344, 30, 22
+local ROW_HEIGHT, DETAIL_HEIGHT, WIDTH, FOOTER = 18, 15, 344, 22
+local HEADER = Style.FLOAT_BAR + 2   -- the floating title bar, then the rows
 local INSET = 6                     -- content inset inside a row (after the accent bar)
 local AURA_SIZE, AURA_X, AURA_FIT = 13, 186 + INSET, 10
 local frame, rows, clicks = nil, {}, {}
@@ -59,7 +60,7 @@ local function AuraNames(list, n, hidden)
         if a.notable then s = ns.ColorCode(a.notable == "cc" and "threshold" or "danger") .. s .. "|r" end
         parts[#parts + 1] = s
     end
-    if hidden > 0 then parts[#parts + 1] = ns.ColorCode("threshold") .. hidden .. " hidden by the game|r" end
+    if hidden > 0 then parts[#parts + 1] = ns.ColorCode("unknown") .. hidden .. " hidden by the game|r" end
     return #parts > 0 and table.concat(parts, ", ") or "none"
 end
 
@@ -67,7 +68,7 @@ end
 local function AddLiveLines(t, e)
     local v = ns.ReadVitals(e.unit, tipVitals)
     local hp = (v.hp and v.hpMax) and (v.hp .. " / " .. v.hpMax) or (e.dead and "dead") or "?"
-    t:Pair("Health", hp)
+    t:Pair("Health", hp, hp == "?" and "unknown" or nil)
     if v.power and v.powerMax then
         local label = v.powerToken and _G[v.powerToken]
         t:Pair(type(label) == "string" and label or "Power", v.power .. " / " .. v.powerMax, ns.PowerColor(v.powerToken))
@@ -75,12 +76,12 @@ local function AddLiveLines(t, e)
     if v.targetingYou == true then
         t:Pair("Targeting", "YOU", "danger")
     elseif v.targetingYou == nil then
-        t:Pair("Targeting", "?", "threshold")
+        t:Pair("Targeting", "?", "unknown")
     else
         t:Pair("Targeting", v.targetName or "nobody")
     end
     if v.casting then t:Pair("Casting", v.casting, "threshold") end
-    t:Pair("In combat", v.inCombat == nil and "?" or (v.inCombat and "yes" or "no"))
+    t:Pair("In combat", v.inCombat == nil and "?" or (v.inCombat and "yes" or "no"), v.inCombat == nil and "unknown" or nil)
     local nb, hb = ns.ReadAuras(e.unit, "HELPFUL", 40, tipBuffs)
     local nd, hd = ns.ReadAuras(e.unit, "HARMFUL", 40, tipDebuffs)
     t:Line("Buffs: " .. AuraNames(tipBuffs, nb, hb), "good")
@@ -98,11 +99,11 @@ local function ShowTooltip(owner, e, clickable)
     elseif not e.unit then
         t:Note("Last seen " .. ns.FormatAge(GetTime() - (e.lastSeen or 0)) .. " ago.")
     end
-    if e.hostile == nil then t:Line("The game hides whether this player is hostile.", "threshold") end
+    if e.hostile == nil then t:Line("The game hides whether this player is hostile.", "unknown") end
     if e.flagged == true then
         t:Line("PvP flagged", "danger")
     elseif e.flagged == nil then
-        t:Line("PvP: ?", "threshold")
+        t:Line("PvP: ?", "unknown")
     else
         t:Line("Not PvP flagged", "label")
     end
@@ -139,7 +140,7 @@ local function CreateDetail(r)
     det.bg = det:CreateTexture(nil, "BACKGROUND")
     det.bg:SetPoint("TOPLEFT", 18 + INSET, 0)
     det.bg:SetSize(92, 13)
-    det.bg:SetColorTexture(0, 0, 0, 0.7)
+    Style.Fill(det.bg, Style.COLORS.shade)
     det.hp = CreateFrame("StatusBar", nil, det)
     det.hp:SetPoint("TOPLEFT", 19 + INSET, -1)
     det.hp:SetSize(90, 9)
@@ -148,6 +149,11 @@ local function CreateDetail(r)
     det.power:SetPoint("TOPLEFT", 19 + INSET, -10)
     det.power:SetSize(90, 2)
     det.power:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    -- Health the game hides: the hatch over the bar (a solid unknown fill
+    -- without the texture file), and "? HP".
+    det.hatch = det.hp:CreateTexture(nil, "ARTWORK")
+    det.hatch:SetAllPoints(det.hp)
+    det.hatch:Hide()
     det.hpText = det.hp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     det.hpText:SetPoint("CENTER", 0, 0)
     SmallFont(det.hpText, 9)
@@ -222,7 +228,7 @@ local function ClickButton(i)
     b:SetAttribute("type", "target")
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.12)
+    Style.Fill(hl, Style.COLORS.hoverStrong)
     b:SetScript("OnEnter", function(self) ShowTooltip(self, self.entry, true) end)
     b:SetScript("OnLeave", HideTooltip)
     b:Hide()
@@ -269,6 +275,7 @@ local function SetBar(bar, value, valueRaw, max, maxRaw)
 end
 
 local function SetHealth(det, v, dead)
+    det.hatch:Hide()
     if dead then
         SetBar(det.hp, 0, nil, 1, nil)
         det.hpText:SetText(ns.Hex(ns.COLORS.dim) .. "dead|r")
@@ -280,11 +287,15 @@ local function SetHealth(det, v, dead)
         det.hp:SetStatusBarColor(frac > 0.5 and (1 - frac) * 2 or 1, frac > 0.5 and 1 or frac * 2, 0)
         det.hpText:SetText(v.hp .. " / " .. v.hpMax)
     elseif shown and pcall(det.hpText.SetFormattedText, det.hpText, "%s / %s", v.hp or v.hpRaw, v.hpMax or v.hpMaxRaw) then
-        det.hp:SetStatusBarColor(0.1, 0.8, 0.1)
+        local c = Style.COLORS.hpBar
+        det.hp:SetStatusBarColor(c[1], c[2], c[3])
     else
         if shown then SetBar(det.hp, nil, nil, nil, nil) end
-        det.hp:SetStatusBarColor(0.35, 0.35, 0.35)
-        det.hpText:SetText(ns.ColorCode("threshold") .. "? HP|r")
+        local c = ns.GetColor("unknown")
+        det.hp:SetStatusBarColor(c[1] * 0.45, c[2] * 0.45, c[3] * 0.45)
+        Style.Hatch(det.hatch, 0.6)
+        det.hatch:Show()
+        det.hpText:SetText(ns.ColorCode("unknown") .. "? HP|r")
     end
 end
 
@@ -300,16 +311,16 @@ end
 local function Tags(e, v)
     local t = {}
     if v.targetingYou == true then t[#t + 1] = ns.ColorCode("danger") .. "@you|r"
-    elseif v.targetingYou == nil then t[#t + 1] = ns.ColorCode("threshold") .. "@?|r" end
+    elseif v.targetingYou == nil then t[#t + 1] = ns.ColorCode("unknown") .. "@?|r" end
     if e.flagged == true then t[#t + 1] = ns.ColorCode("danger") .. "PvP|r"
-    elseif e.flagged == nil then t[#t + 1] = ns.ColorCode("threshold") .. "PvP?|r" end
+    elseif e.flagged == nil then t[#t + 1] = ns.ColorCode("unknown") .. "PvP?|r" end
     if v.casting then t[#t + 1] = ns.ColorCode("threshold") .. "cast|r" end
     if v.inCombat == true then t[#t + 1] = "cbt"
-    elseif v.inCombat == nil then t[#t + 1] = ns.ColorCode("threshold") .. "cbt?|r" end
+    elseif v.inCombat == nil then t[#t + 1] = ns.ColorCode("unknown") .. "cbt?|r" end
     return table.concat(t, " ")
 end
 
-local BUFF_BORDER, DEBUFF_BORDER, HIDDEN_BORDER = {0.35, 0.35, 0.35}, {0.55, 0.05, 0.05}, {0.6, 0.6, 0.6}
+local BUFF_BORDER, DEBUFF_BORDER = Style.COLORS.auraBuff, Style.COLORS.auraDebuff
 local order, orderHarm = {}, {}
 
 -- Important first: the enemy's big cooldowns, crowd control on them, other
@@ -352,7 +363,8 @@ local function FillAuras(det, unit, max)
         shown = shown + 1
         local icon = AuraIcon(det, shown)
         icon.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-        icon.border:SetColorTexture(HIDDEN_BORDER[1], HIDDEN_BORDER[2], HIDDEN_BORDER[3], 1)
+        local hc = ns.GetColor("unknown")
+        icon.border:SetColorTexture(hc[1], hc[2], hc[3], 1)
         icon.count:SetText("")
         icon.spellId, icon.unknown = nil, true
         icon:Show()
@@ -376,13 +388,30 @@ local function FillDetails(r, e)
     return true
 end
 
--- Left accent: what makes this row matter at a glance (your lists, a
--- vanished stealther, hidden hostility).
-local function RowAccent(e, list)
-    if e.vanished or list == "kos" then return ns.GetColor("danger") end
-    if list == "avoid" or e.hostile == nil then return ns.GetColor("threshold") end
+-- Left edge: what makes this row matter at a glance (your lists, a
+-- vanished stealther, hidden hostility), as a tone.
+local function RowEdge(e, list)
+    if e.vanished or list == "kos" then return "danger" end
+    if list == "avoid" then return "threshold" end
+    if e.hostile == nil then return "unknown" end
     return nil
 end
+
+-- Hidden hostility is a dashed violet edge (the hatch); without the texture
+-- file a solid one in the unknown tone. Other tones are solid.
+local function PaintEdge(t, tone)
+    t:SetShown(tone ~= nil)
+    if not tone then return end
+    if tone == "unknown" and Style.HasMedia() then
+        Style.Hatch(t, 1)
+        return
+    end
+    t:SetVertexColor(1, 1, 1, 1)
+    local c = ns.GetColor(tone)
+    t:SetColorTexture(c[1], c[2], c[3], 1)
+    t.hatched = nil
+end
+Panel.PaintEdge = PaintEdge
 
 -- Fills a row; returns its height.
 local function FillRow(r, e, now, index)
@@ -398,20 +427,20 @@ local function FillRow(r, e, now, index)
     local info = e.guild and ("<" .. e.guild .. ">") or (e.className or ns.ClassName(e.classFile))
     if list == "kos" then info = ns.ColorCode("danger") .. "KoS|r " .. info
     elseif list == "avoid" then info = ns.ColorCode("threshold") .. "avoid|r " .. info end
-    if e.hostile == nil then info = ns.ColorCode("threshold") .. "?|r " .. info end
+    if e.hostile == nil then info = ns.ColorCode("unknown") .. "?|r " .. info end
     r.info:SetText(info)
-    local accent = RowAccent(e, list)
-    r.accent:SetShown(accent ~= nil)
-    if accent then r.accent:SetColorTexture(accent[1], accent[2], accent[3], 1) end
-    if index % 2 == 0 then Style.Fill(r.bg, Style.COLORS.stripe) else r.bg:SetColorTexture(0, 0, 0, 0) end
+    r.edgeTone = RowEdge(e, list)
+    PaintEdge(r.accent, r.edgeTone)
+    Style.Fill(r.bg, index % 2 == 0 and Style.COLORS.stripe or Style.COLORS.clear)
     if e.vanished then
         r.dist:SetText(ns.ColorCode("danger") .. "vanished|r")
     elseif e.dead then
         r.dist:SetText(ns.Hex(ns.COLORS.dim) .. "dead|r")
     elseif e.unit then
-        r.dist:SetText(e.rangeOK and ns.FormatRange(e.lo, e.hi) or (ns.ColorCode("threshold") .. "? yd|r"))
+        r.dist:SetText(e.rangeOK and ns.FormatRange(e.lo, e.hi) or (ns.ColorCode("unknown") .. "? yd|r"))
     else
-        r.dist:SetText(ns.Hex(ns.COLORS.dim) .. "gone|r")
+        -- Left view: faded, and says so (its last range is no longer true).
+        r.dist:SetText(ns.Hex(ns.COLORS.dim) .. "out of view|r")
     end
     r.age:SetText(e.unit and "now" or ns.FormatAge(now - (e.lastSeen or now)))
     r:SetAlpha(e.unit and 1 or 0.55)
@@ -441,9 +470,23 @@ function Panel.ResetPosition()
     Panel.RestorePosition()
 end
 
--- A small square button in the title bar.
-local function TitleButton(icon, tooltip, onClick)
-    return Style.Button(frame, nil, 18, onClick, tooltip, { icon = icon, height = 18, title = "" })
+local function Bind(key)
+    if ns.Options and ns.Options.Bind then ns.Options.Bind(key, "quick", "float/panel") end
+end
+
+-- The hide button: the panel carries secure target buttons, so hiding it
+-- waits until combat ends (Home's switch does the same).
+function Panel.HideFromBar()
+    local Nav = ns.Nav
+    local result = Nav and Nav.SetPiece and Nav.SetPiece("panel", false)
+    if result == "wait" then
+        ns.Print("Enemies nearby panel: hides when combat ends.")
+    elseif not result then
+        if InCombatLockdown() then return "wait" end
+        db().panelShown = false
+        ns.Refresh()
+    end
+    return result
 end
 
 local function Create()
@@ -456,10 +499,6 @@ local function Create()
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     Style.Surface(frame, "hud")
-    local bar = Style.Texture(frame, "BACKGROUND", Style.COLORS.titleBar)
-    bar:SetPoint("TOPLEFT", 1, -1)
-    bar:SetPoint("TOPRIGHT", -1, -1)
-    bar:SetHeight(HEADER - 6)
     -- Unlocked: drag anywhere. Locked: Shift + drag still moves it.
     frame:SetScript("OnDragStart", function(self)
         if db().panelLocked and not IsShiftKeyDown() then return end
@@ -470,47 +509,34 @@ local function Create()
         SavePosition(self)
     end)
 
-    frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    frame.title:SetPoint("TOPLEFT", 9, -7)
-    frame.title:SetText("Enemies nearby")
-
-    local settings = TitleButton("Interface\\Icons\\INV_Misc_Gear_01", ns.NAME .. " settings",
-        function() if ns.Options then ns.Options.Open() end end)
-    settings:SetPoint("TOPRIGHT", -4, -3)
-    local char = TitleButton("Interface\\Icons\\INV_Chest_Chain_05", "Character: gear, ledger and skills",
-        function() if ns.GearUI then ns.GearUI.Toggle() end end)
-    char:SetPoint("RIGHT", settings, "LEFT", -3, 0)
-    local econ = TitleButton("Interface\\Icons\\INV_Misc_Coin_01", "Economy: money, auctions and trades",
-        function() if ns.EconomyUI then ns.EconomyUI.Toggle() end end)
-    econ:SetPoint("RIGHT", char, "LEFT", -3, 0)
-    local lock = TitleButton(nil, function()
-        return db().panelLocked and "Locked (Shift + drag still moves it)" or "Unlocked: drag to move"
-    end, function()
-        db().panelLocked = not db().panelLocked
-        ns.Refresh()
-    end)
-    lock.tex = lock:CreateTexture(nil, "ARTWORK")
-    lock.tex:SetPoint("TOPLEFT", 1, -1)
-    lock.tex:SetPoint("BOTTOMRIGHT", -1, 1)
-    lock:SetPoint("RIGHT", econ, "LEFT", -3, 0)
-    frame.lock = lock
-    -- Alerts on / off: the same switch as Settings > Alerts and /talod alerts.
-    -- The panel keeps listing enemies either way; only the notifications stop.
-    local alerts = TitleButton("Interface\\Icons\\Ability_Warrior_BattleShout", function()
-        return db().alertsEnabled and "Enemy alerts on: center text, sound and chat when an enemy appears. Click to mute."
-            or "Enemy alerts muted: the panel still lists every enemy. Click to turn alerts back on."
-    end, function(self)
-        db().alertsEnabled = not db().alertsEnabled
-        ns.Print("enemy alerts " .. (db().alertsEnabled and "on." or "muted (the panel still lists enemies)."))
-        ns.Refresh()
-        if self:GetScript("OnEnter") then self:GetScript("OnEnter")(self) end
-    end)
-    alerts.muted = alerts:CreateTexture(nil, "OVERLAY")
-    alerts.muted:SetPoint("TOPLEFT", 2, -2)
-    alerts.muted:SetPoint("BOTTOMRIGHT", -2, 2)
-    alerts.muted:SetTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up")
-    alerts:SetPoint("RIGHT", lock, "LEFT", -3, 0)
-    frame.alerts = alerts
+    -- The floating title bar: TALOD button (this page; right-click: any
+    -- page), mute, lock, settings, hide.
+    local bar = Style.FloatBar(frame, {
+        page = "enemies", title = "Enemies nearby", settings = "enemies",
+        -- Alerts on / off: the same switch as Settings > Alerts and /talod alerts.
+        -- The panel keeps listing enemies either way; only the notifications stop.
+        switch = { glyph = "bell", offGlyph = "belloff", offTone = "threshold",
+            get = function() return db().alertsEnabled end,
+            set = function(on)
+                db().alertsEnabled = on and true or false
+                ns.Print("enemy alerts " .. (db().alertsEnabled and "on." or "muted (the panel still lists enemies)."))
+                ns.Refresh()
+            end,
+            tooltip = function()
+                return db().alertsEnabled and { "Enemy alerts on", "Center text, sound and chat when an enemy appears. Click to mute." }
+                    or { "Enemy alerts muted", "The panel still lists every enemy. Click to turn alerts back on." }
+            end },
+        lock = { get = function() return db().panelLocked end,
+            set = function(v) db().panelLocked = v and true or false ns.Refresh() end },
+        hide = function() Panel.HideFromBar() end,
+        hideTip = { "Hide the panel", "It carries the target buttons the game locks in combat, so in combat it hides when combat ends. "
+            .. "Home, On screen shows it again." },
+    })
+    Bind("alertsEnabled")
+    Bind("panelLocked")
+    Bind("panelShown")
+    frame.title, frame.count = bar.title, bar.count
+    frame.lock, frame.alerts = bar.lock, bar.switch
 
     frame.empty = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.empty:SetPoint("TOPLEFT", 10, -HEADER - 3)
@@ -533,14 +559,30 @@ function Panel.ApplyStyle()
     if not frame then return end
     frame:SetScale(db().panelScale or 1)
     local locked = db().panelLocked
-    frame.lock.tex:SetTexture(locked and "Interface\\Buttons\\LockButton-Locked-Up" or "Interface\\Buttons\\LockButton-Unlocked-Up")
-    local on = db().alertsEnabled and true or false
-    frame.alerts.muted:SetShown(not on)
-    if frame.alerts.icon.SetDesaturated then frame.alerts.icon:SetDesaturated(not on) end
-    frame.alerts.icon:SetAlpha(on and 1 or 0.45)
+    frame.floatBar:Refresh()
     -- Unlocked shows in the accent color so a movable panel is obvious.
     local c = locked and Style.COLORS.border or Style.COLORS.accent
     frame:SetBorderColor(c[1], c[2], c[3], locked and 1 or 0.9)
+end
+
+-- The bar's count: enemies in view (danger), then players in view whose
+-- hostility the game hides ("N ?", unknown), then recent ones. Never a bare
+-- "0" while hidden ones are in view.
+function Panel.CountText(list)
+    local hostile, hidden, recent = 0, 0, 0
+    for _, e in ipairs(list) do
+        if not e.unit then recent = recent + 1
+        elseif e.hostile == nil then hidden = hidden + 1
+        else hostile = hostile + 1 end
+    end
+    local parts = {}
+    if hostile > 0 or hidden == 0 then
+        parts[1] = (hostile > 0 and ns.ColorCode("danger") or Style.HEX.white) .. hostile .. "|r"
+    end
+    if hidden > 0 then parts[#parts + 1] = ns.ColorCode("unknown") .. hidden .. " ?|r" end
+    local text = table.concat(parts, " + ")
+    if recent > 0 then text = text .. Style.HEX.muted .. "  +" .. recent .. " recent|r" end
+    return text
 end
 
 function Panel.Update()
@@ -548,14 +590,14 @@ function Panel.Update()
     local d = db()
     if not d.enabled or not d.panelShown then
         frame:Hide()
+        -- The target buttons sit on UIParent: they go with the panel.
+        for i = 1, #clicks do PlaceClick(i, rows[i], nil) end
         return
     end
     local now = GetTime()
     local list = ns.Spotter.Sorted()
     local maxRows = math.max(1, d.panelRows or 8)
-    local live, total = ns.Spotter.Count()
-    frame.title:SetText(string.format("Enemies nearby  %s%d|r%s", live > 0 and ns.ColorCode("danger") or "|cffffffff", live,
-        total > live and string.format("  |cff999999(+%d recent)|r", total - live) or ""))
+    frame.count:SetText(Panel.CountText(list))
 
     local shown = math.min(#list, maxRows)
     local y = -HEADER

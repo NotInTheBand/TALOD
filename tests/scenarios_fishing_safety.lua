@@ -264,7 +264,7 @@ scenarios.fishing_safety_range = function()
     MOCK.secretRange = true
     MOCK.Tick(0.3)
     text = FS.NearestText()
-    check(text:find("1 in view") and text:find("·  %? yd$"), "unknown range: " .. text)
+    check(text:find("1 in view") and text:find("·  " .. ns.ColorCode("unknown") .. "%? yd|r$"), "unknown range: " .. text)
     check(not text:find("%d+–%d+") and not text:find("< %d") and not text:find("> %d"), "no number for an unknown range: " .. text)
     -- One known, one unknown: the unknown one is still told.
     MOCK.secretRange = false
@@ -277,7 +277,7 @@ scenarios.fishing_safety_range = function()
     plateAdd("nameplate2", MOCK.Enemy({ name = "Far", guid = "Player-1-F", class = "MAGE", level = 20, distance = 38 }))
     MOCK.Tick(0.3)
     text = FS.NearestText()
-    check(text:find("2 in view") and text:find("1 at %? yd"), "mixed: " .. text)
+    check(text:find("2 in view") and text:find("1 at " .. ns.ColorCode("unknown") .. "%? yd|r"), "mixed: " .. text)
     ns.ProbeUnitRange = realRange
     -- The HUD shows it.
     local hud = ns.FishingUI.HUDFrame()

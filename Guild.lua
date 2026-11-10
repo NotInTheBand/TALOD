@@ -1876,6 +1876,7 @@ end
 -- Invited tab: the opener that was dropped or still waits, one whisper now.
 -- Returns ok, why ("held", "repeat", "none").
 function Guild.SendOpener(full)
+    if not (Guild.Mine() and Guild.Can("invite")) then return false, "rank" end
     local r = Recruit(full)
     if not r or type(r.unsent) ~= "string" then return false, "none" end
     local text = r.unsent
@@ -2678,12 +2679,14 @@ for i = 1, 4 do LOOK_UNITS[#LOOK_UNITS + 1] = "party" .. i end
 for i = 1, 40 do LOOK_UNITS[#LOOK_UNITS + 1] = "raid" .. i end
 for i = 1, 40 do LOOK_UNITS[#LOOK_UNITS + 1] = "nameplate" .. i end
 
--- Called only from a click (opening a conversation): brings a recruit's
--- level, class, race and zone up to date. From the roster when they are a
--- member, else from a unit showing them, else one /who for that one name
--- (only when the /who wait is over and no search is out). Returns where
--- from: "roster", "unit", "who", or nil.
-function Guild.LookUp(full)
+-- Brings a recruit's level, class, race and zone up to date. From the
+-- roster when they are a member, else from a unit showing them, else one
+-- /who for that one name (only when the /who wait is over and no search is
+-- out). localOnly: never the /who (selecting a conversation sends nothing;
+-- the /who goes only from the Look up button's click). Returns where from:
+-- "roster", "unit", "who", or nil and why no /who went: "local", "noapi",
+-- "wait" (the game's pace), "pending" (a search is still out), "failed".
+function Guild.LookUp(full, localOnly)
     local r = type(full) == "string" and Recruit(full)
     if not r then return nil end
     local g = Guild.Data()
@@ -2707,9 +2710,12 @@ function Guild.LookUp(full)
             end
         end
     end
+    if localOnly then return nil, "local" end
     local send = WhoAPI()
-    if not send or Guild.WhoWait() > 0 or (whoPending and GetTime() - whoPending.t <= WHO_WAIT) then return nil end
-    if not pcall(send, 'n-"' .. Target(full) .. '"') then return nil end
+    if not send then return nil, "noapi" end
+    if whoPending and GetTime() - whoPending.t <= WHO_WAIT then return nil, "pending" end
+    if Guild.WhoWait() > 0 then return nil, "wait" end
+    if not pcall(send, 'n-"' .. Target(full) .. '"') then return nil, "failed" end
     lastWho = GetTime()
     whoPending = { t = GetTime(), look = true, full = full }
     return "who"

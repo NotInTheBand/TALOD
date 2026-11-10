@@ -18,16 +18,11 @@ local Market, Prices = ns.Market, ns.Prices
 local Chart = {}
 ns.PriceChart = Chart
 
+-- Colours from the look (Style.lua): lowest = accent, usual = brass, your
+-- sales = compare, volume = white 13% (the classic look keeps its own).
 local PRICE = COLORS.accent
-local OVER = { 1, 0.31, 0.31, 1 }
-local OVER_HEX = "|cffff5050"
-local UNDER = { 1, 0.82, 0, 1 }
-local UNDER_HEX = "|cffffd100"
-local BAND = { 1, 0.5, 0.25, 0.22 }
-local USUAL = { 1, 1, 1, 0.18 }
-local LISTED = { 0.35, 0.55, 0.85, 0.6 }
-local SOLD = { 0.3, 0.85, 0.4, 0.95 }
-local LISTED_HEX, SOLD_HEX = "|cff5a8cd9", "|cff4dd966"
+local OVER, UNDER, BAND, USUAL = COLORS.chartOver, COLORS.chartUnder, COLORS.chartBand, COLORS.chartUsual
+local LISTED, SOLD = COLORS.chartListed, COLORS.chartSold
 local PRICE_SHARE, VOLUME_SHARE = 0.64, 0.26   -- of the plot's height; the gap between is air
 
 local function Money(c) return ns.Professions.Money(c) end
@@ -108,15 +103,15 @@ local function PointLines(pt, mode)
         lines[#lines + 1] = "Lowest " .. Money(pt.p) .. " each"
     end
     if pt.over then
-        lines[#lines + 1] = OVER_HEX .. "Overpriced (over " .. Market.OUTLIER_FACTOR .. "x usual): left out of the usual price|r"
+        lines[#lines + 1] = HEX.chartOver .. "Overpriced (over " .. Market.OUTLIER_FACTOR .. "x usual): left out of the usual price|r"
     elseif pt.under then
-        lines[#lines + 1] = UNDER_HEX .. "Under half the usual with few units (a throwaway): left out of the usual price|r"
+        lines[#lines + 1] = HEX.chartUnder .. "Under half the usual with few units (a throwaway): left out of the usual price|r"
     elseif pt.hiOver then
-        lines[#lines + 1] = OVER_HEX .. "The day's highest look is overpriced: left out|r"
+        lines[#lines + 1] = HEX.chartOver .. "The day's highest look is overpriced: left out|r"
     end
-    lines[#lines + 1] = LISTED_HEX .. "Listed: " .. ((type(pt.n) == "number" and pt.n > 0) and pt.n or "?") .. " units|r" .. (pt.a and (" in " .. pt.a .. " auctions") or "")
+    lines[#lines + 1] = HEX.chartListed .. "Listed: " .. ((type(pt.n) == "number" and pt.n > 0) and pt.n or "?") .. " units|r" .. (pt.a and (" in " .. pt.a .. " auctions") or "")
     if pt.gone then lines[#lines + 1] = HEX.muted .. pt.gone .. " fewer than the " .. (mode == "days" and "day" or "look") .. " before (sold, cancelled or expired)|r" end
-    if pt.sold then lines[#lines + 1] = SOLD_HEX .. "You sold " .. pt.sold .. "|r" end
+    if pt.sold then lines[#lines + 1] = HEX.chartSold .. "You sold " .. pt.sold .. "|r" end
     return lines
 end
 
@@ -157,7 +152,7 @@ function Chart.New(parent, opts)
     c.usual:SetHeight(1)
     c.empty = Style.Text(plot, "GameFontDisableSmall", "CENTER")
     c.empty:SetPoint("CENTER")
-    c.cross = Style.Texture(plot, "OVERLAY", { 1, 1, 1, 0.25 })
+    c.cross = Style.Texture(plot, "OVERLAY", COLORS.cross)
     c.cross:SetWidth(1)
     c.cross:Hide()
     c.lines, c.dots, c.bands, c.bars, c.soldBars = {}, {}, {}, {}, {}
@@ -208,9 +203,9 @@ function Chart.New(parent, opts)
             if pt.under then anyUnder = true end
         end
         self.legend:SetText(HEX.accent .. "lowest price|r" .. HEX.muted .. (mode == "days" and " (band: highest)" or "") .. "  ·  |r"
-            .. LISTED_HEX .. "units listed|r" .. HEX.muted .. "  ·  |r" .. SOLD_HEX .. "you sold|r"
-            .. (anyOver and (HEX.muted .. "  ·  |r" .. OVER_HEX .. "overpriced|r") or "")
-            .. (anyUnder and (HEX.muted .. "  ·  |r" .. UNDER_HEX .. "throwaway|r") or ""))
+            .. HEX.chartListed .. "units listed|r" .. HEX.muted .. "  ·  |r" .. HEX.chartSold .. "you sold|r"
+            .. (anyOver and (HEX.muted .. "  ·  |r" .. HEX.chartOver .. "overpriced|r") or "")
+            .. (anyUnder and (HEX.muted .. "  ·  |r" .. HEX.chartUnder .. "throwaway|r") or ""))
         if #pts < 2 then
             self.empty:SetText(#pts == 1 and "One look so far: the graph starts with the second." or "Not seen on the Auction House yet.")
             return

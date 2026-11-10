@@ -1155,26 +1155,20 @@ end
 ---------------------------------------------------------------------------
 -- Settings page, slash
 ---------------------------------------------------------------------------
-local function BuildPage(parent)
+local function StatusText()
+    local c = Economy.Char()
+    local inc, exp = Economy.Totals(c, nil)
+    return string.format("This character: %d transactions; in %s, out %s.", c and #c.log or 0, FormatMoney(inc), FormatMoney(exp))
+end
+
+local function BuildSettings(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "Records every change of your gold with what you were doing: vendor sales and purchases, "
         .. "repairs, loot, quest rewards, trades (partner, items and gold both ways), mail, auction house, training and "
-        .. "flights; auctions from posting to sold / expired. Money is shown for all your characters together.", "GameFontHighlightSmall")
-    y = W.Button(parent, y, "Open the Economy window", 190, function() if ns.EconomyUI then ns.EconomyUI.Show() end end, "Also " .. ns.Cmd.Text("economy") .. ".")
-    y = y - 4
-    y = W.Header(parent, y, "Recording")
+        .. "flights; auctions from posting to sold / expired. Money is shown for all your characters together. Also "
+        .. ns.Cmd.Text("economy") .. ".", "GameFontHighlightSmall")
     y = W.Checkbox(parent, y, "economyEnabled", "Track my money and trades")
-    y = W.LiveText(parent, y, 30, function()
-        local c = Economy.Char()
-        local inc, exp = Economy.Totals(c, nil)
-        return string.format("This character: %d transactions; in %s, out %s.", c and #c.log or 0, FormatMoney(inc), FormatMoney(exp))
-    end)
-    y = W.Header(parent, y, "Delete")
-    y = W.Button(parent, y, "Delete this character's economy log", 260, function()
-        StaticPopup_Show(ns.POPUP .. "ECONOMY_DELETE", ns.Gear.CharKey() or "?", nil, ns.Gear.CharKey())
-    end)
-    return -y + 10
+    return y
 end
 
 StaticPopupDialogs[ns.POPUP .. "ECONOMY_DELETE"] = {
@@ -1189,11 +1183,15 @@ StaticPopupDialogs[ns.POPUP .. "ECONOMY_DELETE"] = {
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 
-if ns.CharacterTab then table.insert(ns.CharacterTab.pages, { label = "Economy", build = BuildPage }) end
+ns.Options.AddSection("gold", { status = StatusText, groups = { { label = "Recording", build = BuildSettings } } })
 
-local function Slash(command)
+-- /talod gold (economy): the Gold page; /talod gold <tab> opens that tab
+-- (auctions: the Auction House page's My auctions).
+local function Slash(command, rest)
     if command ~= "economy" then return false end
-    if ns.EconomyUI then ns.EconomyUI.Toggle() end
+    local tab = (rest or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if not ns.EconomyUI then return true end
+    if tab == "" then ns.EconomyUI.Toggle() else ns.EconomyUI.ShowPage(tab) end
     return true
 end
 

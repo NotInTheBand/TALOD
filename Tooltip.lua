@@ -28,7 +28,7 @@ local TONES = {
     hint = { 0.3, 1, 0.3 }, source = { 0.78, 0.71, 0.55 },
     accent = { 1, 0.50, 0.25 }, compare = { 0.35, 0.63, 1 },
 }
-local SAFETY = { safe = true, threshold = true, danger = true }
+local SAFETY = { safe = true, threshold = true, danger = true, unknown = true }
 Tip.TONES = TONES
 
 -- A tone name, an {r, g, b} list or an {r =, g =, b =} table → r, g, b.

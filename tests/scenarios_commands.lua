@@ -18,14 +18,14 @@ scenarios.commands_list = function()
     -- No word belongs to two commands; every word resolves to its own id.
     local seen = {}
     for _, c in ipairs(Cmd.LIST) do
-        check(type(c.id) == "string" and #c.words > 0, "entry has an id and words")
+        check(type(c.id) == "string" and (#c.words > 0 or c.bare or c.id == "pagesettings"), "entry has an id and words")
         for _, w in ipairs(c.words) do
             check(not seen[w:lower()], "word '" .. w .. "' used twice")
             seen[w:lower()] = true
             check(Cmd.Resolve(w) == c.id and Cmd.Resolve(w:upper()) == c.id, "resolve " .. w)
         end
     end
-    check(Cmd.Resolve("") == "settings", "the prefix alone opens settings")
+    check(Cmd.Resolve("") == "root", "the prefix alone is the entry point")
     check(Cmd.Resolve("nonsense") == nil, "unknown word")
     check(Cmd.Text("guild", "invite <name>") == Cmd.PREFIX .. " guild invite <name>", "hint text")
     check(_G["SLASH_" .. ns.SLASH_KEY .. "1"] == Cmd.PREFIX, "prefix registered")
@@ -45,7 +45,7 @@ scenarios.commands_list = function()
 
     -- Every command reaches a handler (none falls through to help).
     for _, c in ipairs(Cmd.LIST) do
-        if c.id ~= "help" then
+        if c.id ~= "help" and c.words[1] then
             MOCK.prints = {}
             slash(c.words[1])
             check(not printedPlain(header), c.id .. " is handled")
@@ -62,5 +62,5 @@ scenarios.commands_aliases = function()
     check(not economy():IsShown(), "'economy' toggles it closed")
     MOCK.prints = {}
     slash("CREDITS")
-    check(_G[ns.FRAME .. "CreditsWindow"] and _G[ns.FRAME .. "CreditsWindow"]:IsShown(), "words are case-insensitive")
+    check(ns.AboutUI.IsShown("credits"), "words are case-insensitive")
 end

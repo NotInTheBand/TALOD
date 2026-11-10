@@ -998,9 +998,11 @@ end
 ---------------------------------------------------------------------------
 -- Helpers while you fish: lure, bags, skill cap
 ---------------------------------------------------------------------------
+-- Center text and sound are kept for danger (an enemy near the pole, someone
+-- targeting you); a lure that ran out or full bags is a chat line, and the
+-- HUD row turns its warning edge on.
 local function Warn(text)
-    if ns.Alerts then ns.Alerts.Show(text, { 1, 0.82, 0.2 }, false) end
-    if db().alertSound and ns.Alerts then ns.Alerts.PlayChosenSound() end
+    ns.Print(text .. ".")
 end
 
 local function CheckHelpers()
@@ -1013,13 +1015,13 @@ local function CheckHelpers()
         lureWasOn, lureWarned = true, false
     elseif lure == false and lureWasOn and not lureWarned then
         lureWarned, lureWasOn = true, false
-        Warn("Fishing: your lure ran out")
+        Warn("fishing: your lure ran out")
     end
     local free = Fishing.FreeSlots()
     if free and free <= (db().fishBagWarn or 2) then
         if not bagWarned then
             bagWarned = true
-            Warn(free == 0 and "Fishing: your bags are full" or ("Fishing: " .. free .. " bag slots left"))
+            Warn(free == 0 and "fishing: your bags are full" or ("fishing: " .. free .. " bag slots left"))
         end
     elseif free then
         bagWarned = false
@@ -1028,7 +1030,7 @@ local function CheckHelpers()
     if rank and max and rank >= max and max < 300 then
         if not capWarned then
             capWarned = true
-            Warn(string.format("Fishing %d / %d: train the next rank to keep gaining skill", rank, max))
+            Warn(string.format("fishing %d / %d: train the next rank to keep gaining skill", rank, max))
         end
     else
         capWarned = false
@@ -1546,53 +1548,50 @@ local function Slash(command, rest)
 end
 
 ---------------------------------------------------------------------------
--- Settings tab
+-- Settings > Fishing (the other fishing files add their groups there)
 ---------------------------------------------------------------------------
-local function BuildPage(parent)
+Fishing.StatusLine = StatusLine
+
+-- Recent casts, spots and sessions kept (Settings > Data > Delete data).
+function Fishing.Counts()
+    local f = Store()
+    local spots = 0
+    for _, m in pairs(f.spots) do
+        for _ in pairs(m) do spots = spots + 1 end
+    end
+    return #f.casts, spots, #f.sessions
+end
+
+local function LoggingGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "Logs every cast: where, your skill and lure, what you caught or that it got away. "
         .. "Shows what each spot is worth per hour at your skill, a heat map of where each fish came from, and how "
         .. "often NPCs or enemy players attacked you there. Attackers are read from units targeting you: turn on enemy "
         .. "nameplates (V) so NPCs are seen too. Run |cffffffffpython tools/fishing_viewer.py|r for HTML heat maps.",
         "GameFontHighlightSmall")
-    local rowY = y
-    W.Button(parent, rowY, "Open the fishing window", 190, function() ns.FishingUI.Show("now") end, "Also " .. ns.Cmd.Text("fish") .. ".")
-    W.Button(parent, rowY, "Heat map", 120, function() ns.FishingUI.Show("map") end, "Also " .. ns.Cmd.Text("fish") .. " map.", 214)
-    y = y - 34
-    y = W.Header(parent, y, "Recording")
+    y = W.Button(parent, y, "Heat map", 120, function() ns.FishingUI.Show("map") end, "Also " .. ns.Cmd.Text("fish") .. " map.")
+    y = y - 4
     y = W.Checkbox(parent, y, "fishingEnabled", "Log my fishing", "Casts, catches, spots, attacks and enemy players seen while fishing.")
-    y = W.Header(parent, y, "While fishing")
     y = W.Checkbox(parent, y, "fishHud", "Show the fishing HUD", "A panel like Enemies nearby while a fishing pole is equipped (gone when "
         .. "you swap it out): session, value and gold per hour, skill and the next point, lure, bag space, enemies in view, danger here, "
-        .. "and a bar for the cast. Drop it next to the Enemies nearby panel to snap them together; General > Panel's Size applies to both.")
+        .. "and a bar for the cast. Drop it next to the Enemies nearby panel to snap them together; the panel's Size (Enemies) applies to both.")
     y = W.Checkbox(parent, y, "fishHudLocked", "Lock the fishing HUD", "Locked: Shift + drag still moves it.")
-    y = W.Checkbox(parent, y, "fishAlerts", "Warn me", "When your lure runs out, your bags are almost full or your skill reaches its maximum.")
-    y = W.Slider(parent, y, "fishBagWarn", "Bags almost full at", 0, 10, 1, "%d free")
-    y = W.Checkbox(parent, y, "fishEnemySound", "Sound for every enemy player while fishing",
-        "Your alert sound for each enemy player spotted while you fish, not only loud ones (fishing keeps your eyes on the bobber). "
-        .. "Never for a player whose hostility is hidden.")
-    y = W.LiveText(parent, y, 18, function()
+    y = W.Checkbox(parent, y, "fishAutoLoot", "Auto loot while fishing", "Turns the game's Auto Loot option on at your first cast if it is off, "
+        .. "and back off once you stop fishing (the moment you unequip your fishing pole, also after a /reload). Also "
+        .. ns.Cmd.Text("fish") .. " autoloot.", nil, nil, { set = function(on) Fishing.SetAutoLoot(on) end })
+    y = W.LiveText(parent, y + 4, 18, function()
         local on = Fishing.AutoLootOn()
         return "Auto loot while fishing: " .. (db().fishAutoLoot and "|cff40ff40on|r" or "off") .. "  ·  the game's Auto Loot option is "
             .. (on == nil and "?" or (on and "on" or "off")) .. (db().fishAutoLootRestore ~= nil and " (turned on for fishing, put back after)" or "")
     end)
-    y = W.Button(parent, y, "Auto loot while fishing: on / off", 240, function()
-        Fishing.SetAutoLoot(not db().fishAutoLoot)
-        ns.Refresh()
-    end, "Turns the game's Auto Loot option on at your first cast if it is off, and back off once you stop fishing "
-        .. "(the moment you unequip your fishing pole, also after a /reload). Also " .. ns.Cmd.Text("fish") .. " autoloot.")
-    y = W.Button(parent, y, "Loud splash while fishing: on / off", 240, function()
-        Fishing.SetLoudSplash(not db().fishLoudSplash)
-        ns.Refresh()
-    end, "The game tells addons nothing when a fish bites, so the splash is made hard to miss: sound effects full, "
+    y = W.Checkbox(parent, y, "fishLoudSplash", "Loud splash while fishing", "The game tells addons nothing when a fish bites, so the splash is made hard to miss: sound effects full, "
         .. "music and ambience off, sound on while the game is in the background. Put back as soon as you unequip your "
-        .. "fishing pole. Also " .. ns.Cmd.Text("fish") .. " splash.")
-    y = W.LiveText(parent, y, 18, function()
+        .. "fishing pole. Also " .. ns.Cmd.Text("fish") .. " splash.", nil, nil, { set = function(on) Fishing.SetLoudSplash(on) end })
+    y = W.LiveText(parent, y + 4, 18, function()
         return "Loud splash while fishing: " .. (db().fishLoudSplash and "|cff40ff40on|r" or "off")
             .. (db().fishSoundRestore ~= nil and "  (sound changed for fishing now, put back after)" or "")
     end)
-    rowY = y
+    local rowY = y
     W.Button(parent, rowY, "Check my sound", 130, function() Fishing.SoundCheck() end,
         "Prints each sound setting the loud splash changes: now, and what it goes back to. Also " .. ns.Cmd.Text("fish") .. " sound.")
     W.Button(parent, rowY, "Put my sound back", 150, function() Fishing.RestoreSound(false) ns.Refresh() end,
@@ -1607,24 +1606,31 @@ local function BuildPage(parent)
         db().fishHudPos = nil
         if ns.FishingUI.ResetHUD then ns.FishingUI.ResetHUD() end
     end)
-    y = W.Header(parent, y, "Data")
-    y = W.LiveText(parent, y, 30, StatusLine)
+    y = W.Fine(parent, y)
     y = W.Slider(parent, y, "fishMaxCasts", "Keep at most", 2000, 50000, 2000, "%d casts",
         "The cast log is detail; spots, heat map squares and sessions are kept forever.")
-    rowY = y
-    W.Button(parent, rowY, "Delete the cast log", 170, function()
-        StaticPopup_Show(ns.POPUP .. "FISHING_DELETE", "recent fishing casts (spots, heat map and sessions are kept)", nil, "casts")
-    end)
-    W.Button(parent, rowY, "Delete all fishing data", 170, function()
-        StaticPopup_Show(ns.POPUP .. "FISHING_DELETE", "fishing data (all spots, heat maps, sessions and logs)", nil, "all")
-    end, nil, 200)
-    y = y - 34
-    return -y + 10
+    return y
 end
 
--- Other fishing modules add their own pages to this tab (Fishing.settingsTab.pages).
-Fishing.settingsTab = { label = "Fishing", pages = { { label = "Fishing", build = BuildPage } } }
-ns.Options.AddTab(Fishing.settingsTab)
+local function WarningsGroup(parent, y)
+    local W = ns.Options.Widgets
+    y = W.Checkbox(parent, y, "fishAlerts", "Warn me", "A chat line when your lure runs out, your bags are almost full or your skill reaches its maximum "
+        .. "(center text and sound are kept for enemies).")
+    y = W.Checkbox(parent, y, "fishEnemySound", "Sound for every enemy player while fishing",
+        "Your alert sound for each enemy player spotted while you fish, not only loud ones (fishing keeps your eyes on the bobber). "
+        .. "Never for a player whose hostility is hidden.")
+    y = W.Fine(parent, y)
+    y = W.Slider(parent, y, "fishBagWarn", "Bags almost full at", 0, 10, 1, "%d free")
+    return y
+end
+
+ns.Options.AddSection("fishing", {
+    status = StatusLine,
+    groups = {
+        { label = "Logging and HUD", build = LoggingGroup },
+        { label = "Warnings", build = WarningsGroup },
+    },
+})
 
 -- The "fishing" source (Data.lua): casts, attacks and sessions say when they
 -- change; the signature catches writes that do not.

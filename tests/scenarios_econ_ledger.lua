@@ -90,11 +90,9 @@ scenarios.econ_ledger_listing_match = function()
         .. t.profit .. " lost " .. t.lost)
     MOCK.FireEvent("MAIL_CLOSED")
     MOCK.Tick(4)
-    slash("economy")
-    ns.EconomyUI.state.view = "auctions"
-    ns.EconomyUI.state.range = 0
-    ns.EconomyUI.Refresh()
-    local sub = ns.EconomyUI.views.auctions.card.sub:GetText()
+    -- The Auction House page's My auctions: every auction, every character.
+    slash("ah mine")
+    local sub = ns.MarketUI.views.mine.card.sub:GetText()
     local F = ns.Economy.FormatMoney
     check(sub:find("profit " .. F(412, true), 1, true) and sub:find("deposits lost " .. F(63), 1, true) and sub:find("1 cancelled", 1, true),
         "auctions summary: " .. sub)

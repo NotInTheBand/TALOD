@@ -83,10 +83,14 @@ local function ResultText(r)
         t = HEX.muted .. "no bite clicked|r", i = HEX.bad .. "interrupted|r" })[r] or "?"
 end
 
-local KIND_TEXT = {
-    N = HEX.bad .. "NPC attack|r", P = HEX.bad .. "Player attack|r", ["?"] = HEX.bad .. "Attack (who: ?)|r",
-    E = HEX.gold .. "Enemy player seen|r", e = HEX.muted .. "Player seen (hostility hidden)|r", D = HEX.bad .. "You died|r",
-}
+-- Built when shown: the colours follow the look and the colorblind setting.
+local function KindText(k)
+    return ({
+        N = HEX.bad .. "NPC attack|r", P = HEX.bad .. "Player attack|r", ["?"] = HEX.bad .. "Attack (who: ?)|r",
+        E = HEX.gold .. "Enemy player seen|r", e = ns.ColorCode("unknown") .. "Player seen (hostility hidden)|r",
+        D = HEX.bad .. "You died|r",
+    })[k]
+end
 
 local function WhoText(r)
     if not r.who then return "" end
@@ -261,7 +265,9 @@ local function BuildNow(parent)
     v.left:SetPoint("TOPLEFT")
     v.left:SetPoint("BOTTOMLEFT")
     v.left:SetWidth(440)
-    v.list = Style.List(v.left.content, { labelWidth = 74, colWidths = { 44, 70 } })
+    -- A row with copy (a macro line) opens the copy box on a click.
+    v.list = Style.List(v.left.content, { labelWidth = 74, colWidths = { 44, 70 },
+        onClick = function(item) if item.copy then ns.Utils.Copy(item.copy, item.copyWhat or "macro") end end })
     v.right = Style.Card(v, "Here")
     v.right:SetPoint("TOPLEFT", v.left, "TOPRIGHT", 10, 0)
     v.right:SetPoint("BOTTOMRIGHT")
@@ -788,7 +794,7 @@ local function CastRow(e)
 end
 
 local function ThreatRow(r)
-    return { label = Date(r.t), text = (KIND_TEXT[r.k] or r.k) .. WhoText(r) .. (r.died and (HEX.bad .. "  · you died|r") or "")
+    return { label = Date(r.t), text = (KindText(r.k) or r.k) .. WhoText(r) .. (r.died and (HEX.bad .. "  · you died|r") or "")
         .. HEX.muted .. "  ·  " .. (r.sub or "?") .. "|r" }
 end
 
@@ -906,7 +912,9 @@ local function BuildSessions(parent)
 end
 
 ---------------------------------------------------------------------------
--- Window
+-- Window: tabs Now, Spots, Map, Log (Casts and encounters | Sessions) and
+-- the ones other fishing modules add (Goals). state.view is the view shown;
+-- Sessions is the Log tab's second view.
 ---------------------------------------------------------------------------
 local VIEWS = {
     { key = "now", label = "Now", build = BuildNow },
@@ -915,39 +923,83 @@ local VIEWS = {
     { key = "log", label = "Log", build = BuildLog },
     { key = "sessions", label = "Sessions", build = BuildSessions },
 }
+-- Views that are a second view of a tab: view -> tab.
+local TAB_OF = { sessions = "log" }
+local LOG_VIEWS = { { key = "log", label = "Casts and encounters" }, { key = "sessions", label = "Sessions" } }
+state.logView = "log"
+
+local function TabOf(view) return TAB_OF[view] or view end
+
+-- A quick switch for a saved setting (its home is Settings > Fishing).
+local function Quick(key)
+    if ns.Options and ns.Options.Bind then ns.Options.Bind(key, "quick", "fishing") end
+end
+
+local function OnOff(on, yes, no) return on and (HEX.good .. yes .. "|r") or (HEX.muted .. no .. "|r") end
 
 local function Build()
     for _, def in ipairs(hooks.views) do VIEWS[#VIEWS + 1] = def end
     for _, def in ipairs(hooks.sorts) do SORTS[#SORTS + 1] = { key = def.key, label = def.label } end
-    frame = Style.Window(ns.FRAME .. "FishingWindow", "Fishing", nil, nil, { nav = "fishing" })
-    frame.skill = Style.Text(frame, "GameFontDisableSmall", "RIGHT")
-    frame.skill:SetPoint("TOPRIGHT", -44, -16)
-    frame.autoLoot = Style.Button(frame, "", 150, function()
+    frame = Style.Window(ns.FRAME .. "FishingWindow", "Fishing", nil, nil, { nav = "fishing", settings = "fishing", section = "World" })
+    -- Title bar: skill (status), Auto loot, Splash, HUD, End session.
+    frame.hudButton = Style.Button(frame, "", 92, function()
+        db().fishHud = not db().fishHud
+        ns.Refresh()
+        UI.Refresh()
+    end, "Shows or hides the fishing HUD (it shows while a fishing pole is equipped).", { title = "Fishing HUD", small = true })
+    frame.splash = Style.Button(frame, "", 104, function()
+        Fishing.SetLoudSplash(not db().fishLoudSplash)
+        UI.Refresh()
+    end, "Addons get no event when a fish bites, so the splash is made hard to miss: sound effects full, music and ambience "
+        .. "off, and sound on while the game is in the background. Put back when you stop fishing; anything you change "
+        .. "yourself meanwhile stays.", { title = "Loud splash while fishing", small = true })
+    frame.autoLoot = Style.Button(frame, "", 104, function()
         Fishing.SetAutoLoot(not db().fishAutoLoot)
         UI.Refresh()
     end, function()
         local on = Fishing.AutoLootOn()
         return "On: the game's Auto Loot option is turned on at your first cast (if it is off) and put back the moment "
             .. "you unequip your fishing pole, also after a /reload. Your Auto Loot option is " .. (on == nil and "?" or (on and "on" or "off")) .. " now."
-    end, { title = "Auto loot while fishing" })
-    frame.autoLoot:SetPoint("TOPRIGHT", -250, -9)
-    frame.splash = Style.Button(frame, "", 130, function()
-        Fishing.SetLoudSplash(not db().fishLoudSplash)
+    end, { title = "Auto loot while fishing", small = true })
+    frame.endSession = Style.Button(frame, "End session", 92, function()
+        local s = Fishing.CloseSession()
+        if s then ns.Print("session ended: " .. Fishing.SessionSummary(s)) end
+        ns.Refresh()
         UI.Refresh()
-    end, "Addons get no event when a fish bites, so the splash is made hard to miss: sound effects full, music and ambience "
-        .. "off, and sound on while the game is in the background. Put back when you stop fishing; anything you change "
-        .. "yourself meanwhile stays.", { title = "Loud splash while fishing" })
-    frame.splash:SetPoint("RIGHT", frame.autoLoot, "LEFT", -6, 0)
+    end, "Ends the running session now (it also ends after 5 minutes without a cast or on another map).", { small = true })
+    frame.header:Add(frame.hudButton)
+    frame.header:Add(frame.splash)
+    frame.header:Add(frame.autoLoot)
+    frame.header:Add(frame.endSession)
+    Quick("fishAutoLoot")
+    Quick("fishLoudSplash")
+    Quick("fishHud")
+    frame:SetStatus("")
+    frame.skill = frame.status
+
+    local top = Style.M.titleBar + 10
     local tabHolder = CreateFrame("Frame", nil, frame)
-    tabHolder:SetPoint("TOPLEFT", PAD, -44)
-    tabHolder:SetPoint("TOPRIGHT", -PAD, -44)
+    tabHolder:SetPoint("TOPLEFT", PAD, -top)
+    tabHolder:SetPoint("TOPRIGHT", -PAD, -top)
     tabHolder:SetHeight(26)
-    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end, 110)
+    local tabs = {}
+    for _, def in ipairs(VIEWS) do
+        if not TAB_OF[def.key] then tabs[#tabs + 1] = { key = def.key, label = def.label } end
+    end
+    frame.tabs = Style.Tabs(tabHolder, tabs, function(key)
+        state.view = key == "log" and state.logView or key
+        UI.Refresh()
+    end)
+    frame.logViews = Style.Views(tabHolder, LOG_VIEWS, function(key)
+        state.view, state.logView = key, key
+        UI.Refresh()
+    end)
+    frame.logViews:SetPoint("RIGHT", tabHolder, "RIGHT", 0, 0)
     local line = Style.HLine(frame)
-    line:SetPoint("TOPLEFT", PAD, -70)
-    line:SetPoint("TOPRIGHT", -PAD, -70)
+    line:SetPoint("TOPLEFT", PAD, -(top + 26))
+    line:SetPoint("TOPRIGHT", -PAD, -(top + 26))
     local body = CreateFrame("Frame", nil, frame)
-    body:SetPoint("TOPLEFT", PAD, -80)
+    body:SetPoint("TOPLEFT", PAD, -(top + 36))
     body:SetPoint("BOTTOMRIGHT", -PAD, 34)
     for _, def in ipairs(VIEWS) do views[def.key] = def.build(body) end
     frame.footer = Style.Text(frame, "GameFontDisableSmall")
@@ -960,21 +1012,52 @@ local lastRefresh = 0
 function UI.Refresh()
     if not frame or not frame:IsShown() then return end
     lastRefresh = GetTime()
-    frame.skill:SetText("Fishing skill " .. SkillText())
-    frame.splash:SetLabel("Splash: " .. (db().fishLoudSplash and (HEX.good .. "loud|r") or (HEX.muted .. "normal|r")))
-    frame.autoLoot:SetLabel("Auto loot: " .. (db().fishAutoLoot and (HEX.good .. "on|r") or (HEX.muted .. "off|r")))
-    frame.tabs:Select(state.view)
+    if not views[state.view] then state.view = "now" end
+    frame:SetStatus("Fishing skill " .. SkillText())
+    frame.splash:SetLabel("Splash: " .. OnOff(db().fishLoudSplash, "loud", "normal"))
+    frame.splash:SetOn(db().fishLoudSplash and true or false)
+    frame.autoLoot:SetLabel("Auto loot: " .. OnOff(db().fishAutoLoot, "on", "off"))
+    frame.autoLoot:SetOn(db().fishAutoLoot and true or false)
+    frame.hudButton:SetLabel("HUD: " .. OnOff(db().fishHud, "shown", "hidden"))
+    frame.hudButton:SetOn(db().fishHud and true or false)
+    frame.endSession:SetShown(Fishing.Session() ~= nil)
+    local tab = TabOf(state.view)
+    if tab == "log" then state.logView = state.view end
+    frame.tabs:Select(tab)
+    frame.logViews:SetShown(tab == "log")
+    frame.logViews:Select(state.logView)
     for key, v in pairs(views) do v:SetShown(key == state.view) end
     local v = views[state.view]
     v:Refresh()
     frame.footer:SetText(v:Footer() or "")
 end
 
-function UI.Show(view)
+-- Old and new names: tabs now / spots / map / log / goals; the Log tab's
+-- views "Casts and encounters" (log, casts) and "Sessions".
+local VIEW_OF = { ["casts and encounters"] = "log", casts = "log", log = "log", sessions = "sessions" }
+
+-- The page contract: tab, then view (a Log view); arg unused.
+function UI.ShowPage(tab, view, arg)
     if not frame then Build() end
-    if view and views[view] then state.view = view end
+    tab = type(tab) == "string" and tab:lower() or nil
+    view = type(view) == "string" and view:lower() or nil
+    if tab == "log" then
+        state.view = VIEW_OF[view or ""] or state.logView or "log"
+    elseif tab and views[tab] then
+        state.view = tab
+    elseif view and VIEW_OF[view] then
+        state.view = VIEW_OF[view]
+    end
     frame:Show()
     UI.Refresh()
+    return true
+end
+
+-- The old call: a view key (now, spots, map, log, sessions, goals). "log" is
+-- the cast log itself, as /talod fish log always opened.
+function UI.Show(view)
+    if view == "log" or view == "sessions" then return UI.ShowPage("log", view) end
+    return UI.ShowPage(view)
 end
 
 function UI.Toggle(view)
@@ -982,6 +1065,15 @@ function UI.Toggle(view)
 end
 
 function UI.IsShown() return frame ~= nil and frame:IsShown() end
+
+-- Home and the page list: the running session.
+function UI.PageStatus()
+    local s = Fishing.Session()
+    if not s then return nil end
+    return { text = "Fishing: " .. (s.c or 0) .. " caught" .. (s.zone and (" in " .. s.zone) or ""), tone = "good" }
+end
+
+function UI.Frame() return frame end
 -- Casts, attacks and sessions redraw the window (the Now tab also follows
 -- the clock, below); prices move the gold columns.
 ns.Data.Window(UI, { "fishing", "prices" })
@@ -994,7 +1086,12 @@ UI.state, UI.views = state, views
 -- edge and they dock; docked, the HUD moves with the panel. Dragging the
 -- HUD away undocks it.
 ---------------------------------------------------------------------------
-local HUD_WIDTH, HUD_ROW, HUD_HEADER, HUD_FOOTER, HUD_INSET = 344, 18, 30, 22, 6
+-- Header: the floating title bar, then a fixed strip (the cast, or the red
+-- band when the pole is in hand with an enemy in view). The rows never move
+-- with it: secure buttons lie over the Lure and Weapon rows.
+local HUD_BAND = 14
+local HUD_WIDTH, HUD_ROW, HUD_FOOTER, HUD_INSET = 344, 18, 22, 6
+local HUD_HEADER = Style.FLOAT_BAR + HUD_BAND + 2
 local SNAP = 24                 -- pixels between edges that still snap
 local hudRows = {}
 
@@ -1089,6 +1186,8 @@ local function HUDRow(i)
     r.label:SetPoint("TOPLEFT", 18 + HUD_INSET, -2)
     r.label:SetSize(70, 14)
     r.label:SetJustifyH("LEFT")
+    -- Ledger: the label role (small, bold) so values read first.
+    if Style.IsLedger and Style.IsLedger() and Style.Font then r.label:SetFontObject(Style.Font("label")) end
     r.value = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     r.value:SetPoint("TOPLEFT", 92 + HUD_INSET, -2)
     r.value:SetSize(HUD_WIDTH - 104 - HUD_INSET, 14)
@@ -1101,15 +1200,11 @@ local function HUDRow(i)
     return r
 end
 
-local function HUDTitleButton(icon, tooltip, onClick)
-    return Style.Button(hud, nil, 18, onClick, tooltip, { icon = icon, height = 18, title = "" })
-end
-
 local function ApplyHUDStyle()
     if not hud then return end
     hud:SetScale(db().panelScale or 1)
     local locked = db().fishHudLocked
-    hud.lock.tex:SetTexture(locked and "Interface\\Buttons\\LockButton-Locked-Up" or "Interface\\Buttons\\LockButton-Unlocked-Up")
+    hud.floatBar:Refresh()
     local c = locked and COLORS.border or COLORS.accent
     hud:SetBorderColor(c[1], c[2], c[3], locked and 1 or 0.9)
 end
@@ -1119,19 +1214,30 @@ local function BuildHUD()
     hud = CreateFrame("Frame", ns.FRAME .. "FishingHUD", UIParent)
     hud:SetSize(HUD_WIDTH, HUD_HEADER + HUD_ROW * 6 + HUD_FOOTER)
     hud:SetFrameStrata("MEDIUM")
+    if Style.RaiseFloat then Style.RaiseFloat(hud) end
     hud:SetMovable(true)
     hud:SetClampedToScreen(true)
     hud:EnableMouse(true)
     hud:RegisterForDrag("LeftButton")
     Style.Surface(hud, "hud")
-    local bar = Style.Texture(hud, "BACKGROUND", COLORS.titleBar)
-    bar:SetPoint("TOPLEFT", 1, -1)
-    bar:SetPoint("TOPRIGHT", -1, -1)
-    bar:SetHeight(HUD_HEADER - 6)
+    -- The band under the title bar: red with "Pole in hands" while an enemy
+    -- is in view (violet when only players of hidden hostility are), else
+    -- the spot in plain text.
+    hud.band = Style.Texture(hud, "BACKGROUND")
+    hud.band:SetPoint("TOPLEFT", 1, -Style.FLOAT_BAR)
+    hud.band:SetPoint("TOPRIGHT", -1, -Style.FLOAT_BAR)
+    hud.band:SetHeight(HUD_BAND)
+    hud.band:Hide()
+    hud.bandTag = Style.Tag(hud)
+    hud.bandTag:SetPoint("LEFT", hud, "TOPLEFT", 6, -Style.FLOAT_BAR - HUD_BAND / 2)
+    hud.bandTag:Hide()
+    hud.bandText = Style.Text(hud, "body")
+    hud.bandText:SetPoint("LEFT", hud, "TOPLEFT", 8, -Style.FLOAT_BAR - HUD_BAND / 2)
+    hud.bandText:SetPoint("RIGHT", hud, "RIGHT", -8, 0)
     -- The cast: a thin bar under the title fills over the channel (its length from the game, else 30 s).
     hud.cast = Style.Texture(hud, "ARTWORK", COLORS.accent)
     hud.cast:SetHeight(2)
-    hud.cast:SetPoint("TOPLEFT", 1, -(HUD_HEADER - 6))
+    hud.cast:SetPoint("TOPLEFT", 1, -(HUD_HEADER - 2))
     hud.cast:Hide()
     -- Unlocked: drag anywhere. Locked: Shift + drag still moves it (as the panel).
     hud:SetScript("OnDragStart", function(self)
@@ -1149,29 +1255,22 @@ local function BuildHUD()
         self:StopMovingOrSizing()
         SnapOrSave()
     end)
-    hud.title = hud:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    hud.title:SetPoint("TOPLEFT", 9, -7)
-    hud.title:SetPoint("RIGHT", hud, "RIGHT", -90, 0)
-    hud.title:SetJustifyH("LEFT")
-    if hud.title.SetWordWrap then hud.title:SetWordWrap(false) end
-
-    local settings = HUDTitleButton("Interface\\Icons\\INV_Misc_Gear_01", "Fishing settings",
-        function() ns.Options.OpenTab(ns.Options.TabIndex("Fishing"), 1) end)
-    settings:SetPoint("TOPRIGHT", -4, -3)
-    local window = HUDTitleButton("Interface\\Icons\\Trade_Fishing", "Fishing window: spots, heat map, log, sessions",
-        function() UI.Toggle("now") end)
-    window:SetPoint("RIGHT", settings, "LEFT", -3, 0)
-    local lock = HUDTitleButton(nil, function()
-        return db().fishHudLocked and "Locked (Shift + drag still moves it)" or "Unlocked: drag to move. Drop it next to the Enemies nearby panel to snap them together."
-    end, function()
-        db().fishHudLocked = not db().fishHudLocked
-        ApplyHUDStyle()
-    end)
-    lock.tex = lock:CreateTexture(nil, "ARTWORK")
-    lock.tex:SetPoint("TOPLEFT", 1, -1)
-    lock.tex:SetPoint("BOTTOMRIGHT", -1, 1)
-    lock:SetPoint("RIGHT", window, "LEFT", -3, 0)
-    hud.lock = lock
+    -- The floating title bar: TALOD button (Fishing page; right-click: any
+    -- page), lock, settings, hide. The fishing window's own button became
+    -- the TALOD button.
+    local bar = Style.FloatBar(hud, {
+        page = "fishing", title = "Fishing", settings = "fishing",
+        lock = { get = function() return db().fishHudLocked end,
+            set = function(v) db().fishHudLocked = v and true or false ApplyHUDStyle() end },
+        hide = function() UI.HideHUDFromBar() end,
+        hideTip = { "Hide the HUD", "It carries the swap and lure buttons the game locks in combat, so in combat it hides when "
+            .. "combat ends. Home, On screen or the Fishing page shows it again." },
+    })
+    if ns.Options and ns.Options.Bind then
+        ns.Options.Bind("fishHudLocked", "quick", "float/hud")
+        ns.Options.Bind("fishHud", "quick", "float/hud")
+    end
+    hud.title, hud.lock = bar.title, bar.lock
 
     hud.footerLine = Style.HLine(hud)
     hud.footerLine:SetPoint("BOTTOMLEFT", 1, HUD_FOOTER - 2)
@@ -1194,6 +1293,63 @@ local function BuildHUD()
     ApplyHUDStyle()
     hud:Hide()
     RunHooks(hooks.hudBuilt, hud)
+end
+
+-- The bar's hide button: the HUD carries secure buttons, so hiding it waits
+-- until combat ends (as Home's switch).
+function UI.HideHUDFromBar()
+    local Nav = ns.Nav
+    local result = Nav and Nav.SetPiece and Nav.SetPiece("hud", false)
+    if result == "wait" then
+        ns.Print("Fishing HUD: hides when combat ends.")
+    elseif not result and not InCombatLockdown() then
+        db().fishHud = false
+        ns.Refresh()
+    end
+    return result
+end
+
+-- Pole in hand and someone in view: "enemy" when the game says hostile,
+-- "unknown" when only players of hidden hostility are there, else nil.
+local function PoleDanger()
+    if Fishing.PoleEquipped() ~= true then return nil end
+    local unknown = false
+    for _, e in pairs(ns.Spotter.nearby or {}) do
+        if e.unit and not e.dead then
+            if e.hostile == true then return "danger" end
+            if e.hostile == nil then unknown = true end
+        end
+    end
+    return unknown and "unknown" or nil
+end
+UI.PoleDanger = PoleDanger
+
+-- The strip under the title bar: the red band (pole in hand, enemy in
+-- view), a violet one (pole in hand, hostility hidden), else a quiet line.
+function UI.PaintBand()
+    if not hud then return end
+    local tone = PoleDanger()
+    hud.bandTone = tone
+    if tone then
+        local c = ns.GetColor(tone)
+        hud.band:SetColorTexture(c[1], c[2], c[3], tone == "danger" and 0.18 or 0.14)
+        hud.band:Show()
+        hud.bandTag:Set("Pole in hands", tone)
+        hud.bandTag:Show()
+        hud.bandText:ClearAllPoints()
+        hud.bandText:SetPoint("LEFT", hud.bandTag, "RIGHT", 6, 0)
+        hud.bandText:SetPoint("RIGHT", hud, "RIGHT", -8, 0)
+        hud.bandText:SetText(tone == "danger" and (HEX.white .. "enemy in view|r")
+            or (ns.ColorCode("unknown") .. "hostility hidden: in view|r"))
+    else
+        hud.band:Hide()
+        hud.bandTag:Hide()
+        hud.bandText:ClearAllPoints()
+        hud.bandText:SetPoint("LEFT", hud, "TOPLEFT", 8, -Style.FLOAT_BAR - HUD_BAND / 2)
+        hud.bandText:SetPoint("RIGHT", hud, "RIGHT", -8, 0)
+        local live = ns.Spotter.Count()
+        hud.bandText:SetText(live > 0 and "" or (HEX.muted .. "No enemy player in view|r"))
+    end
 end
 
 function UI.HUDRowByKey(key)
@@ -1271,14 +1427,15 @@ function UI.UpdateHUD()
         else
             hud.cast:Hide()
         end
+        UI.PaintBand()
         local lines = HUDLines(s, r)
         for i, line in ipairs(lines) do
             local row = HUDRow(i)
-            row.bg:SetColorTexture(1, 1, 1, i % 2 == 0 and 0.03 or 0)
+            Style.Fill(row.bg, i % 2 == 0 and COLORS.stripe or COLORS.clear)
             row.accent:SetShown(line.warn == true)
-            if line.warn then row.accent:SetColorTexture(1, 0.82, 0.2, 1) end
+            if line.warn then Style.Fill(row.accent, ns.GetColor("threshold"), 1) end
             row.icon:SetTexture(line.icon or ICON[line.key])
-            row.iconFrame:SetColorTexture(0.3, 0.3, 0.3, 0.9)
+            Style.Fill(row.iconFrame, COLORS.iconFrame)
             row.label:SetText(HEX.muted .. line.label .. "|r")
             row.value:SetText(line.value)
             row.tip, row.key = line.tip, line.key

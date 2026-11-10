@@ -359,11 +359,18 @@ scenarios.econ_r2_desk_deals = function()
         "an expected loss goes last: " .. tostring(deals[1] and deals[1].id))
     ns.AuctionDeskUI.Show("overview")
     local loss = false
-    for _, it in ipairs(ns.AuctionDeskUI.views.overview.list.items) do
-        -- The Deals row (its Units column): the gain column shows the loss, signed.
-        if it.id == LINEN and it.cols and tostring(it.cols[2]):find("units") then loss = it.cols[3]:find("%-") ~= nil end
+    for _, it in ipairs(ns.MarketUI.views.today.cards.deals.list.items) do
+        -- The Deals card's row: the gain column shows the loss, signed.
+        if it.id == LINEN and it.cols then loss = tostring(it.cols[1]):find("%-") ~= nil end
     end
     check(loss, "the loss is shown as a loss")
+    -- Buy > Deals: the same loss in the Gain column, with the units and their cost.
+    ns.MarketUI.ShowPage("buy", "deals")
+    local row
+    for _, it in ipairs(ns.MarketUI.views.deals.list.all) do
+        if it.id == LINEN then row = ns.Style.ReadyRow(it) end
+    end
+    check(row and tostring(row.cols[1]):find("%-") and row.cols[3] == "20", "deals list: loss, 20 units: " .. tostring(row and row.cols[3]))
 end
 
 scenarios.econ_r2_listings = function()
@@ -390,11 +397,12 @@ scenarios.econ_r2_listings = function()
         "a listing without a buyout is not 0: " .. tostring(sum.unpriced))
     ns.AuctionDeskUI.Show("overview")
     local found = false
-    for _, it in ipairs(ns.AuctionDeskUI.views.overview.list.items) do
+    for _, it in ipairs(ns.MarketUI.views.today.all) do
         if it.text and it.text:find("without a buyout") then found = true end
     end
-    check(found, "the overview says what has no buyout")
+    check(found, "Today says what has no buyout")
     ns.AuctionDeskUI.Show("listings")
+    check(ns.MarketUI.state.view == "mine" and ns.MarketUI.state.mineFilter == "listed", "listings: My auctions, listed")
 end
 
 scenarios.econ_r2_standing = function()

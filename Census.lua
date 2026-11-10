@@ -363,21 +363,13 @@ StaticPopupDialogs[ns.POPUP .. "CENSUS_DELETE"] = {
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 
----------------------------------------------------------------------------
--- Settings tab
----------------------------------------------------------------------------
-local function BuildPage(parent)
+ns.Options.AddSection("enemies", { groups = { { label = "Census", build = function(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
-    y = W.Paragraph(parent, y, "Logs every player you see, enemies and allies, with where you were, the distance, "
-        .. "their class, race, level and guild, and the time. Their own position is never read: a point is where you "
-        .. "stood, within nameplate range (~41 yd). Run |cffffffffpython tools/census_viewer.py|r in the addon folder "
-        .. "to turn the log into heat maps.", "GameFontHighlightSmall")
-    y = W.Header(parent, y, "Recording")
     y = W.Checkbox(parent, y, "censusEnabled", "Log players I see",
         "Enemies every few seconds while in view, allies less often.")
     y = W.Checkbox(parent, y, "censusAllies", "Include my own faction",
-        "Allies are only seen through their nameplates (turn friendly nameplates on below), your target and your mouseover.")
+        "Allies are only seen through their nameplates (turn friendly nameplates on: Enemies > Census), your target and your mouseover.")
+    y = W.Fine(parent, y)
     y = W.Checkbox(parent, y, "censusGroup", "Include my party / raid at their own position",
         "The game reports group members' map positions outside instances.")
     y = W.Checkbox(parent, y, "censusSkipCapitals", "Only count allies in capital cities",
@@ -386,29 +378,8 @@ local function BuildPage(parent)
     y = W.Slider(parent, y, "censusAllySeconds", "Ally: one point every", 5, 120, 5, "%d s")
     y = W.Slider(parent, y, "censusMaxPoints", "Keep at most", 5000, 100000, 5000, "%d points",
         "Recent points are kept for detail; the summary is kept forever. 30 000 points is about 2-3 MB of saved data.")
-    y = y - 4
-    y = W.Header(parent, y, "Friendly nameplates")
-    local rowY = y
-    W.Button(parent, rowY, "Turn on friendly nameplates", 200, function() Census.ShowFriendlyPlates() ns.Refresh() end,
-        "Sets the game's Friendly Player Nameplates option. Out of combat only.")
-    y = y - 30
-    y = W.LiveText(parent, y, 18, function()
-        return FriendlyPlatesOn() and "Friendly nameplates are on." or "|cffffd100Friendly nameplates are off: allies are only logged when you target or mouse over them.|r"
-    end)
-    y = W.Header(parent, y, "Data")
-    y = W.LiveText(parent, y, 30, StatusLine)
-    rowY = y
-    W.Button(parent, rowY, "Delete recent points", 170, function()
-        StaticPopup_Show(ns.POPUP .. "CENSUS_DELETE", "recent census points (the summary is kept)", nil, "points")
-    end)
-    W.Button(parent, rowY, "Delete all census data", 170, function()
-        StaticPopup_Show(ns.POPUP .. "CENSUS_DELETE", "all census data", nil, "all")
-    end, nil, 200)
-    y = y - 34
-    return -y + 10
-end
-
-ns.Options.AddTab({ label = "Census", pages = { { label = "Census", build = BuildPage } } })
+    return y
+end } } })
 
 ns.RegisterModule("Census", {
     defaults = {
@@ -424,3 +395,29 @@ ns.RegisterModule("Census", {
     tick = Census.Tick,
     slash = Slash,
 })
+
+-- Per map, from the summary cells (kept for good): { mapID, name, counted,
+-- enemy, hidden (the game hid their side), squares (with a position) },
+-- most counted first.
+function Census.Zones()
+    local c = Store()
+    local out = {}
+    for mapID, cells in pairs(c.cells) do
+        local z = { mapID = mapID, name = c.maps[mapID] or tostring(mapID), counted = 0, enemy = 0, hidden = 0, squares = 0 }
+        local squares = {}
+        for key, n in pairs(cells) do
+            -- "x:y:faction:relation:..." or "-:faction:relation:..." (no position).
+            local x, y, rest = key:match("^(%d+):(%d+):(.*)$")
+            local square = x and (x .. ":" .. y)
+            if not x then rest = key:match("^%-:(.*)$") or "" end
+            local relation = rest:match("^[^:]*:([^:]*)")
+            n = tonumber(n) or 0
+            z.counted = z.counted + n
+            if relation == "E" then z.enemy = z.enemy + n elseif relation == "?" then z.hidden = z.hidden + n end
+            if square and not squares[square] then squares[square] = true z.squares = z.squares + 1 end
+        end
+        out[#out + 1] = z
+    end
+    table.sort(out, function(a, b) return a.counted > b.counted end)
+    return out
+end

@@ -190,15 +190,25 @@ scenarios.groups_window = function()
     end
     check(found and found.bar and found.bar[1] == 300 and found.cols[1]:find("33%%"), "live health")
 
+    -- Now in full: the current group's chat without leaving the tab.
+    UI.ShowPage("now", "chat")
+    UI.views.now.modes.buttons[2]:Fire("OnClick", "LeftButton")
+    check(UI.state.nowMode == "chat" and UI.views.now.modeList:IsShown() and not now.list:IsShown(), "Now: chat mode")
+    check(#UI.views.now.modeList.items == 1 and UI.views.now.modeList.items[1].text:find("hello"), "Now: chat line")
+    UI.views.now.modes.buttons[1]:Fire("OnClick", "LeftButton")
+    check(now.list:IsShown(), "Now: back to members")
+
     slash("groups parties")
-    check(UI.state.view == "party", "Parties tab")
-    local plist = UI.views.party.list
+    check(UI.state.view == "history" and UI.state.chip == "party", "History with the Parties chip")
+    local plist = UI.views.history.list
     check(#plist.items == 1 and plist.items[1].id == G.Current().id, "the open group listed")
     check(plist.items[1].text:find("now"), "marked now")
 
-    -- One group: members, chat, loot, timeline.
-    UI.state.session = G.Current().id
-    UI.Show("session")
+    -- One group: a row opens it in full, Back returns to the list.
+    plist.items[1].build = plist.items[1].build
+    ns.Style.ReadyRow(plist.items[1])
+    UI.ShowPage("history", "group", plist.items[1].id)
+    check(UI.state.view == "session" and UI.state.session == G.Current().id, "row opens the group")
     local v = UI.views.session
     check(v.top:IsShown() and #v.list.items == 2, "members of the group")
     UI.state.mode = "chat"
@@ -209,10 +219,14 @@ scenarios.groups_window = function()
     UI.state.mode = "loot"
     UI.Refresh()
     check(v.list.items[1].text:find("No loot"), "no loot yet")
+    v.back:Fire("OnClick", "LeftButton")
+    check(UI.state.view == "history" and UI.views.history:IsShown(), "Back to the list")
 
-    -- "raid" is a word for the same command; the Raids tab is empty.
+    -- "raid" is a word for the same command; the Raids chip shows none.
     slash("groups raids")
-    check(UI.state.view == "raid" and UI.views.raid.list.items[1].text:find("No raids"), "Raids tab empty")
+    check(UI.state.view == "history" and UI.state.chip == "raid" and plist.items[1].text:find("No raids"), "Raids chip empty")
+    UI.views.history.chips.chips[1]:Fire("OnClick", "LeftButton")
+    check(UI.state.chip == "all" and #plist.items == 1, "All chip")
 
     -- Out of the group, then deleted.
     UI.state.mode = "members"

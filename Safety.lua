@@ -59,7 +59,15 @@ local function CreateIndicator()
     end)
     ns.Style.Surface(indicator, "hud")
     indicator.text = indicator:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    indicator.text:SetPoint("CENTER")
+    -- Ledger: a tag (its shape reads without colour; hidden = the unknown
+    -- "?") and the string after it. Classic: the string alone.
+    if ns.Style.IsLedger and ns.Style.IsLedger() then
+        indicator.tag = ns.Style.Tag(indicator)
+        indicator.tag:SetPoint("LEFT", 5, 0)
+        indicator.text:SetPoint("LEFT", indicator.tag, "RIGHT", 5, 0)
+    else
+        indicator.text:SetPoint("CENTER")
+    end
     indicator:SetScript("OnEnter", function(self)
         ns.Tooltip.Open(self, "ANCHOR_BOTTOM")
             :Title("PvP flag")
@@ -91,16 +99,26 @@ function Safety.UpdateIndicator()
         return
     end
     local flagged, remaining = Safety.PlayerFlag()
+    local tone
     if flagged == nil then
-        indicator.text:SetText(ns.ColorCode("threshold") .. "PvP: ?|r")
+        tone = "unknown"
+        indicator.text:SetText(ns.ColorCode("unknown") .. "PvP: ?|r")
     elseif flagged and remaining then
+        tone = "threshold"
         indicator.text:SetText(ns.ColorCode("threshold") .. string.format("PvP ON · off in %d:%02d|r",
             math.floor(remaining / 60), math.floor(remaining % 60)))
     elseif flagged then
+        tone = "danger"
         indicator.text:SetText(ns.ColorCode("danger") .. "PvP ON|r")
     else
+        tone = "safe"
         indicator.text:SetText(ns.ColorCode("safe") .. "PvP off|r")
     end
+    if indicator.tag and indicator.tone ~= tone then
+        -- The tone's shape (circle / triangle / diamond); hidden: the unknown "?".
+        indicator.tag:Set("", tone)
+    end
+    indicator.tone = tone
     indicator:Show()
 end
 
@@ -146,8 +164,9 @@ local function CheckTarget()
     local now = GetTime()
     if lastWarnAt[name] and now - lastWarnAt[name] < WARN_REPEAT then return end
     lastWarnAt[name] = now
-    ns.Alerts.Show(text, ns.GetColor("threshold"), false)
-    ns.Print(ns.ColorCode("threshold") .. text .. ".|r")
+    -- "This would flag you" is one of the danger lines (center text is danger only).
+    ns.Alerts.Show(text, ns.GetColor("danger"), false)
+    ns.Print(ns.ColorCode("danger") .. text .. ".|r")
 end
 
 ---------------------------------------------------------------------------

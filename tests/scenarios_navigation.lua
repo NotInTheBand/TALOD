@@ -1,10 +1,10 @@
 -- Navigation (Navigation.lua): the page list on every main window, one main
--- window at a time (the next opens where the last stood), the Main menu.
+-- window at a time (the next opens where the last stood), Home.
 local scenarios, T = ...
 local check, boot, slash = T.check, T.boot, T.slash
 
 local MAIN = { "TALODMainMenu", "TALODCharacterWindow", "TALODEconomyWindow", "TALODMarketWindow",
-    "TALODAuctionDesk", "TALODFishingWindow", "TALODGuildWindow", "TALODOptionsWindow", "TALODCreditsWindow", "TALODChangelogWindow" }
+    "TALODFishingWindow", "TALODGuildWindow", "TALODOptionsWindow", "TALODCreditsWindow", "TALODChangelogWindow" }
 
 local function openMain()
     local open = {}
@@ -26,43 +26,47 @@ scenarios.navigation = function()
     local Nav = ns.Nav
     check(#openMain() == 0, "nothing open after login")
 
-    -- The menu: a tile per page, the rail on its left.
+    -- Home: a line per page, the rail on its left with every page in sections.
     slash("menu")
     onlyOpen("TALODMainMenu", "/talod menu")
     local menu = TALODMainMenu
-    for _, key in ipairs({ "character", "economy", "market", "desk", "fishing", "guild", "settings" }) do
-        check(menu.tiles[key], "menu tile " .. key)
-        check(menu.navRail.buttons[key], "rail entry " .. key)
+    for _, key in ipairs({ "enemies", "fishing", "groups", "gear", "prof", "gold", "ah", "recruit", "members", "audit" }) do
+        check(menu.lineByKey[key], "home line " .. key)
     end
+    for _, page in ipairs(Nav.PAGES) do check(menu.navRail.buttons[page.key], "rail entry " .. page.key) end
     check(menu.navRail.buttons.home.accent:IsShown(), "home marked in the rail")
+    check(menu.navRail.heads.World:IsShown() and menu.navRail.heads.Trade:IsShown(), "section labels")
+    check(menu.navRail.divider:IsShown(), "divider before Settings and About")
 
-    -- Every page from the menu replaces the window before it.
-    menu.tiles.character:Fire("OnClick", "LeftButton")
-    onlyOpen("TALODCharacterWindow", "menu tile opens the character window")
+    -- Every page from Home replaces the window before it.
+    menu.lineByKey.gear:Fire("OnClick", "LeftButton")
+    onlyOpen("TALODCharacterWindow", "home line opens the character window")
     local char = TALODCharacterWindow
-    check(char.navRail.buttons.character.accent:IsShown() and not char.navRail.buttons.economy.accent:IsShown(),
-        "character marked in its rail")
-    char.navRail.buttons.economy:Fire("OnClick", "LeftButton")
-    onlyOpen("TALODEconomyWindow", "rail opens economy")
+    check(char.navRail.buttons.gear.accent:IsShown() and not char.navRail.buttons.gold.accent:IsShown(),
+        "gear marked in its rail")
+    char.navRail.buttons.gold:Fire("OnClick", "LeftButton")
+    onlyOpen("TALODEconomyWindow", "rail opens gold")
+    check(TALODEconomyWindow.navRail.buttons.gold.accent:IsShown(), "old economy window marks gold")
     ns.MarketUI.Show()
     onlyOpen("TALODMarketWindow", "market by its own Show")
+    check(TALODMarketWindow.navRail.buttons.ah.accent:IsShown(), "market marks Auction House")
     ns.AuctionDeskUI.Show()
-    onlyOpen("TALODAuctionDesk", "auction desk")
+    onlyOpen("TALODMarketWindow", "the auction desk is the Auction House page")
     slash("fish")
     onlyOpen("TALODFishingWindow", "/talod fish")
     ns.GuildUI.Show()
     onlyOpen("TALODGuildWindow", "guild")
-    slash("")
+    slash("settings")
     onlyOpen("TALODOptionsWindow", "/talod settings")
     TALODOptionsWindow.navRail.buttons.home:Fire("OnClick", "LeftButton")
-    onlyOpen("TALODMainMenu", "rail back to the menu")
+    onlyOpen("TALODMainMenu", "rail back to Home")
 
     -- The next window opens where the last one stood.
     menu._l, menu._t = 300, 800
-    menu.tiles.market:Fire("OnClick", "LeftButton")
+    Nav.Go("ah", "prices")
     local point, rel, relPoint, x, y = TALODMarketWindow:GetPoint(1)
     check(point == "TOPLEFT" and rel == UIParent and relPoint == "BOTTOMLEFT" and x == 300 and y == 800,
-        "market took the menu's place: " .. tostring(point) .. " " .. tostring(x) .. "," .. tostring(y))
+        "market took Home's place: " .. tostring(point) .. " " .. tostring(x) .. "," .. tostring(y))
 
     -- A drag (window or rail) is remembered for the next window opened from nothing.
     TALODMarketWindow._l, TALODMarketWindow._t = 420, 700
@@ -81,25 +85,28 @@ scenarios.navigation = function()
     check(TALODProbeWindow:IsShown() and not char:IsShown(), "report stays, character closes")
     TALODProbeWindow:Hide()
 
-    -- Quick control on the menu.
+    -- On screen: the panel switch on Home.
     Nav.ShowMenu()
     local shown = TALODDB.panelShown
-    menu.panelButton:Fire("OnClick", "LeftButton")
-    check(TALODDB.panelShown ~= shown and menu.panelButton.label:GetText():find("Enemies nearby"), "panel toggled from the menu")
+    menu.pieces.panel.switch:Fire("OnClick", "LeftButton")
+    check(TALODDB.panelShown ~= shown, "panel toggled from Home")
 
-    -- Minimap: left-click toggles the menu, from any window.
+    -- Minimap: left-click opens where you left it, again closes.
     ns.FishingUI.Show()
     TALODMinimapButton:Fire("OnClick", "LeftButton")
-    onlyOpen("TALODMainMenu", "minimap opens the menu in place of fishing")
+    check(#openMain() == 0, "minimap closes the open page")
     TALODMinimapButton:Fire("OnClick", "LeftButton")
-    check(#openMain() == 0, "minimap closes the menu")
+    onlyOpen("TALODFishingWindow", "minimap reopens the page you left")
 
-    -- The addon compartment opens the menu too.
+    -- The addon compartment opens Home.
     TALOD_OnAddonCompartmentClick()
     onlyOpen("TALODMainMenu", "addon compartment")
     Nav.CloseAll()
     check(#openMain() == 0, "CloseAll")
     check(Nav.Open("nonsense") == false, "unknown page")
+    -- Old keys still open their content.
+    check(Nav.Open("market") and TALODMarketWindow:IsShown(), "old key market")
+    check(Nav.Open("credits") and ns.AboutUI.IsShown("credits"), "old key credits")
 end
 
 -- Credits page and the shared copy box (Utils.lua).
@@ -107,10 +114,11 @@ scenarios.credits = function()
     local ns = boot(11509)
     local Nav = ns.Nav
     Nav.ShowMenu()
-    check(TALODMainMenu.tiles.credits and TALODMainMenu.navRail.buttons.credits, "credits tile and rail entry")
-    TALODMainMenu.tiles.credits:Fire("OnClick", "LeftButton")
-    check(ns.Credits.IsShown() and not TALODMainMenu:IsShown(), "credits replaces the menu")
-    local f = TALODCreditsWindow
+    Nav.Go("about", "credits")
+    check(ns.Credits.IsShown() and not TALODMainMenu:IsShown(), "credits replaces Home")
+    check(ns.AboutUI.IsShown("credits") and TALODChangelogWindow:IsShown(), "on the About page, Credits tab")
+    check(TALODChangelogWindow.navRail.buttons.about.accent:IsShown(), "credits marks About")
+    local f = ns.Credits.View()
 
     f.copyInvite:Fire("OnClick", "LeftButton")
     check(MOCK.popup == "TALOD_COPY" and MOCK.popupText == "invite link"
@@ -167,7 +175,7 @@ scenarios.nav_size = function()
         local f = Nav.Current()
         check(f and f:GetWidth() == 1100 and f:GetHeight() == 701, "page opens at the shared size: " .. tostring(f and f:GetName()))
     end
-    check(menu.tiles.character:GetWidth() == math.floor((1100 - 32 - 10) / 2), "menu tiles follow the width")
+    check(menu.pieceCard:GetWidth() == 312, "On screen keeps its width")
     ns.Options.Open()
     check(TALODOptionsWindow:GetWidth() == 1100, "settings at the shared size")
 
@@ -203,8 +211,8 @@ scenarios.nav_size = function()
     check(TALODDB.navSize == nil, "reset clears the size")
 end
 
--- Menu descriptions fit a tile at the smallest window; hovering a tile or a
--- rail entry shows the page's tabs.
+-- Page descriptions stay short; hovering a Home line or a rail entry shows
+-- the page and its tabs.
 scenarios.navigation_descriptions = function()
     local ns = boot(11509)
     local Nav = ns.Nav
@@ -212,16 +220,16 @@ scenarios.navigation_descriptions = function()
         check(type(page.desc) == "string" and page.desc ~= "", page.key .. ": has a description")
         check(#page.desc <= 112, page.key .. ": description fits two lines (" .. #page.desc .. ")")
         for _, tab in ipairs(page.tabs or {}) do
-            check(type(tab[1]) == "string" and type(tab[2]) == "string", page.key .. ": tab row")
+            check(type(tab.key) == "string" and type(tab.label) == "string" and type(tab.desc) == "string", page.key .. ": tab row")
         end
     end
     Nav.ShowMenu()
-    local tile = TALODMainMenu.tiles.economy
-    tile:Fire("OnEnter")
-    check(GameTooltip:IsOwned(tile) and GameTooltip:IsShown(), "tile hover shows the page's tabs")
-    tile:Fire("OnLeave")
-    check(not GameTooltip:IsShown(), "tile leave hides it")
-    local rail = TALODMainMenu.navRail.buttons.market
+    local line = TALODMainMenu.lineByKey.gold
+    line:Fire("OnEnter")
+    check(GameTooltip:IsOwned(line) and GameTooltip:IsShown(), "line hover shows the page's tabs")
+    line:Fire("OnLeave")
+    check(not GameTooltip:IsShown(), "line leave hides it")
+    local rail = TALODMainMenu.navRail.buttons.ah
     rail:Fire("OnEnter")
     check(GameTooltip:IsOwned(rail), "rail hover shows the page tooltip")
 end

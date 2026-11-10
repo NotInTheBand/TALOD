@@ -235,15 +235,16 @@ function Safety.NearestText(n)
     local total = n.enemies + n.hidden
     if total == 0 then return HEX.muted .. "none in view|r", false end
     local text = total .. " in view"
-    if n.hidden > 0 then text = text .. HEX.muted .. " (" .. n.hidden .. " hostility ?)|r" end
+    if n.hidden > 0 then text = text .. ns.ColorCode("unknown") .. " (" .. n.hidden .. " hostility ?)|r" end
     local range
     if n.nearest then
         range = ns.FormatRange(n.lo, n.hi)
-        if n.unknownRange > 0 then range = range .. ", " .. n.unknownRange .. " at ? yd" end
+        if n.unknownRange > 0 then range = range .. ", " .. n.unknownRange .. " at " .. ns.ColorCode("unknown") .. "? yd|r" end
     else
-        range = "? yd"
+        range = ns.ColorCode("unknown") .. "? yd|r"
     end
-    return (n.enemies > 0 and HEX.bad or HEX.gold) .. text .. "|r  ·  " .. range, n.enemies > 0
+    -- Only players whose hostility the game hides: the unknown tone, never "enemy".
+    return (n.enemies > 0 and HEX.bad or ns.ColorCode("unknown")) .. text .. "|r  ·  " .. range, n.enemies > 0
 end
 
 ---------------------------------------------------------------------------
@@ -254,7 +255,7 @@ end
 local function AlertsOn() return db().enabled and db().alertsEnabled end
 
 local function Distance(e)
-    if not e.unit or not (e.lo or e.hi) then return "  ? yd" end
+    if not e.unit or not (e.lo or e.hi) then return "  " .. ns.ColorCode("unknown") .. "? yd|r" end
     return "  " .. ns.FormatRange(e.lo, e.hi)
 end
 
@@ -354,7 +355,7 @@ local function Button()
     button.label:SetPoint("RIGHT", -6, 0)
     local hl = button:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.12)
+    Style.Fill(hl, Style.COLORS.hoverStrong)
     button:SetScript("OnEnter", ButtonTooltip)
     button:SetScript("OnLeave", function() ns.Tooltip.Hide() end)
     button:Hide()
@@ -365,6 +366,12 @@ Safety.Button = Button
 local function Place(b)
     local hud = ns.FishingUI and ns.FishingUI.HUDFrame()
     local left, bottom = hud and hud:IsShown() and hud:GetLeft(), hud and hud:IsShown() and hud:GetBottom()
+    -- Above the HUD: its footer grows in combat (a new line) and must not
+    -- take the click meant for this button. Placed out of combat only.
+    if hud then
+        local level = (hud:GetFrameLevel() or 1) + 20
+        if b:GetFrameLevel() ~= level then b:SetFrameLevel(level) end
+    end
     if left and bottom then
         -- The apply-lure button sits right under the HUD too: go below it, or
         -- it covers this one.
@@ -406,6 +413,10 @@ end
 -- movable); the swap button under the HUD covers the fight.
 ---------------------------------------------------------------------------
 local rowButton
+-- Set by this module's own PLAYER_REGEN_DISABLED: InCombatLockdown() is
+-- still false while that event is handed out, and a redraw from a later
+-- handler must not anchor the button to the HUD right before the lock.
+local combatLocked = false
 
 local function RowTooltip(self)
     local w = Safety.SwapWeapons()
@@ -417,13 +428,13 @@ local function RowTooltip(self)
 end
 
 local function CreateRowButton()
-    if rowButton or InCombatLockdown() then return rowButton end
+    if rowButton or combatLocked or InCombatLockdown() then return rowButton end
     local ok, b = pcall(CreateFrame, "Button", ns.FRAME .. "FishingWeaponRowButton", UIParent, "SecureActionButtonTemplate")
     if not ok or not b then return nil end
     b:RegisterForClicks("AnyUp", "AnyDown")
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.08)
+    Style.Fill(hl, Style.COLORS.hoverRow)
     b:SetScript("OnEnter", RowTooltip)
     b:SetScript("OnLeave", function() ns.Tooltip.Hide() end)
     b:Hide()
@@ -444,7 +455,7 @@ end
 
 -- Runs after every HUD redraw (its rows can move) and on the tick.
 function Safety.UpdateRowButton()
-    if InCombatLockdown() then return end
+    if combatLocked or InCombatLockdown() then return end
     local UI = ns.FishingUI
     local row = UI and UI.HUDRowByKey and UI.HUDRowByKey("weapon")
     local w = row and db().enabled and db().fishSwapRow and Fishing.PoleEquipped() == true and Safety.SwapWeapons()
@@ -511,7 +522,7 @@ local function NearestRow()
     local text, warn = Safety.NearestText()
     return { key = "nearest", label = "Nearest", value = text, warn = warn, icon = "Interface\\Icons\\Ability_Hunter_SniperShot",
         tip = { "Nearest player", "Range bracket of the closest player in view (nameplates). A player whose range "
-            .. "the game hides counts as ? yd, never as far away. Hidden hostility is counted, not called an enemy." } }
+            .. "the game hides counts as " .. ns.ColorCode("unknown") .. "? yd|r, never as far away. Hidden hostility is counted, not called an enemy." } }
 end
 
 ---------------------------------------------------------------------------
@@ -539,8 +550,10 @@ local function OnEvent(event, unit)
     if event == "PLAYER_EQUIPMENT_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
         equipChangedAt = GetTime()
     elseif event == "PLAYER_REGEN_DISABLED" then
+        combatLocked = true
         HideRowButton()
     elseif event == "PLAYER_REGEN_ENABLED" then
+        combatLocked = false
         Safety.UpdateButton()
         Safety.UpdateRowButton()
     end
@@ -555,22 +568,18 @@ local function StatusText()
     return "Remembered weapon: " .. (w and (WeaponText(w) .. ((w and not here) and (HEX.gold .. "  (not in your bags)|r") or "")) or "none yet (hold your weapon once)")
 end
 
-local function BuildPage(parent)
+local function BuildGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "A fishing pole is no weapon and the bobber keeps your eyes busy. These warnings use "
         .. "what the game shows (nameplates, targets): turn on enemy nameplates (V). A player whose hostility is hidden "
-        .. "is counted, never called an enemy; a hidden range is ? yd. Enemy warnings follow the alert mute in General.",
+        .. "is counted, never called an enemy; a hidden range is " .. ns.ColorCode("unknown") .. "? yd|r. Enemy warnings follow the alert mute (Alerts and safety).",
         "GameFontHighlightSmall")
-    y = W.Header(parent, y, "Warnings")
     y = W.Checkbox(parent, y, "fishPoleWarn", "Warn me: fishing pole in my hands with an enemy in view",
         "A loud center-screen warning and your alert sound when an enemy player is in view while your fishing pole is equipped.")
-    y = W.Slider(parent, y, "fishPoleWarnRepeat", "Same player again after", 15, 300, 15, "%d s")
     y = W.Checkbox(parent, y, "fishTargetAlert", "Warn me when an enemy player targets me while fishing",
         "Often the only sign before a rogue opens or a hunter shoots. Only when the game shows the target: a hidden one never alerts.")
-    y = W.Header(parent, y, "HUD")
     y = W.Checkbox(parent, y, "fishNearestRow", "Show the nearest player's range on the HUD",
-        "\"1 in view · 20–30 yd\". A player without a readable range counts as ? yd.")
+        "\"1 in view · 20–30 yd\". A player without a readable range counts as " .. ns.ColorCode("unknown") .. "? yd|r.")
     y = W.Checkbox(parent, y, "fishSwapButton", "Show a weapon swap button while the fishing pole is equipped",
         "One click equips the weapon (and off hand) you held last. Placed under the fishing HUD out of combat; it stays "
         .. "usable in combat once shown. Keybind: a macro with  /click " .. ns.FRAME .. "FishingSwapButton")
@@ -578,7 +587,12 @@ local function BuildPage(parent)
         "One click equips the weapon (and off hand) you held last, same as the swap button. Set up out of combat only; "
         .. "in combat use the swap button under the HUD.")
     y = W.LiveText(parent, y, 30, StatusText)
-    return -y + 10
+    y = W.Button(parent, y, "Copy the swap macro", 170, function()
+        ns.Utils.Copy("/click " .. ns.FRAME .. "FishingSwapButton", "macro")
+    end, "A macro line for a key: one press = the swap button.")
+    y = W.Fine(parent, y)
+    y = W.Slider(parent, y, "fishPoleWarnRepeat", "Same player again after", 15, 300, 15, "%d s")
+    return y
 end
 
 local function Slash(arg)
@@ -602,15 +616,27 @@ local function Slash(arg)
 end
 
 Fishing.AddSlash(Slash, "safety [on|off]")
-table.insert(Fishing.settingsTab.pages, { label = "Safety", build = BuildPage })
+ns.Options.AddSection("fishing", { groups = { { label = "Safety", build = BuildGroup } } })
 ns.FishingUI.AddHUDLine(WeaponRow)
 ns.FishingUI.AddHUDLine(NearestRow)
 ns.FishingUI.OnHUDUpdated(function() Safety.UpdateRowButton() end)
+-- On the fishing page's Now tab: the swap macro rides along (click copies it).
+local function MacroTip(owner, title, text)
+    ns.Tooltip.Text(owner, { title, text, "Macro or key binding: " .. HEX.white .. "/click " .. ns.FRAME .. "FishingSwapButton|r",
+        HEX.muted .. "Click: copy the macro line.|r" })
+end
 ns.FishingUI.AddNowRows(function(rows)
+    local macro = "/click " .. ns.FRAME .. "FishingSwapButton"
     local row = WeaponRow()
-    if row then rows[#rows + 1] = { label = row.label, text = row.value } end
+    if row then
+        rows[#rows + 1] = { label = row.label, text = row.value, copy = macro,
+            tooltip = function(o) MacroTip(o, "Weapon", "The weapon the swap button puts back in place of the pole (one click, out of combat).") end }
+    end
     local nr = NearestRow()
-    if nr then rows[#rows + 1] = { label = nr.label, text = nr.value } end
+    if nr then
+        rows[#rows + 1] = { label = nr.label, text = nr.value, copy = macro,
+            tooltip = function(o) MacroTip(o, "Nearest player", "Range of the nearest player in view: unknown, never a number, when the game hides it.") end }
+    end
 end)
 
 function Safety.Reset()

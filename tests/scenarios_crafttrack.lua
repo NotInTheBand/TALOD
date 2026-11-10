@@ -113,26 +113,6 @@ scenarios.crafttrack_route = function()
 
 end
 
--- Crafting tab: one click selects a recipe, a double click opens the tracker.
-scenarios.crafttrack_double_click = function()
-    local ns = setup()
-    ns.Prices.Record(2996, 300, 20, time(), 4, "Bolt of Linen Cloth")
-    ns.MarketUI.Show("crafting")
-    local list = ns.MarketUI.views.crafting.list
-    local row
-    for _, r in ipairs(list.rows or {}) do if r.item and r.item.pr then row = r break end end
-    check(row, "a recipe row drawn")
-    local UI = ns.CraftTrackUI
-    row:Fire("OnClick", "LeftButton")
-    check(not UI.IsShown(), "one click only selects")
-    MOCK.time = MOCK.time + 1
-    row:Fire("OnClick", "LeftButton")
-    check(not UI.IsShown(), "two slow clicks only select")
-    MOCK.time = MOCK.time + 0.2
-    row:Fire("OnClick", "LeftButton")
-    check(UI.IsShown(), "a double click opens the tracker")
-end
-
 -- Bags: the reagent bag (Forever, bag 5) counts like a bag addon shows it,
 -- every stack summed; on Classic Era bag 5 is a bank bag and never counts.
 scenarios.crafttrack_reagent_bag = function()

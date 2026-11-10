@@ -37,9 +37,9 @@ EXTRA_FILES = ["README.md", "CHANGELOG.md", "Bindings.xml", "tools/census_viewer
 # The archive addon: a second folder in the package (Brand.lua ARCHIVE_ADDON).
 ARCHIVE = PACKAGE + "_Archive"
 OPTIONAL_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt"]
-# The textures the addon draws (Brand.lua ns.TEX). Copied as binary files; only their names are scanned.
+# The textures the addon draws (Brand.lua ns.TEX, Style.MEDIA). Copied as binary files; only their names are scanned.
 MEDIA_DIR = "media/textures"
-MEDIA_SUFFIXES = {".png"}
+MEDIA_SUFFIXES = {".png", ".tga"}
 # Developer-only paths: never in a release.
 FORBIDDEN = re.compile(r"(^|/)(\.[^/]+|tests|docs|dist|census|fishing|concept\.md|cache|__pycache__)(/|$)")
 

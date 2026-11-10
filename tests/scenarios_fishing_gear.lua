@@ -310,9 +310,9 @@ scenarios.fishing_gear_pools = function()
 
     -- The spot rows and the settings page build; delete all clears the tally.
     ns.FishingUI.Show("spots")
-    local page
-    for _, p in ipairs(F.settingsTab.pages) do if p.label == "Gear" then page = p end end
-    check(page and type(page.build(CreateFrame("Frame"))) == "number", "Gear settings page")
+    ns.Options.OpenSection("fishing")
+    check(ns.Options.Row("fishPoolTag") and ns.Options.Row("fishLurePrefer"), "Gear and lures in Settings > Fishing")
+    check(type(G.BuildSettings(CreateFrame("Frame"), 0)) == "number", "Gear and lures group builds on its own")
     F.Delete("all")
     check(G.PoolTally(1429, "Crystal Lake") == nil, "pools deleted with all fishing data")
 end

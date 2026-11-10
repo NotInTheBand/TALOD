@@ -18,7 +18,10 @@ end
 scenarios.market_outliers = function()
     local ns = setup()
     local M, Pr = ns.Market, ns.Prices
-    local now = time()
+    -- 23:00 local yesterday, whatever the hour the tests run: the looks an
+    -- hour or two later fall on the next local day (usual prices go by days).
+    local d = os.date("*t", time())
+    local now = os.time({ year = d.year, month = d.month, day = d.day, hour = 0 }) - 3600
     -- Linen goes for ~100c; two looks saw only a 1000c listing left.
     Pr.Record(2589, 100, 200, now - 5 * 86400, 10, "Linen Cloth")
     Pr.Record(2589, 1000, 5, now - 4 * 86400, 1)
@@ -72,7 +75,7 @@ scenarios.market_outliers = function()
     local pts, usual, cap = ns.PriceChart.Data(2589, "looks")
     local red = 0
     for _, pt in ipairs(pts) do if pt.over then red = red + 1 end end
-    check(red == 3 and usual == 100 and cap == 200, "graph marks: " .. red)
+    check(red == 3 and usual == 100 and cap == 200, "graph marks: " .. red .. " usual " .. tostring(usual) .. " cap " .. tostring(cap))
 end
 
 scenarios.market_outliers_desk = function()
@@ -137,20 +140,8 @@ scenarios.market_crafting_tab = function()
     local plan = M.CraftPlan(bolt.r)
     check(plan.canMake == 2 and plan.buyCost == 0 and plan.reagents[1].have == 5 and plan.reagents[1].sub == 60, "bolt plan")
 
+    -- The tab itself is Professions > Profit now; the Auction House page has none.
     local ui = ns.MarketUI
-    ui.Show("crafting")
-    local v = ui.views.crafting
-    check(ui.state.craftSel and ui.state.craftSel.creates, "a recipe selected")
-    for _ = 1, 3 do v.filter:Fire("OnClick", "LeftButton") end
-    check(ui.state.craftFilter == "all", "filter cycles back")
-    v.filter:Fire("OnClick", "LeftButton")
-    check(ui.state.craftFilter == "profit", "profitable only")
-    check(v.sort == nil, "no sort button: the column titles sort")
-    ui.state.craftSel = bolt.r
-    ui.Refresh()
-    local rows = v.detail.items or {}
-    local found
-    for _, row in ipairs(rows) do if row.label == "Can make" and tostring(row.text):find("2 crafts") then found = true end end
-    check(found, "detail says 2 crafts")
     ui.Show("prices")
+    check(ui.views.crafting == nil and ui.IsShown(), "no crafting view on the Auction House page")
 end

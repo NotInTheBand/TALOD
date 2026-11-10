@@ -6,6 +6,91 @@ local ADDON_NAME, ns = ...
 
 -- Newest first.
 ns.CHANGELOGS = {
+    { v = "0.31.0", d = "2026-11-10", from = "0.30.1", text = [[
+Needs a game restart (new files). Until you restart, a /reload works, but the new look draws without its icons and
+hatching.
+
+### Added
+
+- **A new look.** Flat, square windows in the game's own fonts, clearer buttons, tabs and lists. Buttons that send
+  something (a whisper, an invite, a search, a scan, a craft, a request) carry an arrow and an orange edge; buttons that
+  only change what you see never do. **Classic look** (Settings › General › Colors) brings back the previous look.
+  **Text size** (11 / 12 / 13) and **Compact rows** are new settings in the same group.
+- **Pages in sections.** The page list groups the pages under World (Enemies, Fishing, Groups), Character (Gear,
+  Professions), Trade (Gold, Auction House) and Guild (Recruit, Members, Audit), with Settings and About at the bottom.
+  `{cmd}` and a minimap click reopen the page you were on.
+- **Home** replaces the Main menu: one line per page with what needs you now (enemies nearby and your PvP flag, your
+  fishing session, your group, gold today, your auctions, the tracked craft, recruit replies); a click opens the right
+  tab. **On screen** has one switch for every piece that can sit on your screen. A one-time note lists what moved.
+- **Go to:** type a few letters in the page list to find any page, tab, setting or command, including the old page
+  names ("Market", "Replies"). `{cmd} find <text>` does the same.
+- **World › Enemies:** your journal, kill-on-sight and avoid lists and the census on a page of their own (Journal,
+  Lists, Census), with a **player card**: level, class, guild, where and how often you met them, your note (Enter
+  saves) and the list buttons. Type any name to look them up.
+- **Professions › Profit:** every recipe you can make by profit and margin with the product's price graph; filters
+  Recipes I know, All I can make, Profitable only, In my bags; Track or double-click to follow a recipe.
+- **About:** What's new, **Commands** (every command by page, searchable, with Copy, and the macro lines for the
+  fishing, scan and recruit buttons) and Credits. Check for updates sits in its title bar.
+- **Commands by page:** `{cmd} <page> [tab or action]`, for example `{cmd} enemies panel lock`,
+  `{cmd} recruit who`, `{cmd} debug errors clear`, `{cmd} groups history raids`. `{cmd} help <page>` lists one
+  page's commands and `{cmd} <page> settings` opens its settings. **Every old command still works.**
+- **Chat lines link to the place they name** (Settings › Data after a cleanup) where the game supports it.
+
+### Changed
+
+- **Hidden values have their own colour.** Everything the game hides (`? yd`, `PvP: ?`, `? HP`, hidden hostility,
+  hidden buffs) shows in violet, white in colorblind mode, never in the yellow that means "careful". A count of
+  enemies never reads 0 while the game hides who is hostile.
+- **Settings are one page:** thirteen sections in the order of the pages, a list that jumps to each, a status line and
+  Open page per section, **search** (by name, help text or saved key) and the filters **Alerts and chat** and
+  **Changed** (with a reset arrow per setting). Rarely touched settings sit last in their group. Options that change
+  what one page's next click does (recruiting switches, the planner's options, Enhance's filter) now live on that page
+  only. **Delete data** (Settings › Data) holds every bulk delete, each asking first. **Advanced** holds the error log,
+  timings, whisper pace, version check status and Reset all settings.
+- **Auction House:** Market and Auction desk are one page: Today, Buy (Deals, Bids), Sell, My auctions (Auctions,
+  By item) and Prices, with Full scan, the scan panel switch and the scan log in its title bar. My auctions shows your
+  live listings with their standing and every auction you posted, filtered by status; an item with a full look shows
+  its ladder and reset plans under its prices.
+- **Gold:** Economy is now Gold (Overview, Transactions, Trades).
+- **Gear and Professions:** the Character window is two pages. Gear (Gear, Enhance, Ledger with Changes and New items,
+  Progress) and Professions (Plan, Profit, Skills, Log). Plan steps have a **Craft** button: one click starts that
+  craft; clicking the row no longer crafts.
+- **Guild is two pages: Recruit and Members.** Recruit (Find, Invited, Results) shows to ranks that may invite;
+  Members (Roster with Basics / Activity / Shared views, Promotions, Log, Sharing) is for everyone.
+  **Invited and Replies are one tab:** pick a player to read the conversation beside the list. **Selecting a row never
+  sends anything**; the whisper, invite or `/ginvite` copy is the button on the row. A right-click on a row button does
+  what a right-click on the row does (skip, forget). On Find every player row shows its button; a name box and a
+  Target button reach one player in one click; click the Hands Free line to see your last presses.
+- **Audit is one page:** one character list (Guild, Flagged, Everyone) with sortable columns and the selected
+  character's Ledger or History beside it.
+- **Fishing:** Sessions is the second view of the Log tab; the title bar holds your skill, Auto loot, Splash, HUD and
+  End session. **Groups:** Now shows your group in full; History lists parties and raids together.
+- **One title bar on every floating piece** (Enemies nearby panel, fishing HUD, mini recruit window, craft tracker,
+  scan panel): the {name} button (click: its page; right-click: any page), its own switch, lock, settings and hide.
+  Hiding the panel or the HUD in combat waits until combat ends.
+- **Enemies nearby panel:** kill-on-sight rows have a red edge, hidden hostility a violet one, hidden health a hatched
+  bar marked with a question mark, and a player who left view fades and says "out of view". The fishing HUD shows a red band while the pole
+  is in your hands with an enemy in view.
+- **Quieter alerts:** center text and sound are for danger only; lure ran out, bags almost full and fishing skill at
+  its cap are chat lines. A less urgent center line never replaces a more urgent one still on screen.
+- **Resetting all settings always asks first**, says that window positions reset too and that your logged data is
+  kept, and never runs in combat.
+
+### Fixed
+
+- **A click acts on the row you pressed:** when a list changes under the mouse between press and release (players walking
+  in and out of range), the click does nothing and says so, instead of whispering, inviting or crafting for the next row.
+- **Floating pieces over the Enemies nearby panel** (mini recruit window, fishing HUD, craft tracker, scan panel) take
+  their own clicks where they overlap it, instead of targeting the enemy under them.
+- **Max nameplate distance** is not changed in combat (the game blocks it); a chat line says so.
+- **Hiding the Enemies nearby panel** also hides its click-to-target areas, which could stay clickable over an empty
+  spot.]] },
+    { v = "0.30.1", d = "2026-11-09", from = "0.30.0", text = [[
+### Fixed
+
+- **Full scan on WoW Forever:** the server sends the answer in parts. The scan now waits until every part has arrived
+  and reads them all, instead of failing ("Last: failed") or saving only the first part as the whole Auction House.
+  While parts are still coming in, the panel says the answer is still arriving.]] },
     { v = "0.30.0", d = "2026-11-08", from = "0.29.2", text = [[
 The economy pages were checked formula by formula against standard market statistics. Every number that can steer
 your gold (usual price, trend, sell rate, sale value, posting price, deals, Auction desk plans, crafting costs and

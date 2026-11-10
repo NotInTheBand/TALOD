@@ -1,7 +1,19 @@
 {
-  "version": "0.30.0",
-  "date": "2026-11-08",
+  "version": "0.31.0",
+  "date": "2026-11-10",
   "history": [
+    {
+      "version": "0.31.0",
+      "date": "2026-11-10",
+      "from": "0.30.1",
+      "note": "UI reorganization and new look"
+    },
+    {
+      "version": "0.30.1",
+      "date": "2026-11-09",
+      "from": "0.30.0",
+      "note": "Full scan reads Forever's answer once every part has arrived"
+    },
     {
       "version": "0.30.0",
       "date": "2026-11-08",

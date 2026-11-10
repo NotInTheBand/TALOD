@@ -518,25 +518,24 @@ end
 ---------------------------------------------------------------------------
 -- Settings page, slash, reminder
 ---------------------------------------------------------------------------
-local function BuildPage(parent)
+local function BuildGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "What each zone's water asks of your fishing skill, fish bound to the server's hours or seasons, "
         .. "a checklist of notable catches (Nat Pagle's fish, the Stranglethorn Fishing Extravaganza, rare catches) and the "
         .. "Extravaganza's clock. Zone levels and places are vanilla 1.12 data; WoW Forever may differ.", "GameFontHighlightSmall")
     y = W.Button(parent, y, "Open the goals", 190, function() UI.Show("goals") end, "Also " .. ns.Cmd.Text("fish") .. " goals.")
-    y = W.Header(parent, y, "On the fishing HUD")
-    y = W.Checkbox(parent, y, "fishZoneHud", "Zone fishing level", "\"Zone: needs ~X (you Y)\": the skill from which no fish gets "
+    y = W.Checkbox(parent, y, "fishZoneHud", "Zone fishing level (on the HUD)", "\"Zone: needs ~X (you Y)\": the skill from which no fish gets "
         .. "away here, marked when yours is below it.")
-    y = W.Checkbox(parent, y, "fishExtravaganza", "Stranglethorn Fishing Extravaganza", "Shows the contest while it runs and in the hour "
+    y = W.Checkbox(parent, y, "fishExtravaganza", "Stranglethorn Fishing Extravaganza (on the HUD)", "Shows the contest while it runs and in the hour "
         .. "before (Sundays 14:00-16:00 server time in vanilla; WoW Forever may not run it).")
     y = W.Checkbox(parent, y, "fishExtravaganzaChat", "Remind me in chat", "One chat line when the Extravaganza is an hour away or starts.")
     y = W.Checkbox(parent, y, "fishGoalsAnnounce", "Chat line for a first catch", "When you catch a goal fish for the first time.")
     y = W.LiveText(parent, y, 18, function()
         return "Server time: " .. ClockText(Goals.ServerClock()) .. "  ·  Extravaganza: " .. Goals.ExtravaganzaText(Goals.Extravaganza())
     end)
-    return -y + 10
+    return y
 end
+Goals.BuildSettings = BuildGroup
 
 local function ZoneLine()
     local info, p = Goals.Here()
@@ -578,7 +577,7 @@ UI.AddSpotRows(SpotRows)
 UI.AddNowRows(NowRows)
 Fishing.AddSlash(Slash, "goals|zone")
 Fishing.On("loot", OnLoot)
-table.insert(Fishing.settingsTab.pages, { label = "Goals", build = BuildPage })
+ns.Options.AddSection("fishing", { groups = { { label = "Goals", build = BuildGroup } } })
 
 ns.RegisterModule("FishingGoals", {
     defaults = {

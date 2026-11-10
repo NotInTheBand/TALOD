@@ -1,7 +1,9 @@
--- TALOD - Character window (/talod char, /talod gear, /talod skills): gear
--- snapshots with a before/after comparison, the ledger of changes, stat
--- progress by level, where items came from, and views other modules add
--- (Skills). Built the first time it is opened, in the shared Style.
+-- TALOD - the Character pages. Gear (/talod gear, /talod char): gear
+-- snapshots with a before/after comparison, Enhance (Enhance.lua), the
+-- ledger of changes with the new items and where they came from, stat
+-- progress by level. Professions (/talod plan, /talod skills, /talod
+-- crafts): its window is made here so Skills.lua and ProfessionsUI.lua can
+-- add their tabs at load. Built the first time they open, in the shared Style.
 
 local ADDON_NAME, ns = ...
 local Gear = ns.Gear
@@ -31,7 +33,7 @@ local SLOT_TOKENS = { [1] = "HeadSlot", [2] = "NeckSlot", [3] = "ShoulderSlot", 
 
 local frame
 local views = {}
-local state = { view = "snapshots", char = nil, a = nil, b = nil, stat = "sta" }
+local state = { view = "gear", char = nil, a = nil, b = nil, stat = "sta" }
 
 local function db() return ns.DB() end
 local function CharData() return db().gear[state.char or ""] end
@@ -395,7 +397,7 @@ end
 --   says what happened there; hovering snaps a crosshair to the nearest
 --   snapshot and tells what changed.
 ---------------------------------------------------------------------------
-local SERIES = { total = { 0.16, 0.47, 0.84 }, gear = { 0.92, 0.41, 0.20 } }
+local SERIES = { total = COLORS.seriesTotal, gear = COLORS.seriesGear }
 -- Legend swatches: a colored bar drawn with a texture escape (no special glyphs).
 local function Swatch(c)
     return string.format("|T%s:3:14:0:0:8:8:0:8:0:8:%d:%d:%d|t", Style.WHITE,
@@ -486,10 +488,10 @@ local function BuildProgress(parent)
     end
     v.empty = Text(plot, "GameFontDisable", "CENTER")
     v.empty:SetPoint("CENTER")
-    v.cross = Texture(plot, "OVERLAY", { 1, 1, 1, 0.25 })
+    v.cross = Texture(plot, "OVERLAY", COLORS.cross)
     v.cross:SetWidth(1)
     v.cross:Hide()
-    v.focus = Texture(plot, "OVERLAY", { 1, 1, 1, 1 })
+    v.focus = Texture(plot, "OVERLAY", COLORS.focus)
     v.focus:SetSize(10, 10)
     v.focus:Hide()
 
@@ -606,7 +608,7 @@ local function BuildProgress(parent)
         local t = v.tiles[i]
         if t then return t end
         t = CreateFrame("Button", nil, grid)
-        t.bg = Texture(t, "BACKGROUND", { 1, 1, 1, 0.035 })
+        t.bg = Texture(t, "BACKGROUND", COLORS.tile)
         t.bg:SetAllPoints()
         Style.Border(t, COLORS.cardBorder)
         t.label = Text(t, "GameFontDisableSmall")
@@ -847,7 +849,7 @@ local function BuildProgress(parent)
             v.grid[i]:ClearAllPoints()
             v.grid[i]:SetPoint("BOTTOMLEFT", plot, "BOTTOMLEFT", 0, y)
             v.grid[i]:SetPoint("BOTTOMRIGHT", plot, "BOTTOMRIGHT", 0, y)
-            Style.Fill(v.grid[i], g == yMin and { 1, 1, 1, 0.2 } or COLORS.grid)
+            Style.Fill(v.grid[i], g == yMin and COLORS.gridStrong or COLORS.grid)
             v.grid[i]:Show()
             v.gridLabels[i]:ClearAllPoints()
             v.gridLabels[i]:SetPoint("RIGHT", plot, "BOTTOMLEFT", -6, y)
@@ -1006,109 +1008,371 @@ local function BuildSources(parent)
 end
 
 ---------------------------------------------------------------------------
--- Window
+-- Pages: one main window with a tab bar (a tab may have views: joined
+-- buttons at the right end of the bar), a character picker and the page's
+-- own buttons in the title bar, a footer hint with one action.
+--   P = { key (page), oldNav (the page key before the page list had it),
+--     frame (name after ns.FRAME), title, settings (section), state,
+--     tabs = { { key, label, views = { { key (builder), label, short } } } },
+--     aliases = { [old key] = builder key }, characters = fn() -> keys,
+--     header = fn(frame, M) (title-bar buttons), refresh = fn(frame),
+--     arg = fn(builderKey, arg) (what ShowPage's arg selects),
+--     sources, shows, default }
+-- A view (built by M.AddView defs) has :Refresh(), :Footer() -> hint,
+-- actionLabel, and optionally :FooterAction().
 ---------------------------------------------------------------------------
-local VIEWS = {
-    { key = "snapshots", label = "Gear", build = BuildSnapshots },
-    { key = "ledger", label = "Ledger", build = BuildLedger },
-    { key = "progress", label = "Progress", build = BuildProgress },
-    { key = "sources", label = "Sources", build = BuildSources },
-}
-
--- Other modules add a tab here at load: { key, label, build(parent) -> view }.
--- A view has :Refresh() and :Footer() -> hint, actionLabel; :FooterAction().
-function UI.AddView(def) VIEWS[#VIEWS + 1] = def end
-
-local function Build()
-    frame = Style.Window(ns.FRAME .. "CharacterWindow", "Character", nil, nil, { nav = "character", hidden = true })
-
-    frame.charButton = Button(frame, "", 220, function(_, button)
-        local chars = Gear.Characters()
-        if #chars == 0 then return end
-        local i = 1
-        for n, key in ipairs(chars) do if key == state.char then i = n end end
-        i = i + (button == "RightButton" and -1 or 1)
-        if i > #chars then i = 1 elseif i < 1 then i = #chars end
-        state.char, state.a, state.b = chars[i], nil, nil
-        UI.Refresh()
-    end, "Your characters with saved data. Left-click: next. Right-click: previous.")
-    frame.charButton:SetPoint("TOPRIGHT", -40, -8)
-    Style.AttachDropdown(frame.charButton, function()
-        local list = {}
-        for _, key in ipairs(Gear.Characters()) do list[#list + 1] = { key = key, label = key } end
-        return Style.ChoiceItems(list, state.char, function(key) state.char, state.a, state.b = key, nil, nil UI.Refresh() end)
-    end)
-    local snap = Button(frame, "Snapshot now", 110, function() StaticPopup_Show(ns.POPUP .. "GEAR_SNAPSHOT") end,
-        "Saves what you wear now, with a name you choose (e.g. \"PvP set\").")
-    snap:SetPoint("RIGHT", frame.charButton, "LEFT", -8, 0)
-
-    local tabHolder = CreateFrame("Frame", nil, frame)
-    tabHolder:SetPoint("TOPLEFT", PAD, -44)
-    tabHolder:SetPoint("TOPRIGHT", -PAD, -44)
-    tabHolder:SetHeight(26)
-    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end)
-    local tabLine = Style.HLine(frame)
-    tabLine:SetPoint("TOPLEFT", PAD, -70)
-    tabLine:SetPoint("TOPRIGHT", -PAD, -70)
-
-    local body = CreateFrame("Frame", nil, frame)
-    body:SetPoint("TOPLEFT", PAD, -80)
-    body:SetPoint("BOTTOMRIGHT", -PAD, 40)
-    for _, def in ipairs(VIEWS) do views[def.key] = def.build(body) end
-
-    frame.footer = Text(frame, "GameFontDisableSmall")
-    frame.footer:SetPoint("BOTTOMLEFT", PAD + 2, 15)
-    frame.footer:SetPoint("RIGHT", -170, 0)
-    frame.action = Button(frame, "", 140, function()
-        local view = views[state.view]
-        if view.FooterAction then view:FooterAction() end
-    end)
-    frame.action:SetPoint("BOTTOMRIGHT", -PAD, 10)
-    frame:HookScript("OnShow", function() UI.Refresh() end)
+local function Norm(s)
+    if type(s) ~= "string" then return nil end
+    return (s:lower():gsub("[^%a]", ""))
 end
 
-function UI.Refresh()
-    if not frame or not frame:IsShown() then return end
-    local chars = Gear.Characters()
-    if not state.char or not (db().gear[state.char] or (db().skills and db().skills[state.char])) then
-        state.char = Gear.CharKey() or chars[1]
+local function NewPage(M, P)
+    local frame
+    local views, builders, warmers = {}, {}, {}
+    local state = P.state
+    state.view = state.view or P.default
+    state.tabView = state.tabView or {}
+    local tabOf, firstOf = {}, {}
+    for _, tab in ipairs(P.tabs) do
+        if tab.views then
+            for _, v in ipairs(tab.views) do tabOf[v.key] = tab.key end
+            firstOf[tab.key] = tab.views[1].key
+        else
+            tabOf[tab.key], firstOf[tab.key] = tab.key, tab.key
+        end
     end
-    frame.charButton:SetLabel((state.char or "no character") .. "  >")
-    frame.tabs:Select(state.view)
-    for key, view in pairs(views) do view:SetShown(key == state.view) end
-    local view = views[state.view]
-    view:Refresh()
-    local hint, action = view:Footer()
-    frame.footer:SetText(hint or "")
-    frame.action:SetShown(action ~= nil)
-    if action then frame.action:SetLabel(action) end
+
+    -- Other modules add a view at load: { key, label, build(parent) -> view }.
+    function M.AddView(def) builders[#builders + 1] = def end
+    -- Work a view wants done after login, in the background: fn() reads its memos.
+    function M.AddWarm(fn) warmers[#warmers + 1] = fn end
+
+    -- A tab key or label (any case), an old view key, or a builder key ->
+    -- the builder key to show; viewKey picks a view of a tab that has some.
+    function M.Resolve(tabKey, viewKey)
+        local t = Norm(tabKey)
+        if not t or t == "" then return nil end
+        if P.aliases and P.aliases[t] then return P.aliases[t] end
+        for _, tab in ipairs(P.tabs) do
+            if Norm(tab.key) == t or Norm(tab.label) == t then
+                if not tab.views then return tab.key end
+                local v = Norm(viewKey)
+                for _, tv in ipairs(tab.views) do
+                    if v and (Norm(tv.key) == v or Norm(tv.label) == v or Norm(tv.short) == v) then return tv.key end
+                end
+                return state.tabView[tab.key] or firstOf[tab.key]
+            end
+        end
+        if tabOf[tabKey] then return tabKey end
+        return nil
+    end
+
+    local function Characters() return P.characters() end
+
+    local function Select(key)
+        if not key or not tabOf[key] then return end
+        state.view = key
+        state.tabView[tabOf[key]] = key
+    end
+
+    local function Build()
+        local navKey = P.key
+        if P.oldNav and not (ns.Nav and ns.Nav.Page and ns.Nav.Page(P.key)) then navKey = P.oldNav end
+        frame = Style.Window(ns.FRAME .. P.frame, P.title, nil, nil,
+            { nav = navKey, settings = P.settings, section = "Character", hidden = true })
+        local top = Style.M.titleBar or 38
+
+        frame.charButton = Button(frame, "", 200, function(_, button)
+            local chars = Characters()
+            if #chars == 0 then return end
+            local i = 1
+            for n, key in ipairs(chars) do if key == state.char then i = n end end
+            i = i + (button == "RightButton" and -1 or 1)
+            if i > #chars then i = 1 elseif i < 1 then i = #chars end
+            state.char = chars[i]
+            if P.onChar then P.onChar() end
+            M.Refresh()
+        end, "Your characters with saved data. Left-click: next. Right-click: previous.")
+        Style.AttachDropdown(frame.charButton, function()
+            local list = {}
+            for _, key in ipairs(Characters()) do list[#list + 1] = { key = key, label = key } end
+            return Style.ChoiceItems(list, state.char, function(key)
+                state.char = key
+                if P.onChar then P.onChar() end
+                M.Refresh()
+            end)
+        end)
+        frame.header:Add(frame.charButton)
+        if P.header then P.header(frame, M) end
+
+        local tabHolder = CreateFrame("Frame", nil, frame)
+        tabHolder:SetPoint("TOPLEFT", PAD, -(top + 6))
+        tabHolder:SetPoint("TOPRIGHT", -PAD, -(top + 6))
+        tabHolder:SetHeight(26)
+        local defs = {}
+        for _, tab in ipairs(P.tabs) do defs[#defs + 1] = { key = tab.key, label = tab.label } end
+        frame.tabs = Style.Tabs(tabHolder, defs, function(key)
+            Select(state.tabView[key] or firstOf[key])
+            M.Refresh()
+        end)
+        frame.viewSwitch = {}
+        for _, tab in ipairs(P.tabs) do
+            if tab.views then
+                local sw = Style.Views(tabHolder, tab.views, function(key) Select(key) M.Refresh() end)
+                sw:SetPoint("TOPRIGHT", 0, -3)
+                sw:Hide()
+                frame.viewSwitch[tab.key] = sw
+            end
+        end
+        local tabLine = Style.HLine(frame)
+        tabLine:SetPoint("TOPLEFT", PAD, -(top + 32))
+        tabLine:SetPoint("TOPRIGHT", -PAD, -(top + 32))
+
+        local body = CreateFrame("Frame", nil, frame)
+        body:SetPoint("TOPLEFT", PAD, -(top + 42))
+        body:SetPoint("BOTTOMRIGHT", -PAD, 40)
+        frame.body = body
+        for _, def in ipairs(builders) do views[def.key] = def.build(body) end
+
+        frame.footer = Text(frame, "GameFontDisableSmall")
+        frame.footer:SetPoint("BOTTOMLEFT", PAD + 2, 15)
+        frame.footer:SetPoint("RIGHT", -170, 0)
+        frame.action = Button(frame, "", 140, function()
+            local view = views[state.view]
+            if view and view.FooterAction then view:FooterAction() end
+        end)
+        frame.action:SetPoint("BOTTOMRIGHT", -PAD, 10)
+        frame:HookScript("OnShow", function() M.Refresh() end)
+    end
+
+    function M.Refresh()
+        if not frame or not frame:IsShown() then return end
+        local chars = Characters()
+        if not state.char or not P.valid(state.char) then
+            state.char = Gear.CharKey() or chars[1]
+        end
+        frame.charButton:SetLabel((state.char or "no character") .. "  >")
+        if not views[state.view] then Select(P.default) end
+        local tab = tabOf[state.view]
+        frame.tabs:Select(tab)
+        for key, sw in pairs(frame.viewSwitch) do
+            sw:SetShown(key == tab)
+            if key == tab then sw:Select(state.view) end
+        end
+        for key, view in pairs(views) do view:SetShown(key == state.view) end
+        local view = views[state.view]
+        if P.refresh then P.refresh(frame) end
+        if not view then return end
+        view:Refresh()
+        local hint, action = view:Footer()
+        frame.footer:SetText(hint or "")
+        frame.action:SetShown(action ~= nil)
+        if action then frame.action:SetLabel(action) end
+    end
+
+    -- view: a tab key, a builder key or an old view key to open on.
+    function M.Show(view, viewKey)
+        if not frame then Build() end
+        Select(M.Resolve(view, viewKey))
+        frame:Show()
+        M.Refresh()
+        return true
+    end
+
+    function M.Toggle(view, viewKey)
+        local key = view and M.Resolve(view, viewKey)
+        if frame and frame:IsShown() and (not view or key == state.view) then frame:Hide() else M.Show(view, viewKey) end
+    end
+
+    -- The page list's entry point: tab and view as `ui_map` names them (the
+    -- part after the slash, or the label), arg what the page selects in it.
+    function M.ShowPage(tabKey, viewKey, arg)
+        if not frame then Build() end
+        local key = tabKey and M.Resolve(tabKey, viewKey) or state.view
+        Select(key)
+        if arg ~= nil and P.arg then P.arg(state.view, arg) end
+        frame:Show()
+        M.Refresh()
+        return true
+    end
+
+    function M.IsShown() return frame ~= nil and frame:IsShown() end
+    function M.Frame() return frame end
+    -- The tab and view open now: tab key, builder key.
+    function M.Current() return tabOf[state.view], state.view end
+    M.CharKey = function() return state.char end
+    M.state, M.views, M.Date = state, views, Date
+
+    ns.Data.Window(M, P.sources, {
+        shows = P.shows,
+        prebuild = function() if not frame then Build() end end,
+        warm = function() for _, fn in ipairs(warmers) do fn() end end,
+    })
+    return M
 end
 
--- view: optional tab key to open on.
-function UI.Show(view)
-    if not frame then Build() end
-    if view and views[view] then state.view = view end
-    frame:Show()
-    UI.Refresh()
-end
+---------------------------------------------------------------------------
+-- Character > Gear
+---------------------------------------------------------------------------
+-- Old view keys that moved to the Professions page.
+local PROF_VIEWS = { skills = "skills", professions = "plan", crafting = "log" }
 
-function UI.Toggle(view)
-    if frame and frame:IsShown() and (not view or view == state.view) then frame:Hide() else UI.Show(view) end
-end
-
-function UI.IsShown() return frame ~= nil and frame:IsShown() end
--- Work a tab wants done after login, in the background (the leveling plan
--- prices every recipe at every point): fn() reads its memos.
-local warmers = {}
-function UI.AddWarm(fn) warmers[#warmers + 1] = fn end
-
--- Every tab of the character window: gear, skills, crafts, and prices (the
--- planner and enhancements price materials).
-ns.Data.Window(UI, { "gear", "skills", "crafts", "prices" }, {
-    prebuild = function() if not frame then Build() end end,
-    warm = function() for _, fn in ipairs(warmers) do fn() end end,
+NewPage(UI, {
+    key = "gear", oldNav = "character", frame = "CharacterWindow", title = "Gear", settings = "gear",
+    state = state, default = "gear",
+    tabs = {
+        { key = "gear", label = "Gear" },
+        { key = "enhance", label = "Enhance" },
+        { key = "ledger", label = "Ledger", views = {
+            { key = "ledger", label = "Changes", short = "changes" },
+            { key = "sources", label = "New items", short = "items" } } },
+        { key = "progress", label = "Progress" },
+    },
+    aliases = { snapshots = "gear", snapshot = "gear", sources = "sources", newitems = "sources", changes = "ledger" },
+    characters = function() return Gear.Characters() end,
+    valid = function(key) return db().gear[key] ~= nil end,
+    onChar = function() state.a, state.b = nil, nil end,
+    header = function(f)
+        f.snapshot = Button(f, "Snapshot now", 110, function() StaticPopup_Show(ns.POPUP .. "GEAR_SNAPSHOT") end,
+            "Saves what you wear now, with a name you choose (e.g. \"PvP set\"). Also " .. ns.Cmd.Text("gear", "snap") .. ".")
+        f.header:Add(f.snapshot)
+    end,
+    -- Enhance: a slot number opens that slot.
+    arg = function(key, arg)
+        if key == "enhance" and type(arg) == "number" and ns.Enhance then ns.Enhance.state.slot = arg end
+    end,
+    sources = { "gear", "skills", "prices" },
 })
-UI.state = state
-UI.views = views
-UI.CharKey = function() return state.char end
-UI.Date = Date
+
+UI.AddView({ key = "gear", label = "Gear", build = BuildSnapshots })
+UI.AddView({ key = "ledger", label = "Changes", build = BuildLedger })
+UI.AddView({ key = "sources", label = "New items", build = BuildSources })
+UI.AddView({ key = "progress", label = "Progress", build = BuildProgress })
+
+-- Old callers name the tabs that moved to Professions (skills, professions,
+-- crafting): they land there.
+local addView, pageShow, pageToggle = UI.AddView, UI.Show, UI.Toggle
+function UI.AddView(def)
+    if PROF_VIEWS[def.key] and ns.ProfessionsUI then
+        return ns.ProfessionsUI.AddView({ key = PROF_VIEWS[def.key], label = def.label, build = def.build })
+    end
+    return addView(def)
+end
+function UI.Show(view, viewKey)
+    if PROF_VIEWS[view] and ns.ProfessionsUI then return ns.ProfessionsUI.Show(PROF_VIEWS[view]) end
+    return pageShow(view, viewKey)
+end
+function UI.Toggle(view, viewKey)
+    if PROF_VIEWS[view] and ns.ProfessionsUI then return ns.ProfessionsUI.Toggle(PROF_VIEWS[view]) end
+    return pageToggle(view, viewKey)
+end
+
+-- Home line and rail tag: snapshots of the character you play.
+function UI.PageStatus()
+    local c = db() and db().gear and db().gear[Gear.CharKey() or ""]
+    local snaps = c and c.snapshots
+    if not snaps or #snaps == 0 then return nil end
+    local last = snaps[#snaps]
+    return { text = string.format("Level %s  ·  %d snapshots  ·  last %s", tostring(last.level or "?"), #snaps, Date(last.t)), tone = "plain" }
+end
+
+---------------------------------------------------------------------------
+-- Character > Professions (its views come from Skills.lua and
+-- ProfessionsUI.lua; the page is made here so both can add to it at load).
+---------------------------------------------------------------------------
+local PUI = {}
+ns.ProfessionsUI = PUI
+local profState = { view = "plan" }
+
+-- Characters with skills or gear saved.
+local function ProfCharacters()
+    local seen, out = {}, {}
+    for key in pairs(db().skills or {}) do seen[key] = true end
+    for key in pairs(db().gear or {}) do seen[key] = true end
+    for key in pairs(seen) do out[#out + 1] = key end
+    table.sort(out)
+    return out
+end
+
+local function Tracker() return ns.CraftTrackUI end
+
+-- The title-bar switch: the floating craft tracker shown / hidden.
+local function TrackerSwitch(f)
+    local box = CreateFrame("Frame", nil, f)
+    box:SetSize(120, 22)
+    box.label = Text(box, "body", "RIGHT")
+    box.label:SetPoint("RIGHT", -32, 0)
+    box.label:SetText("Craft tracker")
+    box.switch = Style.Switch(box, function(on, sw)
+        local T = Tracker()
+        if not T then sw:SetOn(false) return end
+        if on then
+            local opened = T.Open(nil)
+            if not opened then
+                local sel = PUI.ProfitSelected and PUI.ProfitSelected()
+                opened = sel and T.Open(sel) or false
+            end
+            if not opened then
+                sw:SetOn(false)
+                ns.Print("no craft tracked yet: pick a recipe on Profit and press Track.")
+            end
+        else
+            local tf = T.frame and T.frame()
+            if tf then tf:Hide() end
+        end
+    end, function()
+        return { "Craft tracker", "The floating window of the craft you track: materials, steps and Craft next. "
+            .. "Also: Track on the Profit tab, or double-click a recipe there." }
+    end)
+    box.switch:SetPoint("RIGHT", -2, 0)
+    f.trackerSwitch = box.switch
+    f.header:Add(box)
+end
+
+NewPage(PUI, {
+    key = "prof", frame = "ProfessionsWindow", title = "Professions", settings = "professions",
+    state = profState, default = "plan",
+    tabs = {
+        { key = "plan", label = "Plan" },
+        { key = "profit", label = "Profit" },
+        { key = "skills", label = "Skills" },
+        { key = "log", label = "Log" },
+    },
+    aliases = { professions = "plan", prof = "plan", crafting = "log", crafts = "log", margins = "profit" },
+    characters = ProfCharacters,
+    valid = function(key) return (db().skills and db().skills[key]) ~= nil or db().gear[key] ~= nil end,
+    header = TrackerSwitch,
+    refresh = function(f)
+        local T = Tracker()
+        local tf = T and T.frame and T.frame()
+        if tf and not f.trackerHooked then
+            f.trackerHooked = true
+            tf:HookScript("OnShow", function() if f.trackerSwitch then f.trackerSwitch:SetOn(true) end end)
+            tf:HookScript("OnHide", function() if f.trackerSwitch then f.trackerSwitch:SetOn(false) end end)
+        end
+        f.trackerSwitch:SetOn(T and T.IsShown() or false)
+    end,
+    -- Plan: a profession name (or the start of one) picks it.
+    arg = function(key, arg)
+        if key == "plan" and type(arg) == "string" and ns.Professions then
+            local prof = ns.Professions.Match(arg)
+            if prof then db().profPlanProf = prof end
+        end
+    end,
+    sources = { "skills", "crafts", "prices", "economy", "bags", "crafttrack" },
+    -- Bags matter to Profit (In my bags) and the plan (bags counted).
+    shows = function(src) return src ~= "bags" or profState.view == "profit" or profState.view == "plan" end,
+})
+
+-- Home line and rail tag: the craft you track, else the plan's profession.
+function PUI.PageStatus()
+    local Track = ns.CraftTrack
+    local t = Track and Track.Current and Track.Current()
+    local r = t and ns.ProfessionData and ns.ProfessionData.recipes[t.id]
+    if r then return { text = "Tracking " .. r.name, tone = "accent" } end
+    local c = db() and db().skills and db().skills[Gear.CharKey() or ""]
+    local prof = db() and db().profPlanProf
+    local cur = prof and c and c.current and c.current[prof]
+    if cur then return { text = string.format("%s %d / %d", prof, cur.rank, cur.max), tone = "plain" } end
+    return nil
+end

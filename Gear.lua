@@ -721,42 +721,30 @@ local function Slash(command, rest)
         db().gearEnabled = sub == "on"
         ns.Print("gear ledger " .. sub .. ".")
     elseif ns.GearUI then
-        ns.GearUI.Toggle("snapshots")
+        ns.GearUI.Toggle("gear")
     end
     return true
 end
 
 ---------------------------------------------------------------------------
--- Settings tab
+-- Settings > Gear
 ---------------------------------------------------------------------------
-local function BuildPage(parent)
+local function StatusText()
+    local snaps, ledger, acquired = Gear.Stats()
+    return string.format("This character: %d snapshots, %d ledger entries, %d items with a source. Characters: %d.",
+        snaps, ledger, acquired, #Gear.Characters())
+end
+
+local function BuildSettings(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "A ledger of your gear: snapshots of everything you wear and your character stats, what each "
         .. "change did to your stats (measured before and after, and from the tooltips), level-ups, and where each item "
         .. "came from. Per character; your alts are kept too.", "GameFontHighlightSmall")
-    local rowY = y
-    W.Button(parent, rowY, "Open gear window", 170, function() if ns.GearUI then ns.GearUI.Show() end end,
-        "Also " .. ns.Cmd.Text("gear") .. ".")
-    W.Button(parent, rowY, "Take a snapshot", 170, function()
-        StaticPopup_Show(ns.POPUP .. "GEAR_SNAPSHOT")
-    end, "Saves what you wear now, with a name you choose.", 200)
-    y = y - 34
-    y = W.Header(parent, y, "Recording")
     y = W.Checkbox(parent, y, "gearEnabled", "Track my gear and stats",
         "Snapshots on gear changes, level-ups and login.")
     y = W.Checkbox(parent, y, "gearSources", "Note where new items came from",
         "Loot, quest reward, vendor (with the price), mail, trade, crafting or auction house: the window you had open.")
-    y = W.LiveText(parent, y, 30, function()
-        local snaps, ledger, acquired = Gear.Stats()
-        return string.format("This character: %d snapshots, %d ledger entries, %d items with a source. Characters: %d.",
-            snaps, ledger, acquired, #Gear.Characters())
-    end)
-    y = W.Header(parent, y, "Delete")
-    y = W.Button(parent, y, "Delete this character's gear data", 240, function()
-        StaticPopup_Show(ns.POPUP .. "GEAR_DELETE", Gear.CharKey() or "?", nil, Gear.CharKey())
-    end)
-    return -y + 10
+    return y
 end
 
 StaticPopupDialogs[ns.POPUP .. "GEAR_SNAPSHOT"] = {
@@ -792,9 +780,7 @@ StaticPopupDialogs[ns.POPUP .. "GEAR_DELETE"] = {
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 
--- One "Character" settings tab; Skills adds its page to it.
-ns.CharacterTab = { label = "Character", pages = { { label = "Gear", build = BuildPage } } }
-ns.Options.AddTab(ns.CharacterTab)
+ns.Options.AddSection("gear", { status = StatusText, groups = { { label = "Recording", build = BuildSettings } } })
 
 local events = { "PLAYER_EQUIPMENT_CHANGED", "PLAYER_LEVEL_UP", "BAG_UPDATE_DELAYED", "PLAYER_ENTERING_WORLD" }
 for event in pairs(WINDOW_EVENTS) do events[#events + 1] = event end

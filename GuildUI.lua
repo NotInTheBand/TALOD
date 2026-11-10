@@ -1,13 +1,14 @@
--- TALOD - Guild window (/talod guild), in the shared Style. Tabs: Recruit
--- (players without a guild + the whisper message), Invited (who you invited
--- and what came of it), Replies (whispers with players you invited),
--- Roster (members, last online, inactivity), Recruiters (who invited whom,
--- who joined, who stayed), Promotions (rules per rank and who meets them),
--- Log (joins, leaves, rank changes), Activity (officers and the guild master:
--- who talks in guild chat). A small notice shows when a recruit
--- whispers you and the Replies tab is not open.
--- Recruit, Invited and Promotions show only to ranks the game lets invite /
--- promote.
+-- TALOD - the Guild pages (/talod guild), in the shared Style.
+-- Recruit (TALODGuildWindow): Find (players without a guild + the whisper
+-- message, one click = one whisper or invite), Invited (everyone you asked,
+-- the conversation beside the list; a row click only selects, the send is
+-- the row's button), Results (who invited whom, who stayed). Shown in the
+-- page list only to ranks the game lets invite.
+-- Members (TALODMembersWindow): Roster (Basics, and for officers Activity:
+-- who talks in guild chat, and Shared: what members share), Promotions
+-- (rules per rank and who meets them), Log (joins, leaves, rank changes),
+-- Sharing (your own Yes / No). A small notice shows when a recruit whispers
+-- you and the Invited tab is not open.
 
 local ADDON_NAME, ns = ...
 local Guild = ns.Guild
@@ -180,6 +181,7 @@ function UI.CandidateRows(compact, cands)
         if cand.ready then seen = HEX.white .. "invite|r" end
         rows[#rows + 1] = {
             full = cand.full,
+            ready = cand.ready or nil,
             label = cand.level and tostring(cand.level) or "?",
             text = NameText(cand.full, cand.classFile) .. (compact and "" or (HEX.muted .. "  "
                 .. (cand.classFile and ns.ClassName(cand.classFile) or "") .. (cand.zone and ("  ·  " .. cand.zone) or "") .. "|r")),
@@ -319,6 +321,75 @@ local function OnCandidateClick(item, button)
     if button == "RightButton" then Guild.Skip(item.full) else Guild.Invite(item.full) end
 end
 
+-- The send mark on a Find row: the same one click as the row itself.
+local function CandidateButton(item)
+    if not item.full then return nil end
+    local whisper = Guild.WhisperFirst or (not item.ready and db().guildWhisper and Guild.CurrentMessage() ~= nil)
+    -- Era with Delayed invite off: the one click whispers and invites. Every
+    -- row is as wide in that mode, so the columns stay in line.
+    local both = not Guild.WhisperFirst and db().guildDelayedInvite == false
+        and db().guildWhisper and Guild.CurrentMessage() ~= nil
+    local label = both and (whisper and "Whisper + invite" or "Invite") or (whisper and "Whisper" or "Invite")
+    return { label = label, kind = "send", width = both and 112 or 64,
+        tooltip = { ClickText(item.ready, item.full), HEX.muted .. "The same as a click on the row.|r" },
+        onClick = function(it) OnCandidateClick(it, "LeftButton") end }
+end
+
+-- Settings a page control changes, told to the settings page once (when
+-- the control is built). UI.bound keeps what was told, for the tests.
+local bound = {}
+UI.bound = bound
+local function Bind(key, kind, where)
+    bound[#bound + 1] = { key = key, kind = kind, where = where }
+    if ns.Options and ns.Options.Bind then ns.Options.Bind(key, kind, where) end
+end
+
+-- What Hands Free did with the last presses (at most 8), and why it waits.
+function UI.PressLines()
+    local lines = {}
+    if not db().guildHandsFree then lines[1] = "Hands Free is off." end
+    local why = db().guildHandsFree and Guild.HandsFreeBlocked()
+    if why then lines[#lines + 1] = HEX.gold .. "Paused: " .. why .. ".|r" end
+    for key in pairs(Guild.LeftAlone()) do
+        local source, kind = key:match("^(%w+):(%w+)$")
+        lines[#lines + 1] = HEX.gold .. "Left alone: " .. (kind == "who" and "/who" or "invites") .. " from "
+            .. Guild.SourceName(source) .. " (the game blocked it).|r"
+    end
+    local presses, now = Guild.HandsFreePresses(), GetTime()
+    if #presses == 0 then
+        lines[#lines + 1] = HEX.muted .. "No click or key seen this session.|r"
+        return lines
+    end
+    for i = math.max(1, #presses - 7), #presses do
+        local p = presses[i]
+        local how = p.over == "key" and ("key " .. tostring(p.button))
+            or p.over == "bind" and "recruit key"
+            or (tostring(p.button) .. " over " .. tostring(p.over))
+        lines[#lines + 1] = string.format("%s%d s ago|r  %s: %s", HEX.muted, math.floor(now - p.t), how, tostring(p.result))
+    end
+    return lines
+end
+
+-- A typed name or your target: one whisper or invite, as a click on a row.
+local function InviteByName(box)
+    local name = (box:GetText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    box:ClearFocus()
+    if name == "" then
+        ns.Print("type a name first (or target a player and click Target).")
+        return
+    end
+    if Guild.Invite(Guild.FullName(name)) then box:SetText("") end
+end
+
+local function InviteTarget()
+    local f = ns.ReadPlayerFacts("target")
+    if not (f and f.name) then
+        ns.Print("target a player or give a name: " .. ns.Cmd.Text("guild") .. " invite <name>")
+        return
+    end
+    Guild.Invite(Guild.FullName(f.name, f.realm), { name = f.name, classFile = f.classFile, level = f.level, race = f.race, src = "target" })
+end
+
 local function BuildRecruit(parent)
     local v = CreateFrame("Frame", nil, parent)
     v:SetAllPoints()
@@ -328,11 +399,6 @@ local function BuildRecruit(parent)
     v.card:SetWidth(540)
     v.card.sub:SetText(Guild.WhisperFirst and "Left-click: whisper your message.  Right-click: never offer again."
         or "Left-click: whisper (then click the red row: invite).  Right-click: never offer again.")
-    v.miniToggle = Style.Button(v.card.content, "", 120, function()
-        db().guildMiniShown = not db().guildMiniShown
-        ns.Refresh()
-    end, "A small window with this list that stays on your screen (drag it anywhere). Same clicks as here.",
-        { title = "Mini recruit window", height = 20 })
 
     local bar = CreateFrame("Frame", nil, v.card.content)
     bar:SetPoint("TOPLEFT", 6, -4)
@@ -356,6 +422,9 @@ local function BuildRecruit(parent)
     v.handsFree = Style.Button(bar, "", 110, ToggleHandsFree, HANDS_FREE_TIP, { title = "Hands Free" })
     v.handsFree:SetPoint("LEFT", v.delayed or v.who, "RIGHT", 6, 0)
     v.zone:SetPoint("LEFT", v.handsFree, "RIGHT", 6, 0)
+    if v.delayed then Bind("guildDelayedInvite", "tool", "recruit/find") end
+    Bind("guildHandsFree", "tool", "recruit/find")
+    Bind("guildWhoZone", "tool", "recruit/find")
     v.plates = Style.Button(v.card.content, "Friendly nameplates", 130, function()
         if ns.Census then ns.Census.ShowFriendlyPlates() end
         UI.Refresh()
@@ -365,11 +434,66 @@ local function BuildRecruit(parent)
         { title = Guild.WhisperFirst and "Next whisper" or "Next invite", height = 20 })
     -- A second row under the toggles: in the card's header they covered its subtitle.
     v.nextStep:SetPoint("TOPLEFT", v.who, "BOTTOMLEFT", 0, -4)
-    v.miniToggle:SetPoint("LEFT", v.nextStep, "RIGHT", 6, 0)
-    v.plates:SetPoint("LEFT", v.miniToggle, "RIGHT", 6, 0)
-    v.status = Style.Text(v.card.content, "GameFontDisableSmall")
-    v.status:SetPoint("TOPLEFT", 8, -56)
-    v.status:SetPoint("RIGHT", -8, 0)
+    -- A name, or your target: one click = one whisper or invite, as on a row.
+    local nameBox = CreateFrame("EditBox", nil, v.card.content)
+    nameBox:SetSize(100, 20)
+    nameBox:SetAutoFocus(false)
+    nameBox:SetMaxLetters(48)
+    nameBox:SetFontObject("GameFontHighlightSmall")
+    nameBox:SetTextInsets(6, 6, 0, 0)
+    local nameBg = Style.Texture(nameBox, "BACKGROUND", COLORS.button)
+    nameBg:SetAllPoints()
+    Style.Border(nameBox, COLORS.border)
+    nameBox.hint = Style.Text(nameBox, "GameFontDisableSmall")
+    nameBox.hint:SetPoint("LEFT", 6, 0)
+    nameBox.hint:SetText("Name...")
+    nameBox:SetScript("OnTextChanged", function(self) self.hint:SetShown((self:GetText() or "") == "") end)
+    nameBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    nameBox:SetScript("OnEnterPressed", function(self) InviteByName(self) end)
+    nameBox:SetPoint("LEFT", v.nextStep, "RIGHT", 6, 0)
+    v.nameBox = nameBox
+    v.inviteName = Style.Button(v.card.content, Guild.WhisperFirst and "Whisper" or "Invite", 64, function() InviteByName(nameBox) end,
+        function()
+            return Guild.WhisperFirst and "Whispers your message to the player named in the box (one whisper). Then type /ginvite yourself."
+                or "Sends to the player named in the box what a click on their row would: your message and the invite (delayed invite: the message first)."
+        end, { title = "The player named", kind = "send", height = 20 })
+    v.inviteName:SetPoint("LEFT", nameBox, "RIGHT", 4, 0)
+    v.inviteTarget = Style.Button(v.card.content, "Target", 70, InviteTarget,
+        "Your target: the same one click as on their row.", { title = "Your target", kind = "send", height = 20 })
+    v.inviteTarget:SetPoint("LEFT", v.inviteName, "RIGHT", 6, 0)
+    v.plates:SetPoint("TOPRIGHT", -6, -30)
+    -- The status line; a click opens what Hands Free did with the last presses.
+    v.statusButton = CreateFrame("Button", nil, v.card.content)
+    v.statusButton:SetPoint("TOPLEFT", 6, -53)
+    v.statusButton:SetPoint("RIGHT", -6, 0)
+    v.statusButton:SetHeight(16)
+    v.status = Style.Text(v.statusButton, "GameFontDisableSmall")
+    v.status:SetPoint("LEFT", 2, 0)
+    v.status:SetPoint("RIGHT", -2, 0)
+    v.statusButton:SetScript("OnClick", function()
+        state.pressesOpen = not state.pressesOpen
+        v:Refresh()
+    end)
+    v.statusButton:SetScript("OnEnter", function(self)
+        ns.Tooltip.Text(self, { "Hands Free", state.pressesOpen and "Click: close." or "Click: the last 8 presses and why it paused." })
+    end)
+    v.statusButton:SetScript("OnLeave", function() ns.Tooltip.Hide() end)
+    v.presses = CreateFrame("Frame", nil, v.card.content)
+    v.presses:SetPoint("TOPLEFT", 6, -70)
+    v.presses:SetPoint("RIGHT", -6, 0)
+    v.presses:SetHeight(40)
+    v.presses:EnableMouse(true)
+    v.presses:SetScript("OnMouseDown", function()
+        state.pressesOpen = false
+        v:Refresh()
+    end)
+    local pressesBg = Style.Texture(v.presses, "BACKGROUND", COLORS.card)
+    pressesBg:SetAllPoints()
+    Style.Border(v.presses, COLORS.border)
+    v.presses.text = Style.Text(v.presses, "GameFontHighlightSmall")
+    v.presses.text:SetPoint("TOPLEFT", 8, -6)
+    v.presses.text:SetPoint("RIGHT", -8, 0)
+    v.presses:Hide()
 
     -- Filters: level range (shared with /who and the settings page) and classes.
     local filters = CreateFrame("Frame", nil, v.card.content)
@@ -393,6 +517,8 @@ local function BuildRecruit(parent)
     end
     v.minLevel = LevelButton("guildRecruitMinLevel", "guildRecruitMaxLevel", true)
     v.minLevel:SetPoint("TOPLEFT")
+    Bind("guildRecruitMinLevel", "tool", "recruit/find")
+    Bind("guildRecruitMaxLevel", "tool", "recruit/find")
     v.maxLevel = LevelButton("guildRecruitMaxLevel", "guildRecruitMinLevel", false)
     v.maxLevel:SetPoint("LEFT", v.minLevel, "RIGHT", 4, 0)
     local SHORT = { WARRIOR = "War", PALADIN = "Pal", SHAMAN = "Sham", HUNTER = "Hunt", ROGUE = "Rog",
@@ -419,13 +545,15 @@ local function BuildRecruit(parent)
         prev = chip
         v.classChips[#v.classChips + 1] = chip
     end
+    Bind("guildRecruitHideClass", "tool", "recruit/find")
 
     local holder = CreateFrame("Frame", nil, v.card.content)
     holder:SetPoint("TOPLEFT", 0, -98)
     holder:SetPoint("BOTTOMRIGHT")
     v.list = Style.List(holder, { labelWidth = 26, colWidths = { 70, 64 }, search = true, hint = "Search names, classes, zones...",
-        onClick = OnCandidateClick })
+        onClick = OnCandidateClick, rowButton = CandidateButton, rowButtonWidth = 64 })
     v.note = Note(v.card.content)
+    v.presses:SetFrameLevel((holder:GetFrameLevel() or 1) + 20)
 
     -- Whisper message editor.
     v.msg = Style.Card(v, "Whisper message")
@@ -438,6 +566,9 @@ local function BuildRecruit(parent)
     end, Guild.WhisperFirst and "Send your message when you click a player. Off: a click records nothing; type /ginvite yourself."
         or "Send this whisper right before the guild invite, or invite without a whisper.", { title = "Whisper first" })
     v.toggle:SetPoint("TOPLEFT", 6, -4)
+    Bind("guildWhisper", "tool", "recruit/find")
+    Bind("guildMessages", "tool", "recruit/find")
+    Bind("guildMessageIndex", "tool", "recruit/find")
 
     local function Select(i)
         local list = Guild.Messages()
@@ -523,6 +654,7 @@ local function BuildRecruit(parent)
         chip.script = s.id
         v.scriptChips[#v.scriptChips + 1] = chip
     end
+    Bind("guildRecruitHideScript", "tool", "recruit/find")
 
     function v:Preview()
         local text = Guild.CurrentMessage()
@@ -556,6 +688,7 @@ local function BuildRecruit(parent)
         self.nextStep:SetLabel(NextLabel(false, ready))
         Paint(self.nextStep, not Guild.WhisperFirst and ready > 0)
         self.nextStep:SetShown(canInvite and true or false)
+        for _, b in ipairs({ self.nameBox, self.inviteName, self.inviteTarget }) do b:SetShown(canInvite and true or false) end
         Paint(self.handsFree, handsFree)
         if not Guild.WhisperFirst then
             self.card.sub:SetText(delayed and "Left-click: whisper, then the red row again: invite.  Right-click: never offer again."
@@ -581,7 +714,13 @@ local function BuildRecruit(parent)
                 or "waiting for a click on the world"
             status = (why and (HEX.gold .. "Hands Free paused: " .. why .. ".|r  ") or (HEX.good .. "Hands Free:|r " .. did .. ".  ")) .. status
         end
-        self.status:SetText(status)
+        self.status:SetText(status ~= "" and status or (HEX.muted .. "Hands Free: off.|r"))
+        self.presses:SetShown(state.pressesOpen and true or false)
+        if state.pressesOpen then
+            local lines = UI.PressLines()
+            self.presses.text:SetText(table.concat(lines, "\n"))
+            self.presses:SetHeight(14 + #lines * 13)
+        end
 
         local lo, hi, cap = Guild.LevelRange()
         self.minLevel:SetLabel("Lv " .. lo .. "+")
@@ -599,8 +738,6 @@ local function BuildRecruit(parent)
         local cands = canInvite and Guild.Candidates() or {}
         state.cands = cands   -- the mini window draws the same list in this redraw
         local rows = UI.CandidateRows(false, cands)
-        self.miniToggle:SetLabel(db().guildMiniShown and "Mini window: on" or "Mini window: off")
-        Paint(self.miniToggle, db().guildMiniShown)
         self.list:SetShown(canInvite and true or false)
         self.note:SetShown(not canInvite)
         if not guild then
@@ -642,8 +779,137 @@ local function BuildRecruit(parent)
 end
 
 ---------------------------------------------------------------------------
--- Invited
+-- Invited: everyone you asked, with the conversation beside the list. A
+-- click on a row only selects it; what a click sent before (the opener, the
+-- invite, or on Forever the command to copy) is the send button on the row
+-- and in the conversation, so reading a reply can never send by accident.
 ---------------------------------------------------------------------------
+local function ChatLine(full, r, c)
+    local who = c.me and (HEX.compare .. "You|r") or NameText(full, r.classFile)
+    return HEX.muted .. date("%b %d %H:%M", c.t) .. "|r  " .. who .. ": " .. c.text
+end
+UI.ChatLine = ChatLine
+
+-- Where a conversation stands (Guild.ReplyGroup): kept for callers that tag one.
+local REPLY_GROUPS = {
+    { key = "all", label = "All" },
+    { key = "joined", label = "Joined", hex = HEX.good, tip = "They joined the guild." },
+    { key = "declined", label = "Declined", hex = HEX.bad, tip = "They declined the invite, or you marked that they said no." },
+    { key = "invited", label = "Invited", hex = HEX.compare, tip = "Invited, no answer yet (or offline, in a guild, invited elsewhere)." },
+    { key = "blocked", label = "Blocked", hex = HEX.gold, tip = "They have you on ignore: your whispers do not reach them." },
+}
+UI.REPLY_GROUPS = REPLY_GROUPS
+
+-- The Invited list's filters. A player can be under more than one (a reply
+-- from someone who then joined is under Replied and Joined).
+local CHIPS = {
+    { key = "all", label = "All" },
+    { key = "replied", label = "Replied" },
+    { key = "waiting", label = "Waiting" },
+    { key = "joined", label = "Joined" },
+    { key = "declined", label = "Declined" },
+    { key = "blocked", label = "Blocked" },
+}
+UI.INVITED_CHIPS = CHIPS
+local WAITING = { asked = true, inviting = true, invited = true, uninvited = true }
+
+-- The conversations filtered by the words said; kept until a conversation
+-- or the words change.
+local function FilteredConversations(all, group, words)
+    return ns.Data.Memo("guild:replies:filtered", ns.Data.Key("guild.replies") .. "|" .. tostring(all) .. "|" .. group .. "|" .. words, function()
+        local out = {}
+        for i, x in ipairs(all) do
+            if i % 64 == 0 then ns.Data.Step() end
+            local g = Guild.ReplyGroupOf(x.full)
+            local hit = words ~= "" and Guild.ChatFind(x.r, words) or nil
+            if (group == "all" or g == group) and (words == "" or hit) then
+                out[#out + 1] = setmetatable({ full = x.full, group = g, hit = hit }, Guild.ROW)
+            end
+        end
+        return out
+    end, 10)
+end
+
+-- A line of theirs in the record's chat: a conversation, not just your opener.
+local function HasTalk(r)
+    for _, line in ipairs(r and r.chat or {}) do
+        if not line.me then return true end
+    end
+    return false
+end
+
+-- What a click on an Invited row did before it only selected: read from the
+-- record now, with the rules the rows were built with.
+local function InvitedFlags(full)
+    local r = full and Guild.Recruit(full)
+    if not r then return nil end
+    return { r = r,
+        unsent = r.unsent and (r.status == "invited" or r.status == "inviting" or r.status == "asked"),
+        uninvited = r.status == "uninvited", unconfirmed = Guild.InviteCheck(r) == "unconfirmed", command = NeedsCommand(r),
+        ready = r.status == "inviting" and Guild.InviteReady(full) }
+end
+
+local function SendOpenerNow(full)
+    local _, why = Guild.SendOpener(full)
+    if why == "rank" then
+        ns.Print("your guild rank cannot invite players.")
+    elseif why == "held" then
+        ns.Print(string.format("the game is still limiting your messages: try again in %d s.", math.ceil(ns.Outbox.Hold())))
+    end
+end
+
+-- The one action for a player on the Invited list, or nil: { label, tip,
+-- copy (Forever's command, nothing is sent), run }. Each run is exactly what
+-- a row click did: one opener, one invite, or the command to copy.
+local function InvitedAction(full)
+    -- A rank the game does not let invite gets no send here (and no command).
+    if not (Guild.Mine() and Guild.Can("invite")) then return nil end
+    local f = InvitedFlags(full)
+    if not f then return nil end
+    if Guild.WhisperFirst then
+        if f.unsent then
+            return { kind = "opener", label = "Send message", tip = "Sends your message to them now (one whisper).", run = function() SendOpenerNow(full) end }
+        elseif f.command then
+            return { kind = "copy", label = "/ginvite", copy = true, tip = "Shows " .. Guild.InviteCommand(full) .. " to copy. " .. COMMAND_TIP,
+                run = function() CopyInvite(full) end }
+        end
+        return nil
+    end
+    if f.ready then
+        return { kind = "invite", label = "Invite", tip = "Sends the guild invite now (your message went out).", run = function() Guild.Invite(full) end }
+    elseif f.unconfirmed then
+        return { kind = "reinvite", label = "Invite again", tip = "Invites again: the invite only, no whisper.", run = function() Guild.Invite(full, nil, true) end }
+    elseif f.uninvited then
+        return { kind = "uninvited", label = "Invite", tip = "The guild invite was not sent: invites now" .. (f.r.unsent and " (with your message)." or "."),
+            run = function() Guild.Invite(full, nil, Guild.Recruit(full).unsent == nil) end }
+    elseif f.unsent then
+        return { kind = "opener", label = "Send message", tip = "Sends your message to them now (one whisper).", run = function() SendOpenerNow(full) end }
+    end
+    return nil
+end
+UI.InvitedAction = InvitedAction
+
+-- The same action as when the button was drawn: the record may have moved
+-- on since (a queued message went out, the invite became ready). Then the
+-- click sends nothing and the button is drawn again with what it does now.
+local function SameAction(a, drawn)
+    return a ~= nil and drawn ~= nil and a.kind == drawn.kind and a.label == drawn.label
+end
+UI.SameAction = SameAction
+
+-- The row's send button (Style.List opts.rowButton). The action is read
+-- again at the click: the row may be older than the record.
+local function InvitedButton(item)
+    if not item.full then return nil end
+    local a = InvitedAction(item.full)
+    if not a then return nil end
+    return { label = a.label, kind = "send", width = 92, tooltip = { a.tip },
+        onClick = function(it)
+            local now = it and it.full and InvitedAction(it.full)
+            if SameAction(now, a) then now.run() else UI.Refresh() end
+        end }
+end
+
 -- x: a live record's { full, r }, or a cold record's name (read when drawn).
 local function InvitedRow(x)
     local r, full
@@ -666,9 +932,10 @@ local function InvitedRow(x)
         text = NameText(full, r.classFile) .. HEX.muted .. "  " .. (r.level and (r.level .. " ") or "")
             .. (r.classFile and ns.ClassName(r.classFile) or "") .. (r.zone and ("  ·  " .. r.zone) or "") .. "|r"
             .. (r.replied and (HEX.good .. "  replied|r") or "")
+            .. (r.ignoring and (HEX.gold .. "  ignores you|r") or "")
             .. (queued and (HEX.muted .. "  message queued|r") or unsent and (HEX.gold .. "  no message|r") or "")
             .. (inviteIn and (inviteIn > 0 and string.format("%s  invite in %d s|r", HEX.muted, math.ceil(inviteIn))
-                or (HEX.bad .. "  click to invite|r")) or ""),
+                or (HEX.bad .. "  invite ready|r")) or ""),
         cols = { st[2] .. st[1] .. "|r", HEX.muted .. (r.by and Guild.Short(r.by) or "") .. "|r" },
         tooltip = function(owner)
             local lines = { Guild.Short(full), "Status: " .. st[1] .. (r.t and ("  (" .. date("%b %d %H:%M", r.t) .. ")") or "") }
@@ -678,10 +945,8 @@ local function InvitedRow(x)
             if r.whisper then lines[#lines + 1] = HEX.muted .. "Whisper: " .. r.whisper .. "|r" end
             if queued then
                 lines[#lines + 1] = HEX.muted .. "Your message waits its turn (the game sends about one whisper a second).|r"
-                if unsent then lines[#lines + 1] = HEX.white .. "Click|r: send it now (one whisper)" end
             elseif r.unsent then
                 lines[#lines + 1] = HEX.gold .. "Your message did not reach them (the game was limiting messages).|r"
-                if unsent then lines[#lines + 1] = HEX.white .. "Click|r: send it now (one whisper)" end
             end
             local check = CheckText(r)
             if check then lines[#lines + 1] = check end
@@ -690,18 +955,17 @@ local function InvitedRow(x)
                     or (HEX.muted .. "Whispered. Nothing is invited until you type /ginvite.|r")
             end
             if command and not unsent then
-                lines[#lines + 1] = HEX.white .. "Click|r: shows " .. Guild.InviteCommand(full) .. " to copy"
                 lines[#lines + 1] = HEX.muted .. COMMAND_TIP .. " \"Invited\" means the game said \"You have invited\".|r"
             end
-            if unconfirmed then lines[#lines + 1] = HEX.white .. "Click|r: invite again (invite only, no whisper)" end
-            if r.status == "inviting" then
-                lines[#lines + 1] = inviteIn == 0 and (HEX.white .. "Click|r: send the guild invite")
-                    or (HEX.muted .. "Delayed invite: click them 10 s after your message went out to send the guild invite.|r")
+            if r.status == "inviting" and inviteIn ~= 0 then
+                lines[#lines + 1] = HEX.muted .. "Delayed invite: the Invite button comes 10 s after your message went out.|r"
             elseif r.status == "uninvited" then
                 lines[#lines + 1] = HEX.gold .. "The guild invite was not sent (the game refused it, or you reloaded first).|r"
-                lines[#lines + 1] = HEX.white .. "Click|r: invite now" .. (r.unsent and " (with your message)" or "")
             end
             if r.replied then lines[#lines + 1] = "They whispered back " .. date("%b %d %H:%M", r.replied) end
+            lines[#lines + 1] = HEX.white .. "Click|r: open the conversation (sends nothing)"
+            local a = InvitedAction(full)
+            if a then lines[#lines + 1] = HEX.white .. a.label .. "|r button: " .. a.tip end
             lines[#lines + 1] = HEX.white .. "Right-click|r: forget"
             ns.Tooltip.Text(owner, lines)
         end,
@@ -796,8 +1060,59 @@ local function InvitedFound(base, needle)
     end, 15)
 end
 
+-- Which filters a listed player falls under: replied, waiting, joined,
+-- declined, blocked. A cold record is read from its string.
+local function ChipFlags(item, g)
+    local status, replied, ignoring, saidNo
+    local r = not item.cold and g.recruits[item.full]
+    if r then
+        status, replied, ignoring, saidNo = r.status, r.replied, r.ignoring, r.saidNo
+    else
+        local s = g.cold[item.full]
+        if type(s) ~= "string" then return false, false, false, false, false end
+        status = Guild.ColdField(s, "status", g)
+        replied = Guild.ColdField(s, "replied", g)
+        ignoring = Guild.ColdField(s, "ignoring", g)
+        saidNo = Guild.ColdField(s, "saidNo", g)
+    end
+    replied = replied ~= nil and replied ~= false and replied ~= ""
+    ignoring = ignoring ~= nil and ignoring ~= false and ignoring ~= ""
+    saidNo = saidNo ~= nil and saidNo ~= false and saidNo ~= ""
+    return replied, WAITING[status] == true and not replied and not ignoring and not saidNo,
+        status == "joined", status == "declined" or saidNo, ignoring
+end
+
+-- The listed players under each filter, with the counts; kept until the
+-- list or a conversation changes.
+local function Grouped(items)
+    local g = Guild.Data()
+    return ns.Data.Memo("guild:invited:groups", ns.Data.Key("guild.replies") .. "|" .. tostring(items) .. "|" .. tostring(g), function()
+        local lists = { all = items, replied = {}, waiting = {}, joined = {}, declined = {}, blocked = {} }
+        local counts = { all = 0, replied = 0, waiting = 0, joined = 0, declined = 0, blocked = 0 }
+        if not g then return { lists = lists, counts = counts } end
+        local function Put(key, item)
+            local l = lists[key]
+            l[#l + 1] = item
+            counts[key] = counts[key] + 1
+        end
+        for i, item in ipairs(items) do
+            if i % 64 == 0 then ns.Data.Step() end
+            if item.full then
+                counts.all = counts.all + 1
+                local replied, waiting, joined, declined, blocked = ChipFlags(item, g)
+                if replied then Put("replied", item) end
+                if waiting then Put("waiting", item) end
+                if joined then Put("joined", item) end
+                if declined then Put("declined", item) end
+                if blocked then Put("blocked", item) end
+            end
+        end
+        return { lists = lists, counts = counts }
+    end, 15)
+end
+
 -- list nil: just the data (the warm-up). Returns the base data (counts,
--- coldTotal, coldShown).
+-- coldTotal, coldShown) and the items shown.
 local function InvitedList(list)
     local base = InvitedBase()
     if not list then return base end
@@ -814,81 +1129,368 @@ local function InvitedList(list)
         end
         items = m.items
     end
-    list:SetItems(#items > 0 and items or { { text = HEX.muted .. (Guild.WhisperFirst and "Nobody asked yet.|r" or "Nobody invited yet.|r") } })
+    local grouped = Grouped(items)
+    local chip = state.invitedChip or "all"
+    local shown = grouped.lists[chip] or items
+    local words = state.replyWords or ""
+    if words ~= "" then
+        -- The second search: words said in the conversations.
+        local said = {}
+        for _, x in ipairs(FilteredConversations(Guild.Conversations(), "all", words)) do said[x.full] = true end
+        local out = {}
+        for _, item in ipairs(shown) do if item.full and said[item.full] then out[#out + 1] = item end end
+        shown = out
+    end
+    local empty = words ~= "" and "No conversation matches."
+        or chip ~= "all" and "Nobody here."
+        or (Guild.WhisperFirst and "Nobody asked yet." or "Nobody invited yet.")
+    list:SetItems(#shown > 0 and shown or { { text = HEX.muted .. empty .. "|r" } })
+    base.grouped, base.shown = grouped, shown
     return base
 end
+
+-- "/talod guild check": the report of the last hour in the shared report window.
+local function ShowCheck()
+    local lines = Guild.CheckLines()
+    if ns.Probe and ns.Probe.ShowText then
+        ns.Probe.ShowText(table.concat(lines, "\n"))
+    else
+        for _, line in ipairs(lines) do if line ~= "" then ns.Print(line) end end
+    end
+end
+UI.ShowCheck = ShowCheck
 
 local function BuildInvited(parent)
     local v = CreateFrame("Frame", nil, parent)
     v:SetAllPoints()
     v.card = Style.Card(v, "Invited")
-    v.card:SetAllPoints()
-    v.card.sub:SetText(Guild.WhisperFirst
-        and "Everyone you whispered or skipped. Click a \"no message\" row: send your message; any other row that is not invited yet: the /ginvite command to copy. Right-click: forget them."
-        or "Everyone you invited or skipped. Click a \"no message\" row: send your message; a \"not invited\" or \"unconfirmed\" row: invite. Right-click: forget them.")
-    -- A cold row carries no flags: read the record now, with the rules the live rows are built with.
-    local function Flags(item)
-        if not item.cold then return item end
-        local r = Guild.Recruit(item.full)
-        if not r then return item end
-        return { full = item.full,
-            unsent = r.unsent and (r.status == "invited" or r.status == "inviting" or r.status == "asked"),
-            uninvited = r.status == "uninvited", unconfirmed = Guild.InviteCheck(r) == "unconfirmed", command = NeedsCommand(r),
-            ready = r.status == "inviting" and Guild.InviteReady(item.full) }
-    end
-    v.list = Style.List(v.card.content, { labelWidth = 86, colWidths = { 110, 90 }, search = true, time = true,
+    v.card:SetPoint("TOPLEFT")
+    v.card:SetPoint("BOTTOMLEFT")
+    v.card:SetWidth(480)
+    v.card.sub:SetText("Click a player: their conversation. Sending is only ever the button on the right of a row.")
+    local lc = v.card.content
+    v.chips = Style.Chips(lc, CHIPS, function(key)
+        state.invitedChip = key
+        v.chips:Select(key)
+        UI.Refresh()
+    end)
+    v.chips:SetPoint("TOPLEFT", 4, -3)
+    v.chips:Select("all")
+    -- Words said in the conversations (the list's own box searches names).
+    v.words = Style.SearchBox(lc, function(text)
+        state.replyWords = text:lower():gsub("^%s+", ""):gsub("%s+$", "")
+        if v:IsShown() then v:Refresh() end
+    end, "Search messages...")
+    v.words:SetPoint("TOPLEFT", 4, -27)
+    v.words:SetPoint("TOPRIGHT", -106, -27)
+    v.check = Style.Button(lc, "Check invites", 98, ShowCheck,
+        "A report of your invites of the last hour: confirmed by the game, answered, unconfirmed. Opens in the report window to copy.",
+        { height = 20 })
+    v.check:SetPoint("TOPRIGHT", -4, -27)
+    local holder = CreateFrame("Frame", nil, lc)
+    holder:SetPoint("TOPLEFT", 0, -50)
+    holder:SetPoint("BOTTOMRIGHT")
+    v.list = Style.List(holder, { labelWidth = 86, colWidths = { 110, 70 }, search = true, time = true,
         hint = "Search names, classes, status...",
+        rowButton = InvitedButton, rowButtonWidth = 92,
+        selected = function(item) return item.full ~= nil and item.full == state.chat end,
         -- The search also looks at older invites that are not listed.
         onSearch = function() v:Refresh() end,
         onClick = function(item, button)
             if not item.full then return end
-            item = Flags(item)
-            if button == "RightButton" then
-                Guild.Forget(item.full)
-            elseif Guild.WhisperFirst then
-                -- A dropped or waiting opener goes first; otherwise the click gives the command to type.
-                if item.unsent then
-                    local _, why = Guild.SendOpener(item.full)
-                    if why == "held" then
-                        ns.Print(string.format("the game is still limiting your messages: try again in %d s.", math.ceil(ns.Outbox.Hold())))
-                    end
-                elseif item.command then
-                    CopyInvite(item.full)
-                end
-            elseif item.ready then
-                Guild.Invite(item.full)
-            elseif item.unconfirmed then
-                Guild.Invite(item.full, nil, true)
-            elseif item.uninvited then
-                Guild.Invite(item.full, nil, Guild.Recruit(item.full).unsent == nil)
-            elseif item.unsent then
-                local _, why = Guild.SendOpener(item.full)
-                if why == "held" then
-                    ns.Print(string.format("the game is still limiting your messages: try again in %d s.", math.ceil(ns.Outbox.Hold())))
-                end
-            end
+            if button == "RightButton" then Guild.Forget(item.full) return end
+            -- Selecting sends nothing: level and class only from the roster or
+            -- a unit in view; the /who is the Look up button's.
+            state.chat = item.full
+            if HasTalk(Guild.Recruit(item.full)) then Guild.LookUp(item.full, true) end
+            UI.Refresh()
         end })
     v.note = Note(v.card.content)
 
+    -- The conversation with the selected player.
+    v.right = Style.Card(v, "")
+    v.right:SetPoint("TOPLEFT", v.card, "TOPRIGHT", 10, 0)
+    v.right:SetPoint("BOTTOMRIGHT")
+    local c = v.right.content
+    -- The selected row's action (the row's send button, here too).
+    v.act = Style.Button(c, "", 104, function()
+        local a = state.chat and InvitedAction(state.chat)
+        if SameAction(a, v.act.drawn) then a.run() else UI.Refresh() end
+    end, function() return v.act.tip end, { kind = "send" })
+    v.act:SetPoint("TOPRIGHT", -6, -4)
+    -- Classic Era: while talking, one guild invite (no whisper) per click,
+    -- next to the row's own action when it has another one.
+    if not Guild.WhisperFirst then
+        v.invite = Style.Button(c, "Invite again", 104, function()
+            if not state.chat then return end
+            Guild.Invite(state.chat, nil, true)
+            UI.Refresh()
+        end, "Sends the guild invite only, no whisper: you are already talking.", { kind = "send" })
+        v.invite:SetPoint("TOPRIGHT", -6, -4)
+    end
+    v.clear = Style.Button(c, "Delete", 64, function()
+        if state.chat then
+            Guild.ClearChat(state.chat)
+            UI.Refresh()
+        end
+    end, "Delete this conversation (the player stays in the list).")
+    v.clear:SetPoint("TOPRIGHT", -116, -4)
+    v.no = Style.Button(c, "Said no", 72, function()
+        if state.chat then
+            local r = Guild.Recruit(state.chat)
+            Guild.SaidNo(state.chat, not (r and r.saidNo))
+            UI.Refresh()
+        end
+    end, function()
+        local r = state.chat and Guild.Recruit(state.chat)
+        return r and r.saidNo and "Takes back \"said no\": they can be invited again."
+            or "They said no: no invite goes to them (a delayed invite waiting for your click is dropped) and they are never offered again. The conversation stays."
+    end)
+    v.no:SetPoint("RIGHT", v.clear, "LEFT", -4, 0)
+    v.status = Style.Text(c, "GameFontHighlightSmall")
+    v.status:SetPoint("TOPLEFT", 8, -9)
+    v.status:SetPoint("RIGHT", v.no, "LEFT", -8, 0)
+
+    -- Second row: one click = one game action for this one player.
+    -- The form you type after /w: "First Surname" on your realm.
+    v.copy = ns.Utils.CopyButton(c, "Copy username", 104, function()
+        return state.chat and Guild.Target(state.chat)
+    end, "name", "Shows the name ready to copy (Ctrl+C): the game cannot put text on the clipboard itself.")
+    v.copy:SetPoint("TOPRIGHT", -6, -30)
+    v.bnet = Style.Button(c, "Add Battle.net", 104, function()
+        if state.chat then Guild.BattleNetInvite(state.chat) end
+    end, function()
+        local fn, why = state.chat and Guild.BattleNetRoute(state.chat)
+        return fn and "Opens the game's Battle.net friend request for this player; you confirm it there."
+            or (why or "Pick a conversation.")
+    end, { title = "Battle.net friend request" })
+    v.bnet:SetPoint("RIGHT", v.copy, "LEFT", -4, 0)
+    v.party = Style.Button(c, "Invite to party", 104, function()
+        if state.chat and not Guild.PartyInvite(state.chat) then
+            ns.Print("the game did not accept the party invite for " .. Guild.Short(state.chat) .. ".")
+        end
+    end, "Sends one party invite to this player.", { kind = "send" })
+    v.party:SetPoint("RIGHT", v.bnet, "LEFT", -4, 0)
+    v.report = Style.Button(c, "Report", 64, function()
+        if state.chat then Guild.Report(state.chat) end
+    end, function()
+        local kind, why = Guild.ReportRoute(state.chat)
+        return kind == "chat" and "Opens the game's report window on their last whisper; you pick the reason and send it there. Works even when they ignore you."
+            or kind == "player" and "Opens the game's report window for this player (their whispers from before your last login or reload can no longer be pointed at); you pick the reason there."
+            or (why or "Pick a conversation.")
+    end, { title = "Report player" })
+    v.report:SetPoint("RIGHT", v.party, "LEFT", -4, 0)
+
+    local msgs = CreateFrame("ScrollingMessageFrame", nil, c)
+    msgs:SetPoint("TOPLEFT", 8, -60)
+    msgs:SetPoint("BOTTOMRIGHT", -8, 40)
+    msgs:SetFontObject("GameFontHighlightSmall")
+    msgs:SetJustifyH("LEFT")
+    msgs:SetFading(false)
+    msgs:SetMaxLines(200)
+    msgs:EnableMouseWheel(true)
+    msgs:SetScript("OnMouseWheel", function(self, delta)
+        if delta > 0 then self:ScrollUp() else self:ScrollDown() end
+    end)
+    v.msgs = msgs
+
+    -- Forever: the invite is typed by the player. A box with the command
+    -- and a copy button; TALOD never opens or fills the chat box.
+    if Guild.WhisperFirst then
+        v.typed = Style.Notice(nil, nil, { flat = true, parent = c, width = 330, tone = "accent" })
+        v.typed:SetPoint("BOTTOMLEFT", 6, 40)
+        v.typed:Hide()
+    end
+
+    local box = CreateFrame("EditBox", nil, c)
+    box:SetHeight(24)
+    box:SetPoint("BOTTOMLEFT", 6, 8)
+    box:SetPoint("BOTTOMRIGHT", -82, 8)
+    -- One /who for this one player (they may have levelled): only from this click.
+    v.lookup = Style.Button(c, "Look up", 70, function()
+        if not state.chat then return end
+        local from, why = Guild.LookUp(state.chat)
+        if why == "noapi" then
+            ns.Print("no /who: this game client offers no /who search to addons.")
+        elseif why == "pending" then
+            ns.Print("no /who now: the last search has not answered yet.")
+        elseif why == "wait" then
+            ns.Print(string.format("no /who now: the game allows one search every few seconds (again in %d s).", math.ceil(Guild.WhoWait())))
+        elseif from == nil then
+            ns.Print("no /who now: the game did not take the search.")
+        end
+        UI.Refresh()
+    end, "Updates their level and class: from your roster or a player in view, else one /who search for this name.",
+        { kind = "send", height = 24 })
+    v.lookup:SetPoint("BOTTOMRIGHT", -6, 8)
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(255)
+    box:SetFontObject("GameFontHighlightSmall")
+    box:SetTextInsets(8, 8, 0, 0)
+    local bg = Style.Texture(box, "BACKGROUND", COLORS.button)
+    bg:SetAllPoints()
+    Style.Border(box, COLORS.border)
+    box.hint = Style.Text(box, "GameFontDisableSmall")
+    box.hint:SetPoint("LEFT", 8, 0)
+    box.hint:SetText("Type a reply, Enter sends it")
+    box:SetScript("OnTextChanged", function(self) self.hint:SetShown((self:GetText() or "") == "") end)
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnEnterPressed", function(self)
+        if state.chat then
+            local ok, why = Guild.Reply(state.chat, self:GetText() or "")
+            if ok or why == "repeat" then self:SetText("") end
+            if why == "repeat" then ns.Print("already sent to " .. Guild.Short(state.chat) .. " a moment ago; not sent twice.") end
+            -- Held: the text stays in the box for Enter once the pause is over.
+            if why == "held" then
+                ns.Print(string.format("the game is limiting your messages: not sent, try again in %d s.", math.ceil(ns.Outbox.Hold())))
+            end
+        end
+        self:ClearFocus()
+    end)
+    v.box = box
+
     function v:Footer()
+        local chat = db().guildHideChat and "Openers and answers you have not written back to stay out of the chat window."
+            or "These whispers also show in the chat window."
         if Guild.WhisperFirst then
-            return "Asked: you whispered them. Replied: they answered, so type /ginvite (click the row for the command to copy). "
-                .. "Invited: the game said \"You have invited\" them. Joined: they showed up in the roster or the game said so. "
-                .. "Declined / offline / in a guild: from the game's messages. " .. ns.Cmd.Text("guild") .. " check sums up the last hour."
+            return "Asked: you whispered them. Replied: they answered, so type /ginvite (the /ginvite button gives the command to copy). "
+                .. "Invited: the game said \"You have invited\" them. " .. chat
                 .. (self.capNote and ("  " .. self.capNote) or "")
         end
-        return "Joined: they showed up in the roster or the game said so. Declined / offline / in a guild: from the game's messages. "
-            .. "Unconfirmed: the game never said \"You have invited\" them. " .. ns.Cmd.Text("guild") .. " check sums up the last hour."
-            .. (self.capNote and ("  " .. self.capNote) or "")
+        return "Joined: they showed up in the roster or the game said so. Unconfirmed: the game never said \"You have invited\" them. "
+            .. chat .. (self.capNote and ("  " .. self.capNote) or "")
+    end
+
+    -- The selected player's conversation, buttons and status.
+    function v:Pane()
+        local full = state.chat
+        local r = full and Guild.Recruit(full)
+        local talk = HasTalk(r)
+        local a = r and InvitedAction(full)
+        -- Forever's command shows in its own box; every other action is the send button.
+        local typed = Guild.WhisperFirst and r and not r.saidNo and r.status ~= "joined"
+            and (NeedsCommand(r) or talk) and not (a and not a.copy)
+        self.act:SetShown(a ~= nil and not (a.copy and typed))
+        self.act.drawn = a
+        if a then
+            self.act:SetLabel(a.label)
+            self.act.tip = { a.tip, HEX.muted .. "The same as the button on their row.|r" }
+        end
+        if self.invite then
+            -- Not twice: the row's action may already be this invite.
+            local again = talk and not r.saidNo and Guild.Mine() and Guild.Can("invite")
+                and not (a and a.kind == "reinvite") and true or false
+            self.invite:SetShown(again)
+            local both = again and self.act:IsShown()
+            if self.invitePlaced ~= both then
+                self.invitePlaced = both
+                self.invite:ClearAllPoints()
+                self.clear:ClearAllPoints()
+                if both then
+                    self.invite:SetPoint("RIGHT", self.act, "LEFT", -4, 0)
+                    self.clear:SetPoint("RIGHT", self.invite, "LEFT", -4, 0)
+                else
+                    self.invite:SetPoint("TOPRIGHT", -6, -4)
+                    self.clear:SetPoint("TOPRIGHT", -116, -4)
+                end
+            end
+        end
+        self.clear:SetShown(r ~= nil and r.chat ~= nil and #r.chat > 0)
+        self.no:SetShown(r ~= nil and (r.saidNo or (talk and r.status ~= "joined")) and true or false)
+        if r then self.no:SetLabel(r.saidNo and "Undo no" or "Said no") end
+        self.copy:SetShown(r ~= nil)
+        for _, b in ipairs({ self.party, self.bnet, self.report }) do b:SetShown(talk) end
+        if talk then
+            self.bnet:SetAlpha(Guild.BattleNetRoute(full) and 1 or 0.5)
+            self.report:SetAlpha(Guild.ReportRoute(full) and 1 or 0.5)
+        end
+        self.box:SetShown(talk)
+        self.lookup:SetShown(talk)
+        if self.typed then
+            self.typed:SetShown(typed and true or false)
+            if typed and self.typedFor ~= full then
+                self.typedFor = full
+                self.typed:Set({ headline = "Type the invite yourself",
+                    sub = "The game takes a guild invite only typed in the chat box: copy it, press Enter, paste, press Enter.",
+                    pages = { { key = "cmd", blocks = { { text = HEX.white .. Guild.InviteCommand(full) .. "|r" } } } },
+                    buttons = { { label = "Copy /ginvite", width = 110, tooltip = COMMAND_TIP,
+                        onClick = function() if state.chat then CopyInvite(state.chat) end end } } })
+                self.copyInvite = self.typed.buttons[1]
+            end
+            self.msgs:SetPoint("BOTTOMRIGHT", -8, typed and (44 + (self.typed:GetHeight() or 60)) or 40)
+        end
+        if not r then
+            self.right.title:SetText("")
+            self.status:SetText(HEX.muted .. "Pick a player on the left: their conversation shows here.|r")
+            self.msgs:Clear()
+            self.shown = nil
+            return
+        end
+        if talk then Guild.MarkRead(full) end
+        local st = StatusOf(r)
+        self.right.title:SetText(NameText(full, r.classFile) .. HEX.muted .. "  " .. (r.level and (r.level .. " ") or "")
+            .. (r.classFile and ns.ClassName(r.classFile) or "") .. "|r")
+        local check = Guild.InviteCheck(r)
+        self.status:SetText(st[2] .. st[1] .. "|r" .. HEX.muted .. (r.invited and ((r.status == "asked" and "  ·  whispered " or "  ·  invited ") .. date("%b %d %H:%M", r.invited)) or "") .. "|r"
+            .. (check == "confirmed" and (HEX.good .. "  ·  confirmed|r") or check == "waiting" and (HEX.muted .. "  ·  not confirmed yet|r") or "")
+            .. (r.ignoring and (HEX.bad .. "  ·  has you on ignore since " .. date("%b %d %H:%M", r.ignoring) .. "|r") or ""))
+        local words = state.replyWords or ""
+        local chat = r.chat or {}
+        local out = Guild.Outgoing(full)
+        local last = chat[#chat]
+        local key = full .. "/" .. #chat .. "/" .. (r.seq or 0) .. "/" .. (last and last.t or 0) .. "/" .. words
+        for _, o in ipairs(out) do key = key .. "/" .. o.state .. o.text end
+        if self.shown ~= key then
+            self.shown = key
+            self.msgs:Clear()
+            if #chat == 0 then self.msgs:AddMessage(HEX.muted .. "No whispers with them yet.|r") end
+            for _, line in ipairs(chat) do
+                -- Lines with the searched words are marked.
+                local hit = words ~= "" and type(line.text) == "string" and line.text:lower():find(words, 1, true)
+                self.msgs:AddMessage((hit and (HEX.gold .. "> |r") or "") .. ChatLine(full, r, line))
+            end
+            -- Not in the conversation until the game echoes it back.
+            for _, o in ipairs(out) do
+                local note = o.state == "queued" and (HEX.muted .. "  (waiting for the game's message pace)|r")
+                    or o.state == "lost" and (HEX.bad .. "  (the game dropped it: not delivered)|r")
+                    or o.state == "ignoring" and (HEX.bad .. "  (not delivered: they have you on ignore)|r")
+                    or o.state == "notfound" and (HEX.bad .. "  (not delivered: they are offline)|r")
+                    or (HEX.muted .. "  (sending...)|r")
+                self.msgs:AddMessage(HEX.muted .. "            You: " .. o.text .. "|r" .. note)
+            end
+        end
     end
 
     function v:Refresh()
-        local canInvite = Guild.Mine() and Guild.Can("invite")
+        -- Conversations stay readable after a rank change took the invite right away.
+        local canInvite = Guild.Mine() and (Guild.Can("invite") or #Guild.Conversations() > 0)
         self.list:SetShown(canInvite and true or false)
+        self.chips:SetShown(canInvite and true or false)
+        self.words:SetShown(canInvite and true or false)
+        self.check:SetShown(canInvite and true or false)
+        self.right:SetShown(canInvite and true or false)
         self.note:SetShown(not canInvite)
         self.note:SetText(Guild.Mine() and "Your guild rank cannot invite players." or "You are not in a guild.")
         if not canInvite then return end
+        self.chips:Select(state.invitedChip or "all")
         local data = InvitedList(self.list)
+        for _, def in ipairs(CHIPS) do self.chips:SetCount(def.key, data.grouped.counts[def.key]) end
+        -- The selection stays while its player is listed; else the first
+        -- unread conversation, else the first player.
+        local shown, valid = data.shown, false
+        for _, item in ipairs(shown) do if item.full and item.full == state.chat then valid = true break end end
+        if not valid then
+            state.chat = nil
+            local g = Guild.Data()
+            for _, item in ipairs(shown) do
+                local r = item.full and not item.cold and g and g.recruits[item.full]
+                if r and (r.unread or 0) > 0 then state.chat = item.full break end
+            end
+            if not state.chat then
+                for _, item in ipairs(shown) do if item.full then state.chat = item.full break end end
+            end
+        end
+        self:Pane()
         local counts = data.counts
         self.capNote = data.coldTotal > data.coldShown
             and string.format("Showing the newest %s of %s older invites; search by name finds any of them.",
@@ -1008,18 +1610,13 @@ local function BuildRoster(parent)
     bar:SetPoint("TOPLEFT", 6, -4)
     bar:SetPoint("TOPRIGHT", -6, -4)
     bar:SetHeight(22)
-    v.filters = {}
-    local x = 0
-    for _, f in ipairs({ { "all", "All" }, { "online", "Online" }, { "inactive", "Inactive" } }) do
-        local b = Style.Button(bar, f[2], 84, function() state.roster = f[1] UI.Refresh() end, nil, { height = 20 })
-        b:SetPoint("TOPLEFT", x, 0)
-        b.key = f[1]
-        x = x + 88
-        v.filters[#v.filters + 1] = b
-    end
-    v.refresh = Style.Button(bar, "Refresh roster", 110, function() Guild.RequestRoster() end,
-        "Asks the game for the roster again (it answers at most every few seconds).", { height = 20 })
-    v.refresh:SetPoint("TOPRIGHT")
+    v.chips = Style.Chips(bar, { { key = "all", label = "All" }, { key = "online", label = "Online" }, { key = "inactive", label = "Inactive" } },
+        function(key)
+            state.roster = key
+            v.chips:Select(key)
+            UI.Refresh()
+        end)
+    v.chips:SetPoint("TOPLEFT")
     local holder = CreateFrame("Frame", nil, v.card.content)
     holder:SetPoint("TOPLEFT", 0, -30)
     holder:SetPoint("BOTTOMRIGHT")
@@ -1033,10 +1630,11 @@ local function BuildRoster(parent)
     end
 
     function v:Refresh()
-        for _, b in ipairs(self.filters) do Paint(b, b.key == state.roster) end
+        self.chips:Select(state.roster)
         local g = Guild.Mine() and Guild.Data()
         self.note:SetShown(not g)
         self.list:SetShown(g and true or false)
+        self.chips:SetShown(g and true or false)
         if not g then self.note:SetText("You are not in a guild.") return end
         -- Kept until the roster changes (a minute at most: "last online" ages).
         local data = ns.Data.List(self.list, {
@@ -1057,6 +1655,9 @@ local function BuildRoster(parent)
             self.list:SetItems({ { text = HEX.muted .. (data.all == 0 and "The roster has not been read yet: click Refresh roster." or "Nobody here.") .. "|r" } })
         end
         local all, online, inactive = data.all, data.online, data.inactive
+        self.chips:SetCount("all", all)
+        self.chips:SetCount("online", online)
+        self.chips:SetCount("inactive", inactive)
         self.card.title:SetText("Roster  " .. HEX.muted .. all .. " members  ·  " .. online .. " online  ·  |r"
             .. (inactive > 0 and HEX.bad or HEX.muted) .. inactive .. " inactive|r")
         self.card.sub:SetText(g.lastRead and ("Read " .. ns.FormatAge(time() - g.lastRead) .. " ago.") or "Not read yet.")
@@ -1131,9 +1732,7 @@ local function BuildActivity(parent)
         if IsShiftKeyDown and IsShiftKeyDown() then Act.Clear() UI.Refresh() end
     end, "Shift-click: forget every count kept for this guild and start over.", { title = "Clear", height = 20 })
     v.clear:SetPoint("TOPRIGHT")
-    v.refresh = Style.Button(bar, "Refresh roster", 110, function() Guild.RequestRoster() end,
-        "Asks the game for the roster again: who is online with you comes from it.", { height = 20 })
-    v.refresh:SetPoint("RIGHT", v.clear, "LEFT", -4, 0)
+    Bind("guildChatDays", "tool", "members/roster#Activity")
     local holder = CreateFrame("Frame", nil, v.card.content)
     holder:SetPoint("TOPLEFT", 0, -30)
     holder:SetPoint("BOTTOMRIGHT")
@@ -1155,7 +1754,6 @@ local function BuildActivity(parent)
         for _, b in ipairs(self.filters) do b:SetShown(officer and true or false) end
         self.window:SetShown(officer and true or false)
         self.clear:SetShown(officer and true or false)
-        self.refresh:SetShown(officer and true or false)
         self.list:SetShown(officer and true or false)
         self.note:SetShown(not officer)
         if not officer then
@@ -1187,298 +1785,6 @@ local function BuildActivity(parent)
         self.card.sub:SetText("Guild chat: you were online on " .. watched .. " of the last " .. window .. " days"
             .. (since and (", counting since " .. ShortDate(since)) or ", counting from now")
             .. (((g and g.chatHidden) or 0) > 0 and (HEX.gold .. "  ·  " .. g.chatHidden .. " lines the game hid the sender of|r") or "") .. ".")
-    end
-    return v
-end
-
----------------------------------------------------------------------------
--- Replies: whispers with players you invited
----------------------------------------------------------------------------
-local function ChatLine(full, r, c)
-    local who = c.me and (HEX.compare .. "You|r") or NameText(full, r.classFile)
-    return HEX.muted .. date("%b %d %H:%M", c.t) .. "|r  " .. who .. ": " .. c.text
-end
-UI.ChatLine = ChatLine
-
--- The Replies filters and each conversation's tag (Guild.ReplyGroup).
-local REPLY_GROUPS = {
-    { key = "all", label = "All" },
-    { key = "joined", label = "Joined", hex = HEX.good, tip = "They joined the guild." },
-    { key = "declined", label = "Declined", hex = HEX.bad, tip = "They declined the invite, or you marked that they said no." },
-    { key = "invited", label = "Invited", hex = HEX.compare, tip = "Invited, no answer yet (or offline, in a guild, invited elsewhere)." },
-    { key = "blocked", label = "Blocked", hex = HEX.gold, tip = "They have you on ignore: your whispers do not reach them." },
-}
-local REPLY_GROUP = {}
-for _, g in ipairs(REPLY_GROUPS) do REPLY_GROUP[g.key] = g end
-UI.REPLY_GROUPS = REPLY_GROUPS
-
--- x.hit: the line a message search found (shown instead of the last one).
-local function ConversationRow(x)
-    local r = x.r
-    local line = x.hit or r.chat[#r.chat]
-    local preview = (line.me and "You: " or "") .. line.text
-    if #preview > 30 then preview = preview:sub(1, 28) .. ".." end
-    local g = REPLY_GROUP[x.group]
-    return {
-        text = NameText(x.full, r.classFile) .. (r.level and (HEX.muted .. " " .. r.level .. "|r") or "")
-            .. HEX.muted .. "  " .. preview .. "|r",
-        cols = { g and (g.hex .. g.label .. "|r") or "", (r.unread or 0) > 0 and (HEX.accent .. r.unread .. "|r") or "" },
-        accent = x.full == state.chat and COLORS.accent or nil,
-    }
-end
-
--- The conversations filtered and tagged; kept until a conversation or a
--- filter changes. Also built by the warm-up: hundreds of conversations tagged
--- in the frame the tab first opened was a hitch.
-local function FilteredConversations(all, group, words)
-    return ns.Data.Memo("guild:replies:filtered", ns.Data.Key("guild.replies") .. "|" .. tostring(all) .. "|" .. group .. "|" .. words, function()
-        local out = {}
-        for i, x in ipairs(all) do
-            if i % 64 == 0 then ns.Data.Step() end
-            local g = Guild.ReplyGroupOf(x.full)
-            local hit = words ~= "" and Guild.ChatFind(x.r, words) or nil
-            if (group == "all" or g == group) and (words == "" or hit) then
-                out[#out + 1] = setmetatable({ full = x.full, group = g, hit = hit }, Guild.ROW)
-            end
-        end
-        return out
-    end, 10)
-end
-
-local function BuildReplies(parent)
-    local v = CreateFrame("Frame", nil, parent)
-    v:SetAllPoints()
-    v.left = Style.Card(v, "Conversations")
-    v.left:SetPoint("TOPLEFT")
-    v.left:SetPoint("BOTTOMLEFT")
-    v.left:SetWidth(300)
-    v.left.sub:SetText(Guild.WhisperFirst and "Players you whispered who answered." or "Players you invited who whispered with you.")
-    local lc = v.left.content
-    local bar = CreateFrame("Frame", nil, lc)
-    bar:SetPoint("TOPLEFT", 4, -3)
-    bar:SetPoint("TOPRIGHT", -4, -3)
-    bar:SetHeight(20)
-    v.groups = {}
-    local x = 0
-    for _, g in ipairs(REPLY_GROUPS) do
-        local b = Style.Button(bar, g.label, g.key == "all" and 36 or 56, function()
-            state.replyGroup = g.key
-            UI.Refresh()
-        end, g.tip, { height = 20 })
-        b:SetPoint("TOPLEFT", x, 0)
-        b.key = g.key
-        x = x + (g.key == "all" and 38 or 58)
-        v.groups[#v.groups + 1] = b
-    end
-    -- The second search: words said in the conversations (the list's own
-    -- box searches names).
-    v.words = Style.SearchBox(lc, function(text)
-        state.replyWords = text:lower():gsub("^%s+", ""):gsub("%s+$", "")
-        if v:IsShown() then v:Refresh() end
-    end, "Search messages...")
-    v.words:SetPoint("TOPLEFT", 4, -27)
-    v.words:SetPoint("TOPRIGHT", -4, -27)
-    local holder = CreateFrame("Frame", nil, lc)
-    holder:SetPoint("TOPLEFT", 0, -50)
-    holder:SetPoint("BOTTOMRIGHT")
-    v.list = Style.List(holder, { colWidths = { 56, 22 }, search = true, hint = "Search names...",
-        onClick = function(item)
-            if item.full then
-                state.chat = item.full
-                -- A click: may run one /who for this one player (they may have levelled).
-                Guild.LookUp(item.full)
-                UI.Refresh()
-            end
-        end })
-
-    v.right = Style.Card(v, "")
-    v.right:SetPoint("TOPLEFT", v.left, "TOPRIGHT", 10, 0)
-    v.right:SetPoint("BOTTOMRIGHT")
-    local c = v.right.content
-    v.invite = Style.Button(c, Guild.WhisperFirst and "/ginvite" or "Invite again", 100, function()
-        if not state.chat then return end
-        if Guild.WhisperFirst then CopyInvite(state.chat) return end
-        Guild.Invite(state.chat, nil, true)
-        UI.Refresh()
-    end, Guild.WhisperFirst and ("Shows the guild invite command for this player to copy. " .. COMMAND_TIP)
-        or "Sends the guild invite only, no whisper: you are already talking.")
-    v.invite:SetPoint("TOPRIGHT", -6, -4)
-    v.clear = Style.Button(c, "Delete", 64, function()
-        if state.chat then
-            Guild.ClearChat(state.chat)
-            state.chat = nil
-            UI.Refresh()
-        end
-    end, "Delete this conversation (the player stays in Invited).")
-    v.clear:SetPoint("RIGHT", v.invite, "LEFT", -4, 0)
-    v.no = Style.Button(c, "Said no", 72, function()
-        if state.chat then
-            local r = Guild.Recruit(state.chat)
-            Guild.SaidNo(state.chat, not (r and r.saidNo))
-            UI.Refresh()
-        end
-    end, function()
-        local r = state.chat and Guild.Recruit(state.chat)
-        return r and r.saidNo and "Takes back \"said no\": they can be invited again."
-            or "They said no: no invite goes to them (a delayed invite waiting for your click is dropped) and they are never offered again. The conversation stays."
-    end)
-    v.no:SetPoint("RIGHT", v.clear, "LEFT", -4, 0)
-    v.status = Style.Text(c, "GameFontHighlightSmall")
-    v.status:SetPoint("TOPLEFT", 8, -9)
-    v.status:SetPoint("RIGHT", v.no, "LEFT", -8, 0)
-
-    -- Second row: one click = one game action for this one player.
-    -- The form you type after /w: "First Surname" on your realm.
-    v.copy = ns.Utils.CopyButton(c, "Copy username", 104, function()
-        return state.chat and Guild.Target(state.chat)
-    end, "name", "Shows the name ready to copy (Ctrl+C): the game cannot put text on the clipboard itself.")
-    v.copy:SetPoint("TOPRIGHT", v.invite, "BOTTOMRIGHT", 0, -4)
-    v.bnet = Style.Button(c, "Add Battle.net", 104, function()
-        if state.chat then Guild.BattleNetInvite(state.chat) end
-    end, function()
-        local fn, why = state.chat and Guild.BattleNetRoute(state.chat)
-        return fn and "Opens the game's Battle.net friend request for this player; you confirm it there."
-            or (why or "Pick a conversation.")
-    end, { title = "Battle.net friend request" })
-    v.bnet:SetPoint("RIGHT", v.copy, "LEFT", -4, 0)
-    v.party = Style.Button(c, "Invite to party", 104, function()
-        if state.chat and not Guild.PartyInvite(state.chat) then
-            ns.Print("the game did not accept the party invite for " .. Guild.Short(state.chat) .. ".")
-        end
-    end, "Sends one party invite to this player.")
-    v.party:SetPoint("RIGHT", v.bnet, "LEFT", -4, 0)
-    v.report = Style.Button(c, "Report", 64, function()
-        if state.chat then Guild.Report(state.chat) end
-    end, function()
-        local kind, why = Guild.ReportRoute(state.chat)
-        return kind == "chat" and "Opens the game's report window on their last whisper; you pick the reason and send it there. Works even when they ignore you."
-            or kind == "player" and "Opens the game's report window for this player (their whispers from before your last login or reload can no longer be pointed at); you pick the reason there."
-            or (why or "Pick a conversation.")
-    end, { title = "Report player" })
-    v.report:SetPoint("RIGHT", v.party, "LEFT", -4, 0)
-
-    local msgs = CreateFrame("ScrollingMessageFrame", nil, c)
-    msgs:SetPoint("TOPLEFT", 8, -60)
-    msgs:SetPoint("BOTTOMRIGHT", -8, 40)
-    msgs:SetFontObject("GameFontHighlightSmall")
-    msgs:SetJustifyH("LEFT")
-    msgs:SetFading(false)
-    msgs:SetMaxLines(200)
-    msgs:EnableMouseWheel(true)
-    msgs:SetScript("OnMouseWheel", function(self, delta)
-        if delta > 0 then self:ScrollUp() else self:ScrollDown() end
-    end)
-    v.msgs = msgs
-
-    local box = CreateFrame("EditBox", nil, c)
-    box:SetHeight(24)
-    box:SetPoint("BOTTOMLEFT", 6, 8)
-    box:SetPoint("BOTTOMRIGHT", -6, 8)
-    box:SetAutoFocus(false)
-    box:SetMaxLetters(255)
-    box:SetFontObject("GameFontHighlightSmall")
-    box:SetTextInsets(8, 8, 0, 0)
-    local bg = Style.Texture(box, "BACKGROUND", COLORS.button)
-    bg:SetAllPoints()
-    Style.Border(box, COLORS.border)
-    box.hint = Style.Text(box, "GameFontDisableSmall")
-    box.hint:SetPoint("LEFT", 8, 0)
-    box.hint:SetText("Type a reply, Enter sends it")
-    box:SetScript("OnTextChanged", function(self) self.hint:SetShown((self:GetText() or "") == "") end)
-    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    box:SetScript("OnEnterPressed", function(self)
-        if state.chat then
-            local ok, why = Guild.Reply(state.chat, self:GetText() or "")
-            if ok or why == "repeat" then self:SetText("") end
-            if why == "repeat" then ns.Print("already sent to " .. Guild.Short(state.chat) .. " a moment ago; not sent twice.") end
-            -- Held: the text stays in the box for Enter once the pause is over.
-            if why == "held" then
-                ns.Print(string.format("the game is limiting your messages: not sent, try again in %d s.", math.ceil(ns.Outbox.Hold())))
-            end
-        end
-        self:ClearFocus()
-    end)
-    v.box = box
-
-    function v:Footer()
-        return db().guildHideChat and "Openers and answers you have not written back to stay out of the chat window; once you write back, the conversation shows in chat too."
-            or "These whispers also show in the chat window."
-    end
-
-    function v:Refresh()
-        local all = Guild.Mine() and Guild.Conversations() or {}
-        local group, words = state.replyGroup or "all", state.replyWords or ""
-        for _, b in ipairs(self.groups) do Paint(b, b.key == group) end
-        local convos = FilteredConversations(all, group, words)
-        local valid = false
-        for _, x in ipairs(convos) do if x.full == state.chat then valid = true end end
-        if not valid then
-            state.chat = nil
-            for _, x in ipairs(convos) do
-                if (x.r.unread or 0) > 0 then state.chat = x.full break end
-            end
-            state.chat = state.chat or (convos[1] and convos[1].full)
-        end
-        -- Hundreds of conversations after a long recruiting run: formatted
-        -- when drawn, kept until a conversation or the selection changes.
-        ns.Data.List(self.list, {
-            name = "guild:replies", sources = { "guild.replies" }, key = { tostring(convos), state.chat },
-            row = ConversationRow, empty = #all > 0 and "No conversation matches." or "No replies yet.",
-            build = function(add)
-                for _, x in ipairs(convos) do add(x, { full = x.full, search = Guild.Short(x.full) }) end
-            end,
-        })
-        self.left.title:SetText("Conversations  " .. HEX.muted .. (#convos == #all and #all or (#convos .. " of " .. #all)) .. "|r")
-
-        local full = state.chat
-        local r = full and Guild.Recruit(full)
-        for _, b in ipairs({ self.invite, self.clear, self.party, self.bnet, self.copy, self.report, self.no }) do b:SetShown(r ~= nil) end
-        if r then
-            -- They said no: no "Invite again" (Undo first); a member cannot say no any more.
-            self.invite:SetShown(not r.saidNo)
-            self.no:SetShown(r.saidNo or r.status ~= "joined")
-            self.no:SetLabel(r.saidNo and "Undo no" or "Said no")
-            self.bnet:SetAlpha(Guild.BattleNetRoute(full) and 1 or 0.5)
-            self.report:SetAlpha(Guild.ReportRoute(full) and 1 or 0.5)
-        end
-        self.box:SetShown(r ~= nil)
-        if not r then
-            self.right.title:SetText("")
-            self.status:SetText(HEX.muted .. (Guild.WhisperFirst and "When a player you whispered answers, the conversation shows here.|r"
-                or "When a player you invited whispers you, the conversation shows here.|r"))
-            self.msgs:Clear()
-            self.shown = nil
-            return
-        end
-        Guild.MarkRead(full)
-        local st = StatusOf(r)
-        self.right.title:SetText(NameText(full, r.classFile) .. HEX.muted .. "  " .. (r.level and (r.level .. " ") or "")
-            .. (r.classFile and ns.ClassName(r.classFile) or "") .. "|r")
-        local check = Guild.InviteCheck(r)
-        self.status:SetText(st[2] .. st[1] .. "|r" .. HEX.muted .. (r.invited and ((r.status == "asked" and "  ·  whispered " or "  ·  invited ") .. date("%b %d %H:%M", r.invited)) or "") .. "|r"
-            .. (check == "confirmed" and (HEX.good .. "  ·  confirmed|r") or check == "waiting" and (HEX.muted .. "  ·  not confirmed yet|r") or "")
-            .. (r.ignoring and (HEX.bad .. "  ·  has you on ignore since " .. date("%b %d %H:%M", r.ignoring) .. "|r") or ""))
-        local out = Guild.Outgoing(full)
-        local key = full .. "/" .. #r.chat .. "/" .. (r.seq or 0) .. "/" .. (r.chat[#r.chat].t or 0) .. "/" .. words
-        for _, o in ipairs(out) do key = key .. "/" .. o.state .. o.text end
-        if self.shown ~= key then
-            self.shown = key
-            self.msgs:Clear()
-            for _, line in ipairs(r.chat) do
-                -- Lines with the searched words are marked.
-                local hit = words ~= "" and type(line.text) == "string" and line.text:lower():find(words, 1, true)
-                self.msgs:AddMessage((hit and (HEX.gold .. "> |r") or "") .. ChatLine(full, r, line))
-            end
-            -- Not in the conversation until the game echoes it back.
-            for _, o in ipairs(out) do
-                local note = o.state == "queued" and (HEX.muted .. "  (waiting for the game's message pace)|r")
-                    or o.state == "lost" and (HEX.bad .. "  (the game dropped it: not delivered)|r")
-                    or o.state == "ignoring" and (HEX.bad .. "  (not delivered: they have you on ignore)|r")
-                    or o.state == "notfound" and (HEX.bad .. "  (not delivered: they are offline)|r")
-                    or (HEX.muted .. "  (sending...)|r")
-                self.msgs:AddMessage(HEX.muted .. "            You: " .. o.text .. "|r" .. note)
-            end
-        end
     end
     return v
 end
@@ -1819,18 +2125,9 @@ local function BuildMembers(parent)
     v:SetAllPoints()
     v.card = Style.Card(v, "Shared by members")
     v.card:SetAllPoints()
-    v.card.sub:SetText("What members agreed to share with officers. Ask: one request to everyone online with " .. ns.NAME .. ".")
-    local bar = CreateFrame("Frame", nil, v.card.content)
-    bar:SetPoint("TOPLEFT", 6, -4)
-    bar:SetPoint("TOPRIGHT", -6, -4)
-    bar:SetHeight(22)
-    v.ask = Style.Button(bar, "Ask members", 120, function()
-        if ns.GuildSync then ns.GuildSync.RequestMembers() end
-        UI.Refresh()
-    end, "Sends one request to the guild. Each member's addon answers with only what that member said Yes to.")
-    v.ask:SetPoint("TOPLEFT")
+    v.card.sub:SetText("What members agreed to share with officers. Ask members (title bar): one request to everyone online with " .. ns.NAME .. ".")
     local holder = CreateFrame("Frame", nil, v.card.content)
-    holder:SetPoint("TOPLEFT", 0, -30)
+    holder:SetPoint("TOPLEFT", 0, -4)
     holder:SetPoint("BOTTOMRIGHT")
     v.list = Style.List(holder, { colWidths = { 70, 120, 70 }, search = true, hint = "Search names, professions...",
         columns = { name = "Member", "Played (7 d)", "Recruiting (30 d)", "Answered" }, menu = MemberMenu })
@@ -1844,7 +2141,6 @@ local function BuildMembers(parent)
         local Sync = ns.GuildSync
         local officer = Guild.Mine() and Sync and Sync.IAmOfficer()
         self.list:SetShown(officer and true or false)
-        self.ask:SetShown(officer and true or false)
         self.note:SetShown(not officer)
         self.note:SetText(Guild.Mine() and "Only officers see what members share." or "You are not in a guild.")
         if not officer then return end
@@ -1944,7 +2240,9 @@ local function BuildSharing(parent)
         row.key = cat.key
         row.desc = cat.text
         v.rows[i] = row
+        Bind("guildShare." .. cat.key, "consent", "members/sharing")
     end
+    Bind("guildShare", "consent", "members/sharing")
 
     v.officers = Style.Card(v, "Officers")
     v.officers:SetPoint("TOPLEFT", v.card, "BOTTOMLEFT", 0, -8)
@@ -2014,92 +2312,227 @@ local function BuildSharing(parent)
 end
 
 ---------------------------------------------------------------------------
--- Window
+-- Pages: Recruit (Find, Invited, Results) and Members (Roster with its
+-- Basics / Activity / Shared views, Promotions, Log, Sharing). The old view
+-- keys stay the names the code and the commands use: state.view is the one
+-- shown.
 ---------------------------------------------------------------------------
-local VIEWS = {
-    { key = "recruit", label = "Recruit", build = BuildRecruit },
-    { key = "invited", label = "Invited", build = BuildInvited },
-    { key = "replies", label = "Replies", build = BuildReplies },
-    { key = "roster", label = "Roster", build = BuildRoster },
-    { key = "activity", label = "Activity", build = BuildActivity, officer = true },
-    { key = "recruiters", label = "Recruiters", build = BuildRecruiters },
-    { key = "promote", label = "Promotions", build = BuildPromotions },
-    { key = "log", label = "Log", build = BuildLog },
-    { key = "members", label = "Members", build = BuildMembers },
-    { key = "sharing", label = "Sharing", build = BuildSharing },
+local PAGES = {
+    recruit = {
+        frame = "GuildWindow", title = "Recruit", nav = "recruit",
+        tabs = {
+            { key = "recruit", label = "Find", build = BuildRecruit },
+            { key = "invited", label = "Invited", build = BuildInvited },
+            { key = "recruiters", label = "Results", build = BuildRecruiters },
+        },
+    },
+    members = {
+        frame = "MembersWindow", title = "Members", nav = "members",
+        tabs = {
+            { key = "roster", label = "Roster", build = BuildRoster },
+            { key = "promote", label = "Promotions", build = BuildPromotions },
+            { key = "log", label = "Log", build = BuildLog },
+            { key = "sharing", label = "Sharing", build = BuildSharing },
+        },
+    },
+}
+UI.PAGES = PAGES
+
+-- The Roster tab's column sets: Activity and Shared are for officers only.
+local ROSTER_VIEWS = {
+    { key = "roster", label = "Basics" },
+    { key = "activity", label = "Activity", build = BuildActivity },
+    { key = "members", label = "Shared", build = BuildMembers },
 }
 
-local TAB_W = 84
-local OFFICER_VIEW = {}
-for _, def in ipairs(VIEWS) do OFFICER_VIEW[def.key] = def.officer end
+-- Every view key -> its page and tab (a Roster view's tab is the roster).
+local PAGE_OF, TAB_OF = {}, {}
+for pageKey, page in pairs(PAGES) do
+    for _, tab in ipairs(page.tabs) do PAGE_OF[tab.key], TAB_OF[tab.key] = pageKey, tab.key end
+end
+for _, rv in ipairs(ROSTER_VIEWS) do PAGE_OF[rv.key], TAB_OF[rv.key] = "members", "roster" end
+UI.PAGE_OF, UI.TAB_OF = PAGE_OF, TAB_OF
 
--- Officer-only tabs are left out for everyone else; the rest close up.
-local function LayoutTabs(officer)
-    local x = 0
-    for _, tab in ipairs(frame.tabs) do
-        local shown = officer or not OFFICER_VIEW[tab.key]
-        tab:SetShown(shown)
-        if shown then
-            tab:ClearAllPoints()
-            tab:SetPoint("TOPLEFT", x, 0)
-            x = x + TAB_W + 4
-        end
-    end
+-- Old words and the page's tab / view names -> a view key.
+local ALIAS = {
+    find = "recruit", results = "recruiters", replies = "invited", promotions = "promote", promotion = "promote",
+    basics = "roster", shared = "members",
+}
+local function Canon(view)
+    if type(view) ~= "string" then return nil end
+    view = view:lower()
+    view = ALIAS[view] or view
+    return PAGE_OF[view] and view or nil
+end
+UI.Canon = Canon
+
+local pages = {}       -- [pageKey] = frame
+local lastView = { recruit = "recruit", members = "roster" }
+
+local function ActivityOfficer() return Guild.Mine() ~= nil and ns.GuildActivity ~= nil and ns.GuildActivity.IAmOfficer() and true or false end
+local function SharedOfficer() return Guild.Mine() ~= nil and ns.GuildSync ~= nil and ns.GuildSync.IAmOfficer() and true or false end
+
+-- The Roster views this player is offered (officers see Activity and Shared,
+-- everyone else only Basics, as the tabs were hidden before).
+function UI.RosterViews()
+    local out = { "roster" }
+    if ActivityOfficer() then out[#out + 1] = "activity" end
+    if SharedOfficer() then out[#out + 1] = "members" end
+    return out
 end
 
-local function Build()
-    frame = Style.Window(ns.FRAME .. "GuildWindow", "Guild", nil, nil, { nav = "guild", hidden = true })
-    frame.who = Style.Text(frame, "GameFontHighlightSmall", "RIGHT")
-    frame.who:SetPoint("TOPRIGHT", -40, -14)
-    frame.who:SetWidth(460)
+local function Offered(view)
+    if view == "activity" then return ActivityOfficer() end
+    if view == "members" then return SharedOfficer() end
+    return true
+end
 
-    local tabHolder = CreateFrame("Frame", nil, frame)
+-- The guild, your rank and what it lets you do (both title bars).
+local function GuildLine()
+    local guild, rankName = Guild.Mine()
+    if not guild then return HEX.muted .. "not in a guild|r" end
+    local can = {}
+    if Guild.Can("invite") then can[#can + 1] = "invite" end
+    if Guild.Can("promote") then can[#can + 1] = "promote" end
+    return HEX.gold .. "<" .. guild .. ">|r  " .. tostring(rankName or "")
+        .. HEX.muted .. (#can > 0 and ("  ·  can " .. table.concat(can, ", ")) or "  ·  cannot invite") .. "|r"
+end
+
+-- A view switch at the right end of the Roster tab bar, one per set of
+-- offered views (made when first needed).
+local function RosterSwitch(f, offered)
+    f.switches = f.switches or {}
+    local id = table.concat(offered, ",")
+    for key, sw in pairs(f.switches) do sw:SetShown(key == id and #offered > 1) end
+    if #offered < 2 then return nil end
+    local sw = f.switches[id]
+    if not sw then
+        local defs = {}
+        for _, rv in ipairs(ROSTER_VIEWS) do
+            for _, key in ipairs(offered) do if key == rv.key then defs[#defs + 1] = { key = rv.key, label = rv.label } end end
+        end
+        sw = Style.Views(f.tabHolder, defs, function(key)
+            state.view = key
+            UI.Refresh()
+        end)
+        sw:SetPoint("TOPRIGHT", 0, -3)
+        f.switches[id] = sw
+    end
+    return sw
+end
+
+local function MakePage(pageKey)
+    local page = PAGES[pageKey]
+    local f = Style.Window(ns.FRAME .. page.frame, page.title, nil, nil,
+        { nav = page.nav, settings = "guild", section = "Guild", hidden = true })
+    f.pageKey = pageKey
+    local tabHolder = CreateFrame("Frame", nil, f)
     tabHolder:SetPoint("TOPLEFT", PAD, -44)
     tabHolder:SetPoint("TOPRIGHT", -PAD, -44)
     tabHolder:SetHeight(26)
-    frame.tabs = Style.Tabs(tabHolder, VIEWS, function(key) state.view = key UI.Refresh() end, TAB_W)
-    local line = Style.HLine(frame)
+    f.tabHolder = tabHolder
+    f.tabs = Style.Tabs(tabHolder, page.tabs, function(key)
+        -- The Roster tab opens on the view used last.
+        if key == "roster" then key = state.rosterView or "roster" end
+        state.view = key
+        UI.Refresh()
+    end)
+    local line = Style.HLine(f)
     line:SetPoint("TOPLEFT", PAD, -70)
     line:SetPoint("TOPRIGHT", -PAD, -70)
-
-    local body = CreateFrame("Frame", nil, frame)
+    local body = CreateFrame("Frame", nil, f)
     body:SetPoint("TOPLEFT", PAD, -80)
     body:SetPoint("BOTTOMRIGHT", -PAD, 34)
-    for _, def in ipairs(VIEWS) do views[def.key] = def.build(body) end
-    frame.footer = Style.Text(frame, "GameFontDisableSmall")
-    frame.footer:SetPoint("BOTTOMLEFT", PAD + 2, 12)
-    frame.footer:SetPoint("RIGHT", -PAD, 0)
-    frame:HookScript("OnShow", function()
+    for _, tab in ipairs(page.tabs) do views[tab.key] = tab.build(body) end
+    if pageKey == "members" then
+        for _, rv in ipairs(ROSTER_VIEWS) do
+            if rv.build then views[rv.key] = rv.build(body) end
+        end
+    end
+    f.footer = Style.Text(f, "GameFontDisableSmall")
+    f.footer:SetPoint("BOTTOMLEFT", PAD + 2, 12)
+    f.footer:SetPoint("RIGHT", -PAD, 0)
+    f:HookScript("OnShow", function()
+        state.page = pageKey
         Guild.RequestRoster()
         if ns.GuildSync then ns.GuildSync.OnWindowOpen() end
         UI.Refresh()
     end)
+    pages[pageKey] = f
+    return f
+end
+
+local function Build()
+    local recruit = MakePage("recruit")
+    -- Title bar: the mini window shown / hidden (a quick switch; its home is Settings › Guild).
+    recruit.miniButton = Style.Button(recruit, "", 128, function()
+        db().guildMiniShown = not db().guildMiniShown
+        ns.Refresh()
+    end, "A small window with the players without a guild that stays on your screen (drag it anywhere). Same clicks as on Find.",
+        { title = "Mini recruit window", small = true })
+    recruit.header:Add(recruit.miniButton)
+    Bind("guildMiniShown", "quick", "recruit")
+    views.recruit.miniToggle = recruit.miniButton
+
+    local members = MakePage("members")
+    members.refresh = Style.Button(members, "Refresh roster", 104, function() Guild.RequestRoster() end,
+        "Asks the game for the roster again (it answers at most every few seconds).", { small = true })
+    members.header:Add(members.refresh)
+    members.ask = Style.Button(members, "Ask members", 96, function()
+        if ns.GuildSync then ns.GuildSync.RequestMembers() end
+        UI.Refresh()
+    end, "Sends one request to the guild. Each member's addon answers with only what that member said Yes to.", { small = true })
+    members.header:Add(members.ask)
+    views.members.ask = members.ask
+    views.roster.refresh, views.activity.refresh = members.refresh, members.refresh
+    -- Replies and Invited are one tab now: the old name reaches the same view.
+    views.replies = views.invited
+    frame = recruit
+    UI.frame, UI.membersFrame = recruit, members
+end
+
+local function ShownPage()
+    for key, f in pairs(pages) do if f:IsShown() then return key, f end end
+end
+
+-- The Recruit tab label carries the unread replies.
+local function RefreshPage(pageKey, f)
+    f:SetStatus(GuildLine())
+    local view = state.view
+    if PAGE_OF[view] ~= pageKey then view = lastView[pageKey] end
+    if not Offered(view) then view = "roster" end
+    state.view = view
+    lastView[pageKey] = view
+    local tab = TAB_OF[view]
+    if tab == "roster" then state.rosterView = view end
+    f.tabs:Select(tab)
+    for key, v in pairs(views) do
+        if PAGE_OF[key] == pageKey then v:SetShown(key == view) end
+    end
+    if pageKey == "members" then
+        local sw = RosterSwitch(f, UI.RosterViews())
+        if sw then
+            sw:SetShown(tab == "roster")
+            sw:Select(view)
+        end
+        f.ask:SetShown(SharedOfficer())
+    else
+        f.miniButton:SetLabel(db().guildMiniShown and "Mini window: shown" or "Mini window: hidden")
+        f.miniButton:SetOn(db().guildMiniShown and true or false)
+    end
+    local v = views[view]
+    state.cands = nil
+    v:Refresh()
+    f.footer:SetText(v:Footer() or "")
 end
 
 function UI.Refresh()
-    if not frame or not frame:IsShown() then return end
-    local guild, rankName = Guild.Mine()
-    if guild then
-        local can = {}
-        if Guild.Can("invite") then can[#can + 1] = "invite" end
-        if Guild.Can("promote") then can[#can + 1] = "promote" end
-        frame.who:SetText(HEX.gold .. "<" .. guild .. ">|r  " .. tostring(rankName or "")
-            .. HEX.muted .. (#can > 0 and ("  ·  can " .. table.concat(can, ", ")) or "") .. "|r")
-    else
-        frame.who:SetText(HEX.muted .. "not in a guild|r")
-    end
-    local officer = guild ~= nil and ns.GuildActivity ~= nil and ns.GuildActivity.IAmOfficer()
-    LayoutTabs(officer)
-    if OFFICER_VIEW[state.view] and not officer then state.view = "roster" end
-    frame.tabs:Select(state.view)
-    for key, v in pairs(views) do v:SetShown(key == state.view) end
-    local v = views[state.view]
-    state.cands = nil
-    v:Refresh()
-    frame.footer:SetText(v:Footer() or "")
-    local unread = guild and Guild.Unread() or 0
-    for _, tab in ipairs(frame.tabs) do
-        if tab.key == "replies" then tab.text:SetText(unread > 0 and ("Replies " .. HEX.accent .. unread .. "|r") or "Replies") end
+    local pageKey, f = ShownPage()
+    if not f then return end
+    RefreshPage(pageKey, f)
+    local unread = Guild.Mine() and Guild.Unread() or 0
+    if pageKey == "recruit" then
+        f.tabs:SetTag("invited", unread > 0 and tostring(unread) or nil, "accent")
     end
     UI.UpdateNotice(unread)
     local cands = state.cands
@@ -2125,8 +2558,9 @@ end
 
 local function BuildMini()
     mini = CreateFrame("Frame", ns.FRAME .. "GuildMini", UIParent)
-    mini:SetSize(340, 236)
+    mini:SetSize(340, 254)
     mini:SetFrameStrata("MEDIUM")
+    if Style.RaiseFloat then Style.RaiseFloat(mini) end
     mini:SetClampedToScreen(true)
     mini:SetMovable(true)
     mini:EnableMouse(true)
@@ -2138,30 +2572,28 @@ local function BuildMini()
         db().guildMiniPos = { point, rel, x, y }
     end)
     Style.Surface(mini, "hud")
-    mini.title = Style.Text(mini, "GameFontNormalSmall")
-    mini.title:SetPoint("TOPLEFT", 8, -8)
-    mini.title:SetPoint("RIGHT", -264, 0)
-    mini.close = CreateFrame("Button", nil, mini)
-    mini.close:SetSize(18, 18)
-    mini.close:SetPoint("TOPRIGHT", -4, -4)
-    mini.close.x = Style.Text(mini.close, "GameFontNormal", "CENTER")
-    mini.close.x:SetPoint("CENTER", 0, 1)
-    mini.close.x:SetText(HEX.muted .. "×|r")
-    mini.close:SetScript("OnClick", function()
-        db().guildMiniShown = false
-        ns.Refresh()
-    end)
-    mini.close:SetScript("OnEnter", function(self)
-        self.x:SetText(HEX.white .. "×|r")
-        ns.Tooltip.Text(self, { "Hide", "Show it again from the guild window's Recruit tab." })
-    end)
-    mini.close:SetScript("OnLeave", function(self) self.x:SetText(HEX.muted .. "×|r") ns.Tooltip.Hide() end)
+    -- The floating title bar: TALOD button (Recruit > Find; right-click: any
+    -- page), settings, hide (the mini window's own switch, guildMiniShown).
+    local bar = Style.FloatBar(mini, {
+        page = "recruit", tab = "find", title = "Recruits", settings = "guild",
+        hide = function()
+            local Nav = ns.Nav
+            if not (Nav and Nav.SetPiece and Nav.SetPiece("mini", false)) then
+                db().guildMiniShown = false
+                ns.Refresh()
+            end
+        end,
+        hideTip = { "Hide", "Show it again from Home, On screen, or the Recruit page's title bar." },
+    })
+    if ns.Options and ns.Options.Bind then ns.Options.Bind("guildMiniShown", "quick", "float/mini") end
+    mini.title, mini.count, mini.close = bar.title, bar.count, bar.hide
+    -- The tools under the bar, right to left: /who, Delayed, Hands Free, Next.
     mini.who = Style.Button(mini, "/who", 56, function() Guild.Who() end, function()
         local _, text = Guild.NextWho()
         return "One /who search: " .. text .. ". One per click, at most one every 5 seconds; "
             .. "a full answer is split into smaller level ranges on the next clicks."
-    end, { title = "/who search", height = 18 })
-    mini.who:SetPoint("RIGHT", mini.close, "LEFT", -4, 0)
+    end, { title = "/who search", height = 18, kind = "send" })
+    mini.who:SetPoint("TOPRIGHT", -4, -Style.FLOAT_BAR - 3)
     if not Guild.WhisperFirst then
         mini.delayed = Style.Button(mini, "", 56, ToggleDelayed, DELAYED_TIP, { title = "Delayed invite", height = 18 })
         mini.delayed:SetPoint("RIGHT", mini.who, "LEFT", -4, 0)
@@ -2169,13 +2601,13 @@ local function BuildMini()
     mini.handsFree = Style.Button(mini, "", 56, ToggleHandsFree, HANDS_FREE_TIP, { title = "Hands Free", height = 18 })
     mini.handsFree:SetPoint("RIGHT", mini.delayed or mini.who, "LEFT", -4, 0)
     mini.next = Style.Button(mini, "", 56, NextInvite, NextTip,
-        { title = Guild.WhisperFirst and "Next whisper" or "Next invite", height = 18 })
+        { title = Guild.WhisperFirst and "Next whisper" or "Next invite", height = 18, kind = "send" })
     mini.next:SetPoint("RIGHT", mini.handsFree, "LEFT", -4, 0)
     mini.note = Style.Text(mini, "GameFontDisableSmall", "CENTER")
-    mini.note:SetPoint("TOPLEFT", 10, -60)
+    mini.note:SetPoint("TOPLEFT", 10, -64)
     mini.note:SetPoint("RIGHT", -10, 0)
     local holder = CreateFrame("Frame", nil, mini)
-    holder:SetPoint("TOPLEFT", 2, -26)
+    holder:SetPoint("TOPLEFT", 2, -Style.FLOAT_BAR - 24)
     holder:SetPoint("BOTTOMRIGHT", -2, 4)
     mini.list = Style.List(holder, { labelWidth = 20, colWidths = { 40 }, onClick = OnCandidateClick })
     PlaceMini()
@@ -2193,7 +2625,7 @@ function UI.RefreshMini(cands)
     local guild = Guild.Mine()
     local canInvite = guild and Guild.Can("invite")
     local rows = canInvite and UI.CandidateRows(true, cands) or {}
-    mini.title:SetText("Recruits  " .. HEX.muted .. #rows .. "|r")
+    mini.count:SetText(canInvite and tostring(#rows) or "")
     mini.who:SetLabel(UI.WhoLabel(true))
     mini.list:SetShown(canInvite and true or false)
     mini.who:SetShown(canInvite and true or false)
@@ -2240,7 +2672,8 @@ end
 -- unread: the count when the caller just read it (UI.Refresh).
 function UI.UpdateNotice(unread)
     local n = (db().guildReplyNotice and Guild.Mine()) and (unread or Guild.Unread()) or 0
-    local reading = UI.IsShown() and state.view == "replies"
+    -- Reading: the Invited tab is open (it opens the unread conversation first).
+    local reading = state.view == "invited" and pages.recruit ~= nil and pages.recruit:IsShown()
     if n == 0 or reading then
         if notice then notice:Hide() end
         return
@@ -2276,29 +2709,123 @@ function UI.OnChat()
     if UI.IsShown() then UI.Refresh() else UI.UpdateNotice() end
 end
 
+-- Opens a view (an old view key, a tab or view name: "replies" opens
+-- Invited on Replied), or with none the guild page used last as it was.
 function UI.Show(view)
     -- Built hidden (also ahead of time, after login): its OnShow asks for the roster.
     if not frame then Build() end
-    if view and views[view] then state.view = view end
-    if frame:IsShown() then UI.Refresh() else frame:Show() end
+    local raw = type(view) == "string" and view:lower() or nil
+    view = Canon(view)
+    local pageKey
+    if view then
+        pageKey = PAGE_OF[view]
+        state.view = view
+        if view == "invited" then
+            state.invitedChip = raw == "replies" and "replied" or "all"
+            -- The reply notice opens the first unread conversation.
+            if raw == "replies" then state.chat = nil end
+        end
+    else
+        pageKey = UI.LastGuildPage()
+        state.view = lastView[pageKey]
+    end
+    state.page = pageKey
+    local f = pages[pageKey]
+    if f:IsShown() then UI.Refresh() else f:Show() end
+    return true
 end
 
+function UI.IsShown()
+    for _, f in pairs(pages) do if f:IsShown() then return true end end
+    return false
+end
+
+-- The guild page used last this session (Recruit the first time, Members
+-- for a rank the game does not let invite).
+function UI.LastGuildPage()
+    if state.page then return state.page end
+    return (Guild.Mine() and not Guild.Can("invite")) and "members" or "recruit"
+end
+
+-- view nil: the guild page used last, or closes the one open.
 function UI.Toggle(view)
-    if frame and frame:IsShown() and (not view or view == state.view) then frame:Hide() else UI.Show(view) end
+    local open = ShownPage()
+    local key = Canon(view)
+    if open and (not view or (key and PAGE_OF[key] == open and key == state.view)) then
+        pages[open]:Hide()
+        return
+    end
+    if view then UI.Show(view) else UI.Show(lastView[UI.LastGuildPage()]) end
 end
 
-function UI.IsShown() return frame ~= nil and frame:IsShown() end
 -- The tab that shows live scan results (redrawn every scan).
-function UI.LiveView() return state.view == "recruit" end
+function UI.LiveView() return state.view == "recruit" and pages.recruit ~= nil and pages.recruit:IsShown() end
 UI.views = views
+
+---------------------------------------------------------------------------
+-- The two pages for the page list: ShowPage(tab, view), PageStatus,
+-- PageHidden. Tabs and views by their page names or the old keys.
+---------------------------------------------------------------------------
+local RecruitUI, MembersUI = {}, {}
+ns.RecruitUI, ns.MembersUI = RecruitUI, MembersUI
+local CHIP_KEY = {}
+for _, def in ipairs(CHIPS) do CHIP_KEY[def.key], CHIP_KEY[def.label:lower()] = def.key, def.key end
+
+function RecruitUI.ShowPage(tab, viewKey)
+    local view = Canon(tab)
+    if not view or PAGE_OF[view] ~= "recruit" then view = lastView.recruit end
+    UI.Show(view)
+    local chip = type(viewKey) == "string" and CHIP_KEY[viewKey:lower()]
+    if view == "invited" and chip then
+        state.invitedChip = chip
+        UI.Refresh()
+    end
+    return true
+end
+
+function MembersUI.ShowPage(tab, viewKey)
+    local view = Canon(tab)
+    -- The Roster tab's view: Basics, Activity or Shared.
+    if view and TAB_OF[view] == "roster" and viewKey then view = Canon(viewKey) or view end
+    if not view or PAGE_OF[view] ~= "members" then view = lastView.members end
+    return UI.Show(view)
+end
+
+function RecruitUI.Show() return UI.Show(lastView.recruit) end
+function MembersUI.Show() return UI.Show(lastView.members) end
+function RecruitUI.IsShown() return pages.recruit ~= nil and pages.recruit:IsShown() end
+function MembersUI.IsShown() return pages.members ~= nil and pages.members:IsShown() end
+function RecruitUI.Toggle() if RecruitUI.IsShown() then pages.recruit:Hide() else RecruitUI.Show() end end
+function MembersUI.Toggle() if MembersUI.IsShown() then pages.members:Hide() else MembersUI.Show() end end
+RecruitUI.LastGuildPage, MembersUI.LastGuildPage = UI.LastGuildPage, UI.LastGuildPage
+
+-- Left out of the page list for ranks the game does not let invite (and
+-- outside a guild); the page itself still opens and says why.
+function RecruitUI.PageHidden()
+    return not (Guild.Mine() and Guild.Can("invite"))
+end
+function MembersUI.PageHidden() return false end
+
+-- Unread replies first; else the players still waiting for an answer.
+function RecruitUI.PageStatus()
+    if not (Guild.Mine() and Guild.Can("invite")) then return nil end
+    local unread = Guild.Unread()
+    if unread > 0 then return { text = unread .. (unread == 1 and " reply" or " replies"), tone = "accent" } end
+    local counts = InvitedList(nil).counts or {}
+    local waiting = Guild.WhisperFirst and (counts.asked or 0) or ((counts.invited or 0) + (counts.inviting or 0))
+    if waiting > 0 then return { text = waiting .. " waiting", tone = "plain" } end
+    return nil
+end
+function MembersUI.PageStatus() return nil end
+
 -- Roster reads and the guild log redraw the window; the recruit scan only
 -- while the Recruit tab is open.
--- Guild chat lines only while the Activity tab is open.
+-- Guild chat lines only while the Activity view is open.
 -- Frames and the long walks over the guild's history (recruits, who joined
 -- through whom) are built after login, so the first open does not stall.
 ns.Data.Window(UI, { "guild", "guild.scan", "guild.chat" }, { shows = function(src)
     if src == "guild.scan" then return UI.LiveView() end
-    if src == "guild.chat" then return state.view == "activity" end
+    if src == "guild.chat" then return state.view == "activity" and pages.members ~= nil and pages.members:IsShown() end
     return true
 end,
     prebuild = function() if not frame then Build() end end,
@@ -2317,40 +2844,25 @@ end,
 ---------------------------------------------------------------------------
 -- Settings tab
 ---------------------------------------------------------------------------
-local function BuildPage(parent)
+local function RecruitKeyText()
+    local key = Guild.StepKey()
+    return key and ("Recruit key: |cffffffff" .. key .. "|r") or "|cffffd100No recruit key yet.|r"
+end
+
+-- The recruit tab's own switches and filters (whisper, delayed invite, Hands
+-- Free, /who zone, levels, friendly nameplates) are on the Recruit page.
+local function RecruitingGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "Finds players of your faction without a guild (nameplates, target, mouseover and /who) "
         .. "and keeps your guild's roster, joins, leaves and rank changes. A click on a player sends your whisper, "
         .. (Guild.WhisperFirst
             and "then you type the guild invite yourself (the game takes it no other way); nothing is ever sent on its own. Type |cffffffff"
             or "a second one the guild invite (or both in one click); nothing is ever sent on its own. Type |cffffffff")
         .. ns.Cmd.Text("guild") .. "|r for the window.", "GameFontHighlightSmall")
-    local rowY = y
-    W.Button(parent, rowY, "Open the guild window", 200, function() UI.Show() end)
-    y = y - 34
-    y = W.Header(parent, y, "Recruiting")
     y = W.Checkbox(parent, y, "guildRecruitScan", "Look for players without a guild near me",
         "Reads the guild of players of your faction from their nameplates, your target and your mouseover.")
     y = W.Checkbox(parent, y, "guildMiniShown", "Show the mini recruit window",
         "A small window with the players without a guild that stays on your screen. Off by default.")
-    y = W.Checkbox(parent, y, "guildWhisper",
-        Guild.WhisperFirst and "Whisper my message when I click a player" or "Whisper my message before the invite",
-        "The message is edited in the guild window (Recruit tab).")
-    if not Guild.WhisperFirst then
-        y = W.Checkbox(parent, y, "guildDelayedInvite", "Delayed invite: click again to invite",
-            "The first click whispers your message; 10 s after it went out the player is back on the list in red, and "
-            .. "the second click sends the guild invite. Off: message and invite in one click.")
-    end
-    y = W.Checkbox(parent, y, "guildHandsFree", "Hands Free: a click on the open world is my next recruit click",
-        "A left- or right-click on the world (not on a window, a player or an NPC) "
-        .. (Guild.WhisperFirst and "runs a /who once the /who button's wait is over, else whispers the next player."
-            or "invites the next red row, else runs a /who once the /who button's wait is over, else whispers the next player.")
-        .. " One action per click; nothing goes "
-        .. "while you do not click. Off in combat.")
-    y = W.Checkbox(parent, y, "guildHandsFreeKeys", "Hands Free: my move and jump keys count too",
-        "A press of a key bound to moving, turning, strafing or jumping (WASD, Space, or whatever you bound) is a "
-        .. "Hands Free click as well. The key still moves you. One press = one action; holding a key is one press.")
     W.Button(parent, y, "Set recruit key", 200, function() Guild.CatchStepKey() end,
         Guild.WhisperFirst
             and "Press a key or mouse button after clicking: it becomes the recruit key. One press = the next whisper, "
@@ -2358,40 +2870,50 @@ local function BuildPage(parent)
             or "Press a key or mouse button after clicking: it becomes the recruit key. One press = the next queued invite, "
                 .. "else a /who, else a whisper to the next player, Hands Free on or off. A key press is something the game always "
                 .. "takes, so it can invite and search. Out of combat.")
+    local _, keyText = W.LiveText(parent, y - 5, 18, RecruitKeyText)
+    keyText:ClearAllPoints()
+    keyText:SetPoint("TOPLEFT", 236, y - 5)
+    keyText:SetWidth(300)
     y = y - 34
-    y = W.LiveText(parent, y, 18, function()
-        local key = Guild.StepKey()
-        return key and ("Recruit key: |cffffffff" .. key .. "|r") or "|cffffd100No recruit key yet.|r"
-    end)
-    y = W.Checkbox(parent, y, "guildWhoZone", "/who searches only my current zone")
+    y = W.Fine(parent, y)
+    y = W.Checkbox(parent, y, "guildHandsFreeKeys", "Hands Free: my move and jump keys count too",
+        "A press of a key bound to moving, turning, strafing or jumping (WASD, Space, or whatever you bound) is a "
+        .. "Hands Free click as well. The key still moves you. One press = one action; holding a key is one press.")
+    y = W.Slider(parent, y, "guildReinviteDays", "Offer again after", 1, 60, 1, "%d days",
+        "Players who were invited, declined or were offline are listed again after this.")
+    return y
+end
+
+local function ChatGroup(parent, y)
+    local W = ns.Options.Widgets
     y = W.Checkbox(parent, y, "guildHideChat", "Keep recruiting chatter out of chat",
         "Your opening whispers, the game's \"You have invited\" / \"declines\" / offline lines, and recruits' answers until "
         .. "you write back show only in the guild window (Replies, Invited). Once you write back, that conversation shows "
         .. "in chat as usual. Other whispers are untouched.")
+    y = W.Checkbox(parent, y, "guildReplyNotice", "Show a notice when a recruit whispers me",
+        "A small button (drag it anywhere) with the number of unread replies; click it to open the Replies tab.")
+    y = W.Fine(parent, y)
     y = W.Checkbox(parent, y, "guildColorJoin", "Color \"has joined the guild\" lines in chat",
         "The game's \"<name> has joined the guild.\" line shows in green (blue with colorblind colors), so it stands out "
         .. "among the declines.")
     y = W.Checkbox(parent, y, "guildColorGuilded", "Color \"is already in a guild\" lines in chat",
         "The game's \"<name> is already in a guild.\" line shows in orange and stays in chat even when recruiting "
         .. "chatter is kept out.")
-    y = W.Checkbox(parent, y, "guildReplyNotice", "Show a notice when a recruit whispers me",
-        "A small button (drag it anywhere) with the number of unread replies; click it to open the Replies tab.")
-    y = W.Slider(parent, y, "guildRecruitMinLevel", "Lowest level", 1, 60, 1, "%d")
-    y = W.Slider(parent, y, "guildRecruitMaxLevel", "Highest level", 1, 60, 1, "%d")
-    y = W.Slider(parent, y, "guildReinviteDays", "Offer again after", 1, 60, 1, "%d days",
-        "Players who were invited, declined or were offline are listed again after this.")
-    y = W.LiveText(parent, y, 18, function()
-        local on = not ns.Census or ns.Census.FriendlyPlatesOn()
-        return on and "Friendly nameplates are on." or "|cffffd100Friendly nameplates are off: only your target and mouseover are seen.|r"
-    end)
-    if ns.Census then
-        W.Button(parent, y, "Turn on friendly nameplates", 200, function() ns.Census.ShowFriendlyPlates() ns.Refresh() end,
-            "Sets the game's Friendly Player Nameplates option. Out of combat only.")
-        y = y - 34
-    end
-    y = W.Header(parent, y, "Roster")
-    y = W.Slider(parent, y, "guildInactiveDays", "Inactive after", 7, 180, 1, "%d days offline")
-    return -y + 10
+    return y
 end
 
-ns.Options.AddTab({ label = "Guild", pages = { { label = "Guild", build = BuildPage } } })
+local function RosterGroup(parent, y)
+    local W = ns.Options.Widgets
+    y = W.Fine(parent, y)
+    y = W.Slider(parent, y, "guildInactiveDays", "Inactive after", 7, 180, 1, "%d days offline")
+    return y
+end
+
+ns.Options.AddSection("guild", {
+    status = RecruitKeyText,
+    groups = {
+        { label = "Recruiting", build = RecruitingGroup },
+        { label = "Chat", build = ChatGroup },
+        { label = "Roster", build = RosterGroup },
+    },
+})

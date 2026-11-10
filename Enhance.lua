@@ -326,6 +326,12 @@ local function BuildView(parent)
         ns.GearUI.Refresh()
     end, "Only professions this character has (read from the Skills tab).", { height = 22, title = "My professions" })
     v.mine:SetPoint("TOPLEFT", x + 6, 0)
+    -- The profession filter is this tab's own option (chips: enhanceHidden,
+    -- Mine: enhanceMineOnly), kept here and not in Settings.
+    if ns.Options and ns.Options.Bind then
+        ns.Options.Bind("enhanceHidden", "tool", "gear/enhance")
+        ns.Options.Bind("enhanceMineOnly", "tool", "gear/enhance")
+    end
     local listHolder = CreateFrame("Frame", nil, v.right.content)
     listHolder:SetPoint("TOPLEFT", 0, -32)
     listHolder:SetPoint("BOTTOMRIGHT")

@@ -1025,7 +1025,7 @@ function Prices.Bulk() return bulk end
 -- bid (optional): { next, band, high, bids, api } as for RecordBids, nil = the
 -- auction cannot be bid on or is yours.
 -- onFail(reason) when a chunk errors: the read stops instead of hanging.
-function Prices.ReadBulk(count, row, first, onDone, onFail)
+function Prices.ReadBulk(count, row, first, onDone, onFail, onGrow)
     local total = count() or 0
     if type(total) ~= "number" then total = 0 end
     bulk = { i = first, last = first + total - 1, total = total, low = {}, qty = {}, auctions = {}, names = {}, rows = {},
@@ -1040,6 +1040,14 @@ function Prices.ReadBulk(count, row, first, onDone, onFail)
         -- The list changed under the read (window closed, a new query): what
         -- was read is not the whole Auction House. Stop; never record it as one.
         local still = count()
+        -- More rows than at the start: the answer is still arriving (Forever
+        -- sends a full scan in parts). Nothing is recorded yet: the caller
+        -- reads again once the list stops growing.
+        if onGrow and type(still) == "number" and still > b.total then
+            bulk = nil
+            onGrow(still)
+            return
+        end
         if still ~= b.total then
             bulk = nil
             if onFail then onFail(string.format("the list changed during the read (%d / %d)", b.i - first, b.total)) end
@@ -1321,13 +1329,13 @@ local function OnEvent(event, ...)
     if n > 0 then ns.Data.Notify("prices") end
 end
 
--- /talod price: the Market window. /talod price <name>: the window searching
--- for it, and the matches in chat.
+-- /talod price: the Auction House page on Prices. /talod price <name>: the
+-- matches in chat, and Prices searching for it (the first match chosen).
 local function Slash(command, rest)
     if command ~= "price" then return false end
     rest = (rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if rest == "" then
-        if ns.MarketUI then ns.MarketUI.Toggle() end
+        if ns.MarketUI then ns.MarketUI.Toggle("prices") end
         return true
     end
     local needle, found = rest:lower(), 0

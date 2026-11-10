@@ -477,6 +477,7 @@ scenarios.econ_r5_scan_held_list = function()
     -- The answer: Salt at 500c.
     rows[1] = { "Salt", 10, 5000, SALT }
     MOCK.FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    MOCK.Tick(2.5)
     MOCK.RunTimers() MOCK.RunTimers() MOCK.RunTimers()
     check(Pr.Entry(SALT) and Pr.Entry(SALT).p == 500, "the answer read: " .. tostring(Pr.Entry(SALT) and Pr.Entry(SALT).p))
     C_AuctionHouse = nil
@@ -548,12 +549,17 @@ scenarios.econ_r5_auctions_by_end = function()
     check(E.ListingOver(ns.Economy.Char().auctions[2]) and not E.ListingOver(ns.Economy.Char().auctions[1]), "its time ran out")
     local t = E.AuctionTotals(ns.Economy.Char().auctions)
     check(t.listed == 0 and t.unknown == 1, "not counted as listed: " .. t.listed)
-    slash("economy")
-    ns.EconomyUI.state.view = "auctions"
-    ns.EconomyUI.state.range = 7
-    ns.EconomyUI.Refresh()
-    local sub = ns.EconomyUI.views.auctions.card.sub:GetText()
-    check(sub:find("1 sold", 1, true) and sub:find("0 listed", 1, true), "7 days: the sale that ended in it: " .. sub)
+    ns.MarketUI.ShowPage("mine", "auctions", "all")
+    local v = ns.MarketUI.views.mine
+    local sub = v.card.sub:GetText()
+    check(sub:find("1 sold", 1, true) and sub:find("0 listed", 1, true) and sub:find("1 ended, outcome unknown", 1, true),
+        "the sale counted, the unclosed one not listed: " .. sub)
+    -- In a time range by when it ended: the sale 6 days ago is in the last 7 days, the
+    -- listing that ran out 38 days ago is not.
+    v.list:SetRange("week")
+    local n = 0
+    for _, it in ipairs(v.list.items) do if not it.header and it.id then n = n + 1 end end
+    check(n == 1, "7 days: the sale that ended in it: " .. n)
 end
 
 ---------------------------------------------------------------------------

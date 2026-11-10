@@ -68,7 +68,7 @@ scenarios.price_chart = function()
     -- Desk Control: the same graph.
     Pr.RecordLadder(2589, { { 50, 120, "Al" } }, false, now)
     ns.AuctionDeskUI.Show("control", 2589)
-    check(ns.AuctionDeskUI.views.control.chart.pts, "desk chart drawn")
+    check(ns.MarketUI.views.prices.chart.pts and ns.MarketUI.views.prices.hasControl, "chart drawn with the plan")
 
     -- Tooltip graph: at the Auction House only (by default).
     ns.Tooltip.ItemLines(GameTooltip, 2589)

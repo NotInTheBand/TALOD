@@ -315,7 +315,7 @@ local function Tick()
 end
 
 ---------------------------------------------------------------------------
--- Character window view
+-- Professions page: Skills tab
 ---------------------------------------------------------------------------
 local selected       -- skill name shown on the right, nil = all
 
@@ -354,7 +354,7 @@ local function BuildView(parent)
     v.left:SetWidth(400)
     v.list = Style.List(v.left.content, { colWidths = { 64, 52 }, search = true, hint = "Search skills...", onClick = function(item)
         selected = (selected == item.name) and nil or item.name
-        ns.GearUI.Refresh()
+        ns.ProfessionsUI.Refresh()
     end })
     v.right = Style.Card(v, "History")
     v.right:SetPoint("TOPLEFT", v.left, "TOPRIGHT", 10, 0)
@@ -366,7 +366,7 @@ local function BuildView(parent)
     end
 
     function v:Refresh()
-        local key = ns.GearUI.CharKey()
+        local key = ns.ProfessionsUI.CharKey()
         local c = key and db().skills[key]
         if not Skills.Available() then
             self.list:SetItems({ { text = HEX.muted .. "This client gives addons neither skill lines nor professions.|r" } })
@@ -446,65 +446,67 @@ local function BuildView(parent)
     return v
 end
 
-ns.GearUI.AddView({ key = "skills", label = "Skills", build = BuildView })
+ns.ProfessionsUI.AddView({ key = "skills", label = "Skills", build = BuildView })
 
 ---------------------------------------------------------------------------
 -- Settings and slash
 ---------------------------------------------------------------------------
-local function BuildPage(parent)
+local function StatusText()
+    if not Skills.Available() then return "This client gives addons neither skill lines nor professions." end
+    local c = Skills.Char()
+    local n = 0
+    for _, _ in pairs(c and c.current or {}) do n = n + 1 end
+    return string.format("This character: %d skills, %d log entries.", n, c and #c.log or 0)
+end
+
+local function PricesText()
+    local n, newest = ns.Prices.Count()
+    return string.format("%d prices logged for %s%s. Also " .. ns.Cmd.Text("price") .. " <item>.", n, ns.Prices.RealmKey() or "?",
+        newest and (", newest " .. ns.Prices.Age(newest)) or "")
+end
+
+local function RecordingGroup(parent, y)
     local W = ns.Options.Widgets
-    local y = -12
     y = W.Paragraph(parent, y, "Tracks your professions, secondary skills, weapon skills and defense: every skill-up with "
-        .. "date, zone and your level, training and new skills. Shown in the character window's Skills tab.", "GameFontHighlightSmall")
-    y = W.Button(parent, y, "Open the Skills tab", 170, function() ns.GearUI.Show("skills") end, "Also " .. ns.Cmd.Text("skills") .. ".")
-    y = y - 4
-    y = W.Header(parent, y, "Recording")
+        .. "date, zone and your level, training and new skills. Also " .. ns.Cmd.Text("skills") .. "; the leveling planner: "
+        .. ns.Cmd.Text("plan") .. " tailoring 225.", "GameFontHighlightSmall")
     y = W.Checkbox(parent, y, "skillsEnabled", "Track my skills", "Reads your Skills tab when the game says skills changed.")
-    y = W.LiveText(parent, y, 30, function()
-        if not Skills.Available() then return "This client gives addons neither skill lines nor professions." end
-        local c = Skills.Char()
-        local n = 0
-        for _ in pairs(c and c.current or {}) do n = n + 1 end
-        return string.format("This character: %d skills, %d log entries.", n, c and #c.log or 0)
-    end)
-    y = W.Header(parent, y, "Leveling planner")
-    y = W.Button(parent, y, "Open the Professions tab", 190, function() ns.GearUI.Show("professions") end,
-        "What to craft, buy and train to reach a target skill. Also " .. ns.Cmd.Text("plan") .. " tailoring 225.")
-    y = W.Checkbox(parent, y, "profPlanPatterns", "Plan with patterns too",
-        "Also use recipes taught by a pattern (vendor or drop). Off: trainer recipes and the ones you know.")
-    y = W.Checkbox(parent, y, "profPlanBags", "Count my bags and bank", "Subtract what you have from the shopping list.")
-    y = W.Header(parent, y, "Auction prices")
+    y = W.Checkbox(parent, y, "craftLogEnabled", "Log my crafts", "Every craft with the skill it gave, the materials it used, when and where. Also "
+        .. ns.Cmd.Text("crafts") .. ".")
+    return y
+end
+
+local function PricesGroup(parent, y)
+    local W = ns.Options.Widgets
     y = W.Checkbox(parent, y, "auctionPrices", "Log the prices I see at the Auction House",
         "The lowest buyout per unit of everything the Auction House shows you, with the time. The planner and the crafting log use them.")
-    y = W.LiveText(parent, y, 30, function()
-        local n, newest = ns.Prices.Count()
-        return string.format("%d prices logged for %s%s. Also " .. ns.Cmd.Text("price") .. " <item>.", n, ns.Prices.RealmKey() or "?",
-            newest and (", newest " .. ns.Prices.Age(newest)) or "")
-    end)
+    return y
+end
+
+local function TooltipsGroup(parent, y)
+    local W = ns.Options.Widgets
     y = W.Checkbox(parent, y, "tooltipPrices", "Show my Auction House price on item tooltips",
         "Lowest price at your last look, how long ago, the supply and the usual price.")
     y = W.Checkbox(parent, y, "tooltipMovement", "Show on item tooltips whether it sells",
         "Moves fast / moves / slow / doesn't sell: from your own auctions of it, else from how fast it leaves the AH between your looks.")
     y = W.Checkbox(parent, y, "tooltipGraph", "Price graph under item tooltips at the Auction House",
         "Lowest price over time, units listed and what you sold, under the tooltip of any item you have seen on the AH.")
+    y = W.Fine(parent, y)
     y = W.Checkbox(parent, y, "tooltipGraphAlways", "... everywhere, not only at the Auction House",
         "Also in your bags, the bank, chat links.")
+    return y
+end
+
+local function AtTheHouseGroup(parent, y)
+    local W = ns.Options.Widgets
     y = W.Checkbox(parent, y, "ahLookupClick", "Click an item in the Market window: search it on the open Auction House",
         "While the Auction House is open, a click on an item in the Market window searches it there (one search per click).")
     y = W.Checkbox(parent, y, "ahHelper", "Scan panel next to the Auction House",
         "A panel with a full scan (every price at once, every 15 minutes) and a search list (one item per click). Also " .. ns.Cmd.Text("ah") .. " scan.")
-    y = W.Button(parent, y, "Open the Auction desk", 190, function() ns.AuctionDeskUI.Show() end,
-        "Your listings against the market, deals, crafting margins and what owning an item's market costs. Also " .. ns.Cmd.Text("ah") .. ".")
+    y = W.Fine(parent, y)
     y = W.Slider(parent, y, "deskMinProfit", "Auction desk: resets worth showing from", 0, 500000, 2500,
         function(v) return ns.Professions.Money(v) end, "A reset (buy the cheap end, relist under the next seller) shows on the desk from this profit.")
-    y = W.Header(parent, y, "Crafting log")
-    y = W.Checkbox(parent, y, "craftLogEnabled", "Log my crafts", "Every craft with the skill it gave, the materials it used, when and where.")
-    y = W.Button(parent, y, "Open the Crafting tab", 170, function() ns.GearUI.Show("crafting") end, "Also " .. ns.Cmd.Text("crafts") .. ".")
-    y = W.Header(parent, y, "Delete")
-    y = W.Button(parent, y, "Delete this character's skill log", 240, function()
-        StaticPopup_Show(ns.POPUP .. "SKILLS_DELETE", ns.Gear.CharKey() or "?", nil, ns.Gear.CharKey())
-    end)
-    return -y + 10
+    return y
 end
 
 StaticPopupDialogs[ns.POPUP .. "SKILLS_DELETE"] = {
@@ -521,13 +523,16 @@ StaticPopupDialogs[ns.POPUP .. "SKILLS_DELETE"] = {
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 
-if ns.CharacterTab then
-    table.insert(ns.CharacterTab.pages, { label = "Skills", build = BuildPage })
-end
+ns.Options.AddSection("professions", { status = StatusText, groups = { { label = "Recording", build = RecordingGroup } } })
+ns.Options.AddSection("ah", { status = PricesText, groups = {
+    { label = "Prices", build = PricesGroup },
+    { label = "Item tooltips", build = TooltipsGroup },
+    { label = "At the Auction House", build = AtTheHouseGroup },
+} })
 
 local function Slash(command)
     if command ~= "skills" then return false end
-    ns.GearUI.Toggle("skills")
+    ns.ProfessionsUI.Toggle("skills")
     return true
 end
 

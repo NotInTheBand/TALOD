@@ -1122,7 +1122,7 @@ end
 
 local function Slash(command, rest)
     if command == "crafts" then
-        ns.GearUI.Toggle("crafting")
+        ns.ProfessionsUI.Toggle("log")
         return true
     end
     if command ~= "plan" then return false end
@@ -1138,11 +1138,11 @@ local function Slash(command, rest)
             Prof.SetTarget(prof, tonumber(a))
         end
         ns.Print(Prof.Summary(Prof.PlanFor(nil, prof)))
-        ns.GearUI.Show("professions")
+        ns.ProfessionsUI.Show("plan")
     elseif word and word ~= "" then
         ns.Print("unknown profession \"" .. word .. "\". Known: " .. table.concat(Prof.Names(), ", "))
     else
-        ns.GearUI.Toggle("professions")
+        ns.ProfessionsUI.Toggle("plan")
     end
     return true
 end

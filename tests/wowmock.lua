@@ -122,13 +122,27 @@ function Widget:GetText() return self._text end
 function Widget:SetFormattedText(fmt, ...) self._text = string.format(fmt, ...) end
 function Widget:GetStringHeight() return 14 end
 function Widget:GetStringWidth() return 100 end
-function Widget:SetTextColor(r, g, b) self._color = { r, g, b } end
+function Widget:SetTextColor(r, g, b, a) self._color = { r, g, b, a } end
+function Widget:GetTextColor() local c = self._color or { 1, 1, 1 } return c[1], c[2], c[3], c[4] or 1 end
+-- Colours kept so tests can read them back (the look's tones).
+function Widget:SetColorTexture(r, g, b, a) self._colorTex = { r, g, b, a or 1 } self._texture = nil end
+function Widget:SetVertexColor(r, g, b, a) self._vertex = { r, g, b, a or 1 } end
+function Widget:SetStatusBarColor(r, g, b, a) self._barColor = { r, g, b, a or 1 } end
+function Widget:SetFontObject(font) self._fontObject = font end
 function Widget:GetFont() return "Fonts\\FRIZQT__.TTF", 14, "" end
 function Widget:SetFont(file, size, flags) self._fontSize = size end
 function Widget:CreateFontString(name) return NewWidget("FontString", name, self) end
 function Widget:CreateTexture(name) return NewWidget("Texture", name, self) end
 -- Textures keep what they were given (path, texcoords) so tests can read it back.
-function Widget:SetTexture(path) self._texture = path end
+-- Like the game since texture paths are checked: true when the file loads.
+-- MOCK.missingFiles[path] = true plays a file the client does not see yet
+-- (added since the game started: a /reload does not load new files).
+function Widget:SetTexture(path)
+    self._texture = path
+    self._colorTex = nil
+    if type(path) == "string" and MOCK.missingFiles and MOCK.missingFiles[path] then return false end
+    return true
+end
 function Widget:GetTexture() return self._texture end
 function Widget:SetTexCoord(...) self._texCoord = { ... } end
 function Widget:GetTexCoord()
@@ -184,7 +198,12 @@ function Widget:SetAttribute(k, v) self._attr = self._attr or {}; self._attr[k] 
 function Widget:GetAttribute(k) return self._attr and self._attr[k] end
 function Widget:IsOwned(owner) return self._owner == owner end
 function Widget:SetOwner(owner) self._owner = owner end
-function Widget:GetFrameLevel() return self._level or 1 end
+-- As in the client: a frame with no level of its own sits one above its parent.
+function Widget:GetFrameLevel()
+    if self._level then return self._level end
+    local p = self._parent
+    return (p and p.GetFrameLevel and p:GetFrameLevel() + 1) or 1
+end
 function Widget:SetFrameLevel(l) self._level = l end
 
 function CreateFrame(kind, name, parent, template)
@@ -205,6 +224,14 @@ TargetFrame = NewWidget("Frame", "TargetFrame", UIParent)
 GameTooltip = NewWidget("GameTooltip", "GameTooltip", UIParent)
 SettingsPanel = NewWidget("Frame", "SettingsPanel", UIParent)
 SettingsPanel._shown = false
+MOCK.missingFiles = {}
+-- Font objects (CreateFont): a named Font widget with SetFont / GetFont.
+function CreateFont(name)
+    local f = NewWidget("Font", name)
+    f.SetFont = function(self, file, size, flags) self._file, self._fontSize, self._flags = file, size, flags return true end
+    f.GetFont = function(self) return self._file or "Fonts\ARIALN.TTF", self._fontSize or 12, self._flags or "" end
+    return f
+end
 for _, font in ipairs({ "GameFontNormal", "GameFontNormalLarge", "GameFontNormalHuge", "GameFontHighlight",
     "GameFontHighlightSmall", "GameFontDisable", "GameFontDisableSmall", "ChatFontNormal" }) do
     _G[font] = NewWidget("Font", font)

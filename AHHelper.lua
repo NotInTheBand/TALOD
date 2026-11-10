@@ -174,8 +174,9 @@ end
 -- open: one search for it in the window's own browse view, so the auctions
 -- show there. Leaves the search list alone; nothing while a full scan runs.
 -- Returns ok, message.
-function Helper.Lookup(id)
-    if type(id) ~= "number" or not db().ahLookupClick or not Helper.IsOpen() then return false end
+-- explicit: a button that says it searches (the setting is for row clicks).
+function Helper.Lookup(id, explicit)
+    if type(id) ~= "number" or (not explicit and not db().ahLookupClick) or not Helper.IsOpen() then return false end
     if state.scan then return false, "a full scan is running." end
     local name = ns.Market.ItemInfo(id)
     if type(name) ~= "string" or name == "" then return false, "the item name is not loaded yet: click again." end
@@ -375,6 +376,19 @@ local function ReadFailed(reason)
     Helper.Refresh()
 end
 
+-- Forever sends a full scan's answer in parts of 1024 rows (seen 2026-11-09:
+-- reads of exactly 1024 / 2048 rows, then "the list changed during the read").
+-- The replicate list is read only once its count has stood still for SETTLE s;
+-- rows arriving during the read start it over (nothing is recorded before the end).
+local SETTLE = 2
+local MAX_REGROW = 30
+
+local function Watch(n)
+    local s = state.scan
+    if not s or type(n) ~= "number" or n <= 0 then return end
+    if n ~= s.seen then s.seen, s.seenAt = n, GetTime() end
+end
+
 local function OnScanData(kind)
     if not state.scan or state.scan.kind ~= kind or state.scan.reading then return end
     state.scan.reading = true
@@ -393,7 +407,20 @@ local function OnScanData(kind)
             local v = { S.CallMulti(17, AH.GetReplicateItemInfo, i) }
             local band = left and S.Call(left, i)
             return v[3], v[10], v[17], v[1], v[14], Bid(v, type(band) == "number" and band + 1 or nil, "modern")
-        end, 0, ScanDone, ReadFailed)
+        end, 0, ScanDone, ReadFailed, function(n)
+            -- More of the answer arrived during the read: wait for it to settle, read again.
+            local s = state.scan
+            if not s then return end
+            s.reading, s.regrow = nil, (s.regrow or 0) + 1
+            if s.regrow > MAX_REGROW then
+                s.reading = true
+                ReadFailed(string.format("the answer kept growing (%d rows)", n))
+                return
+            end
+            s.seen, s.seenAt = n, GetTime()
+            state.message = string.format("Full scan: the answer is still arriving (%d rows)...", n)
+            Helper.Refresh()
+        end)
     else
         -- fullScanPending stays set until ScanDone / ReadFailed: the game fires
         -- the list event again while this read runs (Prices must not read it).
@@ -423,16 +450,20 @@ local function CheckScanTimeout()
         return
     end
     -- The data may arrive without its event (or the event may not exist here): look for it.
-    if state.scan and state.scan.kind == "modern" and GetTime() - state.scan.clock > 2
+    if state.scan and state.scan.kind == "modern" and (state.scan.answered or GetTime() - state.scan.clock > 2)
         and type(C_AuctionHouse) == "table" and type(C_AuctionHouse.GetNumReplicateItems) == "function" then
         local n = S.Call(C_AuctionHouse.GetNumReplicateItems)
-        -- Only a list that changed since the click (or the first one): the same
-        -- count may be the last scan's list still held, stamped as new. Then
-        -- the answer's event reads it, or the scan times out (unknown, not old).
+        -- Only a list that changed since the click (or the first one, or one
+        -- the answer's event announced): the same count may be the last scan's
+        -- list still held, stamped as new; then the scan times out (unknown, not old).
         local held = state.scan.held
-        if type(n) == "number" and n > 0 and (not held or held == 0 or n ~= held) then OnScanData("modern") return end
+        if type(n) == "number" and n > 0 and (state.scan.answered or not held or held == 0 or n ~= held) then
+            Watch(n)
+            if state.scan.seenAt and GetTime() - state.scan.seenAt >= SETTLE then OnScanData("modern") return end
+        end
     end
-    if state.scan and not state.scan.reading and GetTime() - state.scan.clock > SCAN_TIMEOUT then
+    -- Rows still arriving count as an answer: the timeout runs from the last part.
+    if state.scan and not state.scan.reading and GetTime() - (state.scan.seenAt or state.scan.clock) > SCAN_TIMEOUT then
         Helper.LogScan(false, "no answer from the server in " .. SCAN_TIMEOUT .. " s")
         Unmute()
         Prices.fullScanPending, state.scan = nil, nil
@@ -451,9 +482,20 @@ local function Paint(b, on)
 end
 
 local function Build()
-    panel = Style.Window(ns.FRAME .. "AHPanel", "Auction House", 270, 372)
-    panel:SetFrameStrata("HIGH")
+    -- A floating piece: the hud surface and the floating title bar (TALOD
+    -- button = the Auction House page, settings, hide). Escape still closes
+    -- it; it comes back the next time the Auction House opens. The rows
+    -- below keep their places (Search next is clicked by macros by name).
+    panel = Style.FloatFrame(ns.FRAME .. "AHPanel", 270, 372, { strata = "HIGH", escape = true })
+    panel.bar = Style.FloatBar(panel, { page = "ah", title = "Scan", settings = "ah",
+        hide = function() panel:Hide() end,
+        hideTip = { "Hide", "Hides it until the Auction House opens again. Home, On screen turns it off for good." } })
+    panel.title = panel.bar.title
     local y = -48
+    -- Under the bar: what the panel is doing.
+    panel.state = Style.Text(panel, "GameFontHighlightSmall")
+    panel.state:SetPoint("TOPLEFT", 14, -Style.FLOAT_BAR - 7)
+    panel.state:SetPoint("RIGHT", -14, 0)
     local function Line(text, height)
         local fs = Style.Text(panel, "GameFontHighlightSmall")
         fs:SetPoint("TOPLEFT", 14, y)
@@ -508,9 +550,9 @@ local function Build()
     panel.barBg = Style.Texture(panel, "ARTWORK", { 1, 1, 1, 0.08 })
     panel.barBg:SetPoint("TOPLEFT", 14, y)
     panel.barBg:SetSize(242, 4)
-    panel.bar = Style.Texture(panel, "OVERLAY", COLORS.accent)
-    panel.bar:SetPoint("TOPLEFT", 14, y)
-    panel.bar:SetHeight(4)
+    panel.progress = Style.Texture(panel, "OVERLAY", COLORS.accent)
+    panel.progress:SetPoint("TOPLEFT", 14, y)
+    panel.progress:SetHeight(4)
     y = y - 10
     panel.result = Style.Text(panel, "GameFontHighlightSmall")
     panel.result:SetPoint("TOPLEFT", 14, y)
@@ -580,7 +622,10 @@ function Helper.Refresh()
         panel.next:SetLabel(string.format("Search next  %d / %d", state.index, total))
         panel.next.sub:SetText(ns.Market.ItemText(item.id) .. HEX.muted .. "  " .. item.why .. "|r")
     end
-    panel.bar:SetWidth(math.max(1, 242 * (total > 0 and math.min(1, (state.index - 1) / total) or 0)))
+    panel.progress:SetWidth(math.max(1, 242 * (total > 0 and math.min(1, (state.index - 1) / total) or 0)))
+    panel.bar:SetCount(total > 0 and (math.min(state.index, total) .. " / " .. total) or "")
+    panel.state:SetText(state.scan and (HEX.accent .. "Full scan running|r")
+        or (HEX.muted .. (item and "Next: one search per click" or "Search list: one item per click") .. "|r"))
     panel.result:SetText(state.message or (HEX.muted .. "Results show here. Prices go to the Market window and the planner.|r"))
 end
 
@@ -643,12 +688,18 @@ local function OnEvent(event, ...)
     elseif event == "AUCTION_ITEM_LIST_UPDATE" then
         OnScanData("legacy")
     elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
-        OnScanData("modern")
+        -- The answer (or a part of it): read from the tick once it stops growing.
+        if state.scan and state.scan.kind == "modern" and not state.scan.reading then
+            state.scan.answered = true
+            if type(C_AuctionHouse) == "table" and type(C_AuctionHouse.GetNumReplicateItems) == "function" then
+                Watch(S.Call(C_AuctionHouse.GetNumReplicateItems))
+            end
+        end
     end
 end
 
 -- /talod ah scan (or helper) and /talod ah log; plain /talod ah is the Auction
--- desk (AuctionDesk.lua).
+-- House page (AuctionDesk.lua).
 local function Slash(command, rest)
     if command ~= "ah" then return false end
     local sub = (rest or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
